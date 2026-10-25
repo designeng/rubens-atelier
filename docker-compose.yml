@@ -1,0 +1,32 @@
+x-app: &app
+  build: .
+  env_file: .env
+  environment:
+    HARNESS_REDIS_URL: redis://redis:6379/0
+  depends_on: [redis]
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+
+  api:
+    <<: *app
+    ports: ["8000:8000"]
+
+  worker:
+    <<: *app
+    command: ["celery", "-A", "app.celery_app", "worker", "-l", "info", "--concurrency", "2"]
+    volumes: [workspaces:/workspaces]
+    # Warm shutdown waits for running agents; give them time before SIGKILL.
+    stop_grace_period: 10m
+
+  beat:
+    <<: *app
+    command: ["celery", "-A", "app.celery_app", "beat", "-l", "info", "-s", "/tmp/celerybeat-schedule"]
+
+volumes:
+  redis-data:
+  workspaces:

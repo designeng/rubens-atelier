@@ -1,0 +1,19 @@
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /usr/local/bin/uv
+
+# Claude Code refuses some permission modes as root, and the agent has a shell: run unprivileged.
+RUN useradd --create-home agent
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY app ./app
+RUN mkdir -p /workspaces && chown agent /workspaces
+USER agent
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    HARNESS_WORKSPACES_ROOT=/workspaces
+EXPOSE 8000
+CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]

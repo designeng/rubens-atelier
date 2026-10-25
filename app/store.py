@@ -1,0 +1,233 @@
+"""Redis-backed task state and event log.
+
+Celery owns the queue and delivery; this store owns what Celery doesn't model:
+agent-specific task fields, a replayable event log for SSE clients, cooperative
+cancellation and a lease used to detect redelivery after a worker crash.
+
+Layout:
+  harness:task:{id}          hash   — task spec + status + result fields
+  harness:task:{id}:events   stream — agent events
+  harness:task:{id}:lease    string — owning worker, TTL refreshed by the task's watchdog
+  harness:tasks              zset   — all task ids scored by creation time
+  harness:running            set    — ids currently in `running`, scanned by the orphan reaper
+"""
+
+import json
+import time
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from redis.asyncio import Redis
+
+from .config import settings
+from .models import TaskCreate, TaskInfo, TaskStatus
+
+TASKS_INDEX = "harness:tasks"
+RUNNING = "harness:running"
+
+
+def task_key(task_id: str) -> str:
+    return f"harness:task:{task_id}"
+
+
+def events_key(task_id: str) -> str:
+    return f"harness:task:{task_id}:events"
+
+
+def lease_key(task_id: str) -> str:
+    return f"harness:task:{task_id}:lease"
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+# Atomically move a task to a new status only if it is currently in one of the
+# allowed statuses. Guards against races between API cancel, worker claim and
+# a redelivered duplicate of the same Celery message.
+# ARGV: to_status, n_from, from_1..from_n, field_1, value_1, ...
+_TRANSITION_LUA = """
+local cur = redis.call('HGET', KEYS[1], 'status')
+if not cur then return -1 end
+local n = tonumber(ARGV[2])
+for i = 3, 2 + n do
+  if ARGV[i] == cur then
+    redis.call('HSET', KEYS[1], 'status', ARGV[1])
+    for j = 3 + n, #ARGV, 2 do
+      redis.call('HSET', KEYS[1], ARGV[j], ARGV[j + 1])
+    end
+    return 1
+  end
+end
+return 0
+"""
+
+
+class TaskStore:
+    def __init__(self, redis: Redis):
+        self.r = redis
+        self._transition = redis.register_script(_TRANSITION_LUA)
+
+    async def transition(
+        self, task_id: str, from_: list[TaskStatus], to: TaskStatus, **fields: Any
+    ) -> bool:
+        flat: list[str] = []
+        for k, v in fields.items():
+            if v is not None:
+                flat += [k, v if isinstance(v, str) else json.dumps(v)]
+        res = await self._transition(
+            keys=[task_key(task_id)], args=[to.value, len(from_), *[s.value for s in from_], *flat]
+        )
+        return res == 1
+
+    # --- create / read -------------------------------------------------------
+
+    async def create(self, spec: TaskCreate) -> str:
+        task_id = uuid.uuid4().hex
+        async with self.r.pipeline(transaction=True) as p:
+            p.hset(
+                task_key(task_id),
+                mapping={
+                    "id": task_id,
+                    "status": TaskStatus.queued.value,
+                    "spec": spec.model_dump_json(),
+                    "created_at": _now(),
+                },
+            )
+            p.zadd(TASKS_INDEX, {task_id: time.time()})
+            await p.execute()
+        await self.append_event(task_id, "status", {"status": TaskStatus.queued.value})
+        return task_id
+
+    async def get_raw(self, task_id: str) -> dict[str, str] | None:
+        data = await self.r.hgetall(task_key(task_id))
+        return data or None
+
+    async def get(self, task_id: str) -> TaskInfo | None:
+        raw = await self.get_raw(task_id)
+        if raw is None:
+            return None
+        spec = TaskCreate.model_validate_json(raw["spec"])
+        return TaskInfo(
+            id=raw["id"],
+            status=TaskStatus(raw["status"]),
+            prompt=spec.prompt or (f"{spec.issue.repo}#{spec.issue.number}" if spec.issue else ""),
+            created_at=raw["created_at"],
+            started_at=raw.get("started_at"),
+            finished_at=raw.get("finished_at"),
+            workspace=raw.get("workspace"),
+            session_id=raw.get("session_id"),
+            parent_task_id=spec.parent_task_id,
+            result=raw.get("result"),
+            error=raw.get("error"),
+            cost_usd=float(raw["cost_usd"]) if raw.get("cost_usd") else None,
+            num_turns=int(raw["num_turns"]) if raw.get("num_turns") else None,
+            branch=raw.get("branch"),
+            pr_url=raw.get("pr_url"),
+            metadata=spec.metadata,
+        )
+
+    async def get_spec(self, task_id: str) -> TaskCreate:
+        raw = await self.r.hget(task_key(task_id), "spec")
+        return TaskCreate.model_validate_json(raw)
+
+    async def list_tasks(self, limit: int = 50, status: TaskStatus | None = None) -> list[TaskInfo]:
+        # Newest first; status filter is applied client-side — fine at harness scale.
+        ids = await self.r.zrevrange(TASKS_INDEX, 0, (limit * 5 if status else limit) - 1)
+        out: list[TaskInfo] = []
+        for task_id in ids:
+            info = await self.get(task_id)
+            if info and (status is None or info.status == status):
+                out.append(info)
+            if len(out) >= limit:
+                break
+        return out
+
+    async def set_fields(self, task_id: str, **fields: str) -> None:
+        await self.r.hset(task_key(task_id), mapping=fields)
+
+    # --- events --------------------------------------------------------------
+
+    async def append_event(self, task_id: str, type_: str, data: dict[str, Any]) -> str:
+        return await self.r.xadd(
+            events_key(task_id),
+            {"type": type_, "data": json.dumps(data, default=str)},
+            maxlen=settings.events_maxlen,
+            approximate=True,
+        )
+
+    async def read_events(
+        self, task_id: str, after: str = "0", count: int = 500, block_ms: int | None = None
+    ) -> list[tuple[str, str, dict[str, Any]]]:
+        resp = await self.r.xread({events_key(task_id): after}, count=count, block=block_ms)
+        events = []
+        for _stream, entries in resp or []:
+            for entry_id, fields in entries:
+                events.append((entry_id, fields["type"], json.loads(fields["data"])))
+        return events
+
+    # --- lifecycle -----------------------------------------------------------
+
+    async def claim(self, task_id: str, worker_id: str) -> bool:
+        ok = await self.transition(
+            task_id, [TaskStatus.queued], TaskStatus.running, started_at=_now(), worker=worker_id
+        )
+        if ok:
+            # Lease before joining RUNNING so the reaper never sees a lease-less claim.
+            await self.renew_lease(task_id, worker_id)
+            await self.r.sadd(RUNNING, task_id)
+            await self.append_event(task_id, "status", {"status": TaskStatus.running.value})
+        return ok
+
+    async def renew_lease(self, task_id: str, worker_id: str) -> None:
+        await self.r.set(lease_key(task_id), worker_id, ex=settings.lease_ttl_seconds)
+
+    async def lease_alive(self, task_id: str) -> bool:
+        return bool(await self.r.exists(lease_key(task_id)))
+
+    async def finish(self, task_id: str, status: TaskStatus, **fields: Any) -> bool:
+        assert status.is_terminal
+        ok = await self.transition(
+            task_id, [TaskStatus.running], status, finished_at=_now(), **fields
+        )
+        if ok:
+            event = {"status": status.value} | {k: v for k, v in fields.items() if k == "error"}
+            await self.append_event(task_id, "status", event)
+            await self._expire(task_id)
+        return ok
+
+    async def _expire(self, task_id: str) -> None:
+        ttl = settings.result_ttl_seconds
+        async with self.r.pipeline(transaction=False) as p:
+            p.delete(lease_key(task_id))
+            p.srem(RUNNING, task_id)
+            p.expire(task_key(task_id), ttl)
+            p.expire(events_key(task_id), ttl)
+            await p.execute()
+
+    async def request_cancel(self, task_id: str) -> TaskStatus | None:
+        """Queued tasks are cancelled immediately (a worker that later receives the
+        message fails to claim it). Running tasks get a flag the worker's watchdog polls."""
+        if await self.transition(
+            task_id, [TaskStatus.queued], TaskStatus.cancelled, finished_at=_now()
+        ):
+            await self.append_event(task_id, "status", {"status": TaskStatus.cancelled.value})
+            await self._expire(task_id)
+            return TaskStatus.cancelled
+        raw = await self.get_raw(task_id)
+        if raw is None:
+            return None
+        status = TaskStatus(raw["status"])
+        if status == TaskStatus.running:
+            await self.r.hset(task_key(task_id), "cancel_requested", "1")
+        return status
+
+    async def running_ids(self) -> set[str]:
+        return await self.r.smembers(RUNNING)
+
+    async def forget_running(self, task_id: str) -> None:
+        await self.r.srem(RUNNING, task_id)
+
+    async def cancel_requested(self, task_id: str) -> bool:
+        return await self.r.hget(task_key(task_id), "cancel_requested") == "1"
