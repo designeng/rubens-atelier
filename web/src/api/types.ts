@@ -9,12 +9,14 @@ export interface ProjectIn {
   base_branch?: string | null;
   verify_command?: string | null;
   installation_id?: number | null;
+  auto_merge?: boolean;
 }
 
 // PATCH /projects/{slug}: fields left out stay as they are, null clears them.
 export interface ProjectPatch {
   base_branch?: string | null;
   verify_command?: string | null;
+  auto_merge?: boolean;
 }
 
 export interface ProjectOut {
@@ -24,6 +26,7 @@ export interface ProjectOut {
   base_branch: string | null;
   verify_command: string | null;
   installation_id: number | null;
+  auto_merge: boolean;
 }
 
 export interface ItemIn {
@@ -82,6 +85,15 @@ export interface ItemOut {
   column: Column;
   issue: number | null;
   progress: Progress | null;
+  attention?: Attention | null;
+}
+
+// `_attention` in board_api.py: why an item in the needs_human column waits. `kind` is pr, error,
+// questions, exhausted, or the verdict that led there (timeout, too_big, needs_clarification, ...).
+export interface Attention {
+  kind: string;
+  text: string;
+  from?: string;
 }
 
 export interface ImportResult {

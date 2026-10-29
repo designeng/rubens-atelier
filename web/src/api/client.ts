@@ -125,6 +125,7 @@ export function createClient(
     reopenItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/reopen`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
     deleteItem: (id: string) => api<void>(`/items/${seg(id)}`, "DELETE"),
+    runItemNow: (id: string) => api<ItemOut>(`/items/${seg(id)}/run-now`, "POST"),
     answerRequest: (id: string, option: string, comment: string) =>
       api<{ advanced: boolean }>(`/requests/${seg(id)}/answer`, "POST", { option, comment }),
     getTask: (id: string) => api<TaskInfo>(`/tasks/${seg(id)}`),

@@ -7,4 +7,5 @@ celerybeat-schedule*
 app/static/dist/
 web/node_modules/
 
+.DS_Store
 .playwright-mcp/

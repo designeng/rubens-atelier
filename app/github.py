@@ -125,6 +125,11 @@ class GitHub:
     async def get_pr(self, repo: str, number: int) -> dict[str, Any]:
         return await self._req("GET", f"/repos/{repo}/pulls/{number}")
 
+    async def merge_pr(self, repo: str, number: int, *, method: str, sha: str | None = None) -> dict[str, Any]:
+        """Merge the PR; with `sha`, only if its head is still that commit."""
+        body = {"merge_method": method} | ({"sha": sha} if sha else {})
+        return await self._req("PUT", f"/repos/{repo}/pulls/{number}/merge", json=body)
+
     async def check_runs(self, repo: str, ref: str) -> list[dict[str, Any]]:
         data = await self._req("GET", f"/repos/{repo}/commits/{ref}/check-runs", params={"per_page": 100})
         return data["check_runs"]

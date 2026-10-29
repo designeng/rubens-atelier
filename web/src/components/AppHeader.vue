@@ -17,7 +17,8 @@ const githubLabel = computed(() =>
 const schedulerText = computed(() => {
   const sc = b.scheduler.value;
   if (!sc) return "";
-  return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${sc.reason}` : "");
+  const why = b.isPaused() ? "queue paused" : sc.reason;
+  return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${why}` : "");
 });
 
 function onLimit(key: "max_agents" | "max_agents_per_project", e: Event) {
@@ -57,7 +58,7 @@ defineExpose({ clearTitle: () => (title.value = "") });
 
 <template>
   <header>
-    <h1>Factory</h1>
+    <h1>Rubens Atelier</h1>
     <input type="password" placeholder="API token" size="14" :value="b.token.value" @change="onToken" />
     <select :value="b.slug.value" @change="onProject">
       <option v-for="p in b.projects.value" :key="p.id" :value="p.slug">{{ p.slug }}</option>
@@ -117,7 +118,18 @@ defineExpose({ clearTitle: () => (title.value = "") });
         force
       </label>
     </template>
-    <button v-if="b.scheduler.value" @click="b.togglePause()">{{ b.isPaused() ? "Resume" : "Pause" }}</button>
+    <button
+      v-if="b.scheduler.value"
+      :class="{ primary: b.isPaused() }"
+      :title="
+        b.isPaused()
+          ? 'Agent steps are not dispatched. Resume to let queued steps start.'
+          : 'Stop dispatching new agent steps; running ones finish'
+      "
+      @click="b.togglePause()"
+    >
+      {{ b.isPaused() ? "Resume queue" : "Pause queue" }}
+    </button>
     <span id="err">{{ b.error.value }}</span>
   </header>
 </template>

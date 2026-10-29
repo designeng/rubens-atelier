@@ -142,6 +142,7 @@ export function useBoard() {
         if (openItemId.value === id) closeItem();
       }),
     );
+  const runItemNow = (id: string) => act(api.runItemNow(id));
   const answer = (requestId: string, option: string, comment: string) =>
     act(api.answerRequest(requestId, option, comment));
   const togglePause = () => act(isPaused() ? api.resumeScheduler() : api.pauseScheduler());
@@ -225,6 +226,7 @@ export function useBoard() {
     cancelItem,
     reopenItem,
     deleteItem,
+    runItemNow,
     answer,
     togglePause,
     isPaused,

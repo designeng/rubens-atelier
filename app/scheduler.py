@@ -63,6 +63,10 @@ async def record_rate_limit(redis: Redis, info: dict[str, Any]) -> None:
     await redis.hset(QUOTA, window, json.dumps(state))
 
 
+class SchedulerError(Exception):
+    pass
+
+
 class Scheduler:
     def __init__(self, redis: Redis, enqueue: Callable[[str, int], Awaitable[None]]):
         self.r = redis
@@ -140,6 +144,35 @@ class Scheduler:
             item_id, version = m.rsplit(":", 1)
             await self.enqueue(item_id, int(version))
         return dispatched
+
+    async def run_now(self, item_id: str, version: int) -> None:
+        """Start one waiting step right away, past the pause and the slot limits: the operator
+        picks which steps go, e.g. one at a time after stopping everything. A window Claude Code
+        reports as rejected still blocks it, since the run would just bounce."""
+        if reason := await self._rejected():
+            raise SchedulerError(reason)
+        m = member(item_id, version)
+        async with self.r.pipeline(transaction=True) as p:
+            p.zrem(READY, m)
+            p.hget(READY_PROJECT, m)
+            p.hdel(READY_PROJECT, m)
+            removed, project, _ = await p.execute()
+        if not removed:
+            raise SchedulerError("step is not waiting for a slot")
+        async with self.r.pipeline(transaction=True) as p:
+            p.zadd(ACTIVE, {m: time.time() + settings.dispatch_ttl_seconds})
+            p.hset(ACTIVE_PROJECT, m, project)
+            await p.execute()
+        await self.enqueue(item_id, version)
+
+    async def _rejected(self) -> str | None:
+        now = time.time()
+        for window, raw in (await self.r.hgetall(QUOTA)).items():
+            q = json.loads(raw)
+            resets_at = q.get("resets_at")
+            if q.get("status") == "rejected" and not (resets_at and resets_at <= now):
+                return f"{window} limit reached" + (f", resets at {int(resets_at)}" if resets_at else "")
+        return None
 
     async def capacity(self) -> tuple[int, str]:
         """How many agents may run right now, and why not more."""

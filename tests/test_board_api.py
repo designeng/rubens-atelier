@@ -24,7 +24,7 @@ def test_projects_items_board_and_inbox(client):
 
     # Simulate the worker getting the story to the merge gate.
     engine = app.state.engine
-    for verdict in ("ready", "done", "done", "approved", "done", "passed"):
+    for verdict in ("ready", "done", "done", "approved", "done", "passed", "manual"):
         item = client.get(f"/items/{started['id']}").json()
         client.portal.call(engine.advance, started["id"], item["version"], verdict)
 
@@ -32,7 +32,7 @@ def test_projects_items_board_and_inbox(client):
     assert req["state"] == "awaiting_merge"
     detail = client.get(f"/items/{started['id']}").json()
     assert detail["column"] == "needs_human" and detail["open_request"]["id"] == req["id"]
-    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
+    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
 
     assert client.post(f"/requests/{req['id']}/answer", json={"option": "nope"}).status_code == 409
     r = client.post(f"/requests/{req['id']}/answer", json={"option": "merged", "comment": "thanks"})
@@ -164,6 +164,23 @@ def test_scheduler_pause_and_resume(client):
     assert client.post("/scheduler/resume").json()["reason"] == "ok"
 
 
+def test_run_now_starts_one_waiting_step_while_paused(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    item = client.post("/projects/app/items", json={"title": "Stopped", "start": True}).json()
+    sched = app.state.scheduler
+    client.post("/scheduler/pause", json={"reason": "debugging"})
+    client.portal.call(sched.submit, item["id"], item["version"], item["project_id"])
+    client.enqueued.clear()
+
+    assert client.post(f"/items/{item['id']}/run-now").status_code == 202
+    assert client.enqueued == [(item["id"], item["version"])]
+    assert client.get("/scheduler").json()["reason"] == "paused: debugging"  # the others stay put
+
+    r = client.post(f"/items/{item['id']}/run-now")  # already started
+    assert r.status_code == 409 and "not waiting" in r.json()["detail"]
+    assert client.post("/items/missing/run-now").status_code == 404
+
+
 def test_scheduler_limits(client):
     changed = client.patch("/scheduler/limits", json={"max_agents": 1}).json()
     assert changed["capacity"] == 1
@@ -189,6 +206,11 @@ def test_update_project_settings(client):
     (project,) = client.get("/projects").json()
     assert project["slug"] == "app" and project["repo"] == "acme/app"
     assert (project["base_branch"], project["verify_command"]) == (None, "uv run pytest -q")
+    assert project["auto_merge"] is False
+
+    r = client.patch("/projects/app", json={"auto_merge": True})
+    assert r.json()["auto_merge"] is True and r.json()["verify_command"] == "uv run pytest -q"
+    assert client.patch("/projects/app", json={"base_branch": "develop"}).json()["auto_merge"] is True
 
 
 def test_update_project_validation(client):
@@ -204,6 +226,7 @@ def test_update_project_validation(client):
         {"base_branch": "b" * 201},
         {"verify_command": ""},
         {"verify_command": "   "},
+        {"auto_merge": None},
     ):
         assert client.patch("/projects/app", json=body).status_code == 422, body
     assert client.get("/projects").json() == [before]
@@ -256,6 +279,27 @@ def test_attention_and_manual_open_pr(client):
     assert r.status_code == 202 and r.json()["state"] == "publish"
     assert client.enqueued[-1] == (iid, r.json()["version"])
     assert client.post(f"/items/{iid}/open-pr").status_code == 409  # already publishing
+
+
+def test_attention_says_how_the_item_got_stuck(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    engine = app.state.engine
+
+    def walk(iid, *verdicts):
+        for verdict in verdicts:
+            client.portal.call(engine.advance, iid, client.get(f"/items/{iid}").json()["version"], verdict)
+        return client.get(f"/items/{iid}").json()
+
+    def story():
+        return client.post("/projects/app/items", json={"title": "S", "start": True}).json()["id"]
+
+    assert walk(story(), "too_big")["attention"] == {"kind": "too_big", "text": "", "from": "plan"}
+    assert walk(story(), "needs_clarification")["attention"]["kind"] == "needs_clarification"
+    # plan allows 3 visits: the fourth sends the story to needs_human
+    stuck = walk(story(), *["needs_clarification", "answered"] * 3)
+    assert stuck["state"] == "needs_human" and stuck["attention"]["kind"] == "exhausted"
+    merge = walk(story(), "ready", "done", "done", "approved", "done", "passed", "manual")
+    assert merge["state"] == "awaiting_merge" and merge["attention"]["kind"] == "pr"
 
 
 def test_item_git_view(client):

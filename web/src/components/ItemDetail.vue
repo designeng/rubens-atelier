@@ -182,7 +182,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       </div>
       <template v-if="it.progress">
         <h4>Now</h4>
-        <ProgressBlock :progress="it.progress" />
+        <ProgressBlock :progress="it.progress" :paused="b.isPaused()" />
         <div v-if="it.progress.task_id" class="row">
           <button @click="toggleSession(it.progress.task_id)">
             {{ sessionTask === it.progress.task_id ? "Hide session" : "Session" }}
@@ -242,7 +242,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <p v-if="!artifacts.length" class="muted">none yet</p>
       <h4>Runs</h4>
       <div v-for="r in it.runs" :key="r.id">
-        {{ r.state }} · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> → {{ r.verdict }}</template>
+        {{ r.state }} · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> · result: {{ r.verdict }}</template>
         <template v-if="r.cost_usd != null"> · ${{ r.cost_usd.toFixed(2) }}</template>
         <span class="muted">task {{ r.task_id.slice(0, 8) }}</span>
         <button class="link" @click="toggleSession(r.task_id)">
@@ -253,8 +253,11 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <p v-if="!it.runs.length" class="muted">none</p>
       <h4>History</h4>
       <div v-for="(e, n) in it.events" :key="n" class="muted">
-        {{ new Date(e.at).toLocaleString() }} · {{ e.from_state || "∅" }} -[{{ e.verdict || "start" }}]→
-        <b>{{ e.to_state }}</b> · {{ e.actor }}
+        <!-- The verdict is the result of the step that ended (from_state), not the story's status. -->
+        {{ new Date(e.at).toLocaleString() }} · {{ e.from_state || "created" }}<template v-if="e.verdict">
+          (result: {{ e.verdict }})</template
+        >
+        → <b>{{ e.to_state }}</b> · {{ e.actor }}
       </div>
     </template>
   </aside>
