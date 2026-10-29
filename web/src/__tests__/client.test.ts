@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, createClient } from "../api/client";
+import { ApiError, createClient, parseSse } from "../api/client";
 
 type Call = { url: string; init: RequestInit };
 
@@ -84,14 +84,17 @@ describe("createClient", () => {
     await api.getItem("../x");
     await api.installationRepositories(42);
     await api.updateProject("my proj", { verify_command: null });
+    await api.importIssues("a/b");
     expect(f.calls.map((c) => c.url)).toEqual([
       "/projects/a%2Fb%3Fc/board",
       "/items/..%2Fx",
       "/github/installations/42/repositories",
       "/projects/my%20proj",
+      "/projects/a%2Fb/import-issues",
     ]);
     expect(f.calls[3].init.method).toBe("PATCH");
     expect(JSON.parse(f.calls[3].init.body as string)).toEqual({ verify_command: null });
+    expect([f.calls[4].init.method, f.calls[4].init.body]).toEqual(["POST", undefined]);
   });
 
   it("raises ApiError with the server's detail", async () => {
@@ -119,5 +122,45 @@ describe("createClient", () => {
     ok = true;
     await api.listProjects();
     expect(onOk).toHaveBeenCalledOnce();
+  });
+});
+
+describe("parseSse", () => {
+  it("splits complete messages and keeps the tail", () => {
+    const { messages, rest } = parseSse('id: 1-0\r\nevent: text\r\ndata: {"a":1}\r\n\r\n: ping\r\n\r\nid: 2-0\r\nda');
+    expect(messages).toEqual([{ id: "1-0", event: "text", data: '{"a":1}' }]);
+    expect(rest).toBe("id: 2-0\nda");
+  });
+
+  it("does not end a message on a CRLF split across chunks", () => {
+    const first = parseSse("event: text\r\ndata: x\r");
+    expect(first.messages).toEqual([]);
+    const second = parseSse(first.rest + "\n\r\n");
+    expect(second.messages).toEqual([{ id: "", event: "text", data: "x" }]);
+  });
+});
+
+describe("streamTask", () => {
+  it("streams events from the cursor with the token", async () => {
+    const chunks = ['id: 1-0\r\nevent: status\r\ndata: {"status": "run', 'ning"}\r\n\r\n', ": ping\r\n\r\n"];
+    const body = new ReadableStream({
+      start(c) {
+        for (const ch of chunks) c.enqueue(new TextEncoder().encode(ch));
+        c.close();
+      },
+    });
+    const f = fakeFetch(() => new Response(body, { headers: { "content-type": "text/event-stream" } }));
+    const api = createClient(() => "t", f.impl);
+    const got: unknown[] = [];
+    await api.streamTask("a/b", "5-0", (e) => got.push(e));
+    expect(f.calls[0].url).toBe("/tasks/a%2Fb/stream?after=5-0");
+    expect((f.calls[0].init.headers as Record<string, string>).authorization).toBe("Bearer t");
+    expect(got).toEqual([{ id: "1-0", type: "status", data: { status: "running" } }]);
+  });
+
+  it("throws ApiError for a missing task", async () => {
+    const f = fakeFetch(() => json({ detail: "task not found" }, 404, "Not Found"));
+    const api = createClient(() => "t", f.impl);
+    await expect(api.streamTask("x", "0", () => {})).rejects.toMatchObject({ status: 404, message: "task not found" });
   });
 });

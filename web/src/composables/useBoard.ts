@@ -3,9 +3,11 @@ import { createClient, storage } from "../api/client";
 import type {
   Board,
   GithubApp,
+  ImportResult,
   ItemDetail,
   ItemIn,
   ItemPatch,
+  Models,
   ProjectIn,
   ProjectOut,
   ProjectPatch,
@@ -26,6 +28,7 @@ export function useBoard() {
   const openItemId = ref<string | null>(null);
   const item = ref<ItemDetail | null>(null);
   const github = ref<GithubApp>(NO_GITHUB);
+  const models = ref<Models | null>(null);
   const error = ref("");
 
   const api = createClient(
@@ -78,6 +81,7 @@ export function useBoard() {
 
   async function loadProjects(): Promise<void> {
     projects.value = await api.listProjects();
+    models.value = await api.listModels();
     const want = storage.get("project");
     slug.value = projects.value.find((p) => p.slug === want)?.slug ?? projects.value[0]?.slug ?? "";
     await refresh();
@@ -132,6 +136,7 @@ export function useBoard() {
   const startItem = (id: string) => act(api.startItem(id));
   const cancelItem = (id: string) => act(api.cancelItem(id));
   const reopenItem = (id: string) => act(api.reopenItem(id));
+  const runItemNow = (id: string) => act(api.runItemNow(id));
   const answer = (requestId: string, option: string, comment: string) =>
     act(api.answerRequest(requestId, option, comment));
   const togglePause = () => act(isPaused() ? api.resumeScheduler() : api.pauseScheduler());
@@ -142,6 +147,12 @@ export function useBoard() {
   async function createItem(item: ItemIn): Promise<void> {
     await api.createItem(slug.value, item);
     await refresh();
+  }
+
+  async function importIssues(): Promise<ImportResult> {
+    const res = await api.importIssues(slug.value);
+    await refresh();
+    return res;
   }
 
   async function createProject(project: ProjectIn): Promise<void> {
@@ -196,6 +207,7 @@ export function useBoard() {
     openItemId,
     item,
     github,
+    models,
     error,
     fail,
     refresh,
@@ -207,11 +219,13 @@ export function useBoard() {
     startItem,
     cancelItem,
     reopenItem,
+    runItemNow,
     answer,
     togglePause,
     isPaused,
     setLimits,
     createItem,
+    importIssues,
     createProject,
     updateItem,
     updateProject,

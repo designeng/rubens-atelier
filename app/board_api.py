@@ -15,9 +15,10 @@ from sqlalchemy.exc import IntegrityError
 from . import github_app, gitops, terminal
 from .config import settings
 from .execution import item_workspace
+from .github import GitHub
 from .db import Artifact, Database, HumanRequest, ItemEvent, Project, Run, WorkItem
 from .engine import Engine, EngineError
-from .scheduler import Scheduler
+from .scheduler import Scheduler, SchedulerError
 
 Kind = Literal["epic", "story", "task"]
 # Board columns, derived from the kind of the item's current state.
@@ -57,6 +58,7 @@ class ProjectIn(BaseModel):
     base_branch: str | None = None
     verify_command: str | None = None
     installation_id: int | None = Field(default=None, description="GitHub App installation granting access to repo")
+    auto_merge: bool = False
 
 
 class ProjectPatch(BaseModel):
@@ -68,6 +70,7 @@ class ProjectPatch(BaseModel):
     base_branch: str | None = Field(default=None, max_length=200, pattern=r"^[\w.][\w./-]*$")
     # Blank is rejected rather than stored: send null to clear.
     verify_command: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+    auto_merge: bool = False  # left out = unchanged; null is rejected
 
 
 class ProjectOut(Orm):
@@ -77,6 +80,7 @@ class ProjectOut(Orm):
     base_branch: str | None
     verify_command: str | None
     installation_id: int | None
+    auto_merge: bool
 
 
 class ItemIn(BaseModel):
@@ -119,10 +123,17 @@ class ItemOut(Orm):
     model: str | None
     updated_at: datetime
     column: Column = "backlog"
+    # GitHub issue the story came from or should close (item.source["issue"]).
+    issue: int | None = None
     # Only for items in the working column: what is happening right now (see _progress).
     progress: dict[str, Any] | None = None
     # Only for items waiting for a human: why they are stuck (see _attention).
     attention: dict[str, str] | None = None
+
+
+class ImportResult(BaseModel):
+    imported: list[ItemOut]
+    skipped: int = Field(description="Open issues that already have an item, in any state")
 
 
 class RunOut(Orm):
@@ -189,7 +200,9 @@ def _column(engine: Engine, item: WorkItem) -> Column:
 
 
 def _item_out(engine: Engine, item: WorkItem) -> ItemOut:
-    return ItemOut.model_validate(item).model_copy(update={"column": _column(engine, item)})
+    return ItemOut.model_validate(item).model_copy(
+        update={"column": _column(engine, item), "issue": (item.source or {}).get("issue")}
+    )
 
 
 async def _progress(engine: Engine, s, item: WorkItem) -> dict[str, Any] | None:
@@ -222,23 +235,39 @@ def _open_questions(text: str) -> str | None:
     return body if body.lower().strip("*_ ") not in _NO_QUESTIONS else None
 
 
-async def _attention(s, item: WorkItem) -> dict[str, str] | None:
-    """Why an item waits for a human, from the newest thing the workflow produced: the error
-    of a step that failed (even if an earlier run of it succeeded), or questions an agent left
-    in its summary. None when the newest artifact is unremarkable."""
+async def _attention(engine: Engine, s, item: WorkItem) -> dict[str, str] | None:
+    """Why an item waits for a human. `pr` while its PR waits for the merge; otherwise from the
+    newest thing the workflow produced: the error of a step that failed (even if an earlier run
+    of it succeeded), or questions an agent left in its summary; failing that, how the item got
+    here: `exhausted` (a step hit its max_visits), or the verdict that led here (`timeout`,
+    `too_big`, `needs_clarification`, a reviewer's `needs_human`, ...)."""
+    wf = engine.workflows.get(item.workflow)
+    st = wf.states.get(item.state) if wf and item.state else None
+    if st is not None and st.watch == "merge":
+        return {"kind": "pr", "text": item.pr_url or ""}
     latest = await s.scalar(
         select(Artifact)
         .where(Artifact.item_id == item.id, ~Artifact.name.startswith("human:"))
         .order_by(Artifact.created_at.desc())
         .limit(1)
     )
-    if latest is None:
-        return None
-    if latest.name == "error":
+    if latest is not None and latest.name == "error":
         return {"kind": "error", "text": latest.content}
-    if questions := _open_questions(latest.content):
+    if latest is not None and (questions := _open_questions(latest.content)):
         return {"kind": "questions", "text": questions, "from": latest.name}
-    return None
+    entered = await s.scalar(
+        select(ItemEvent)
+        .where(ItemEvent.item_id == item.id, ItemEvent.to_state == item.state)
+        .order_by(ItemEvent.id.desc())
+        .limit(1)
+    )
+    if entered is None or not entered.verdict:
+        return None
+    came_from = wf.states.get(entered.from_state) if wf and entered.from_state else None
+    if came_from is not None and came_from.next.get(entered.verdict) not in (None, item.state):
+        target = came_from.next[entered.verdict]
+        return {"kind": "exhausted", "text": f"{target} ran its maximum number of times", "from": target}
+    return {"kind": entered.verdict, "text": "", "from": entered.from_state or ""}
 
 
 async def _item_with_progress(engine: Engine, s, item: WorkItem) -> ItemOut:
@@ -246,7 +275,7 @@ async def _item_with_progress(engine: Engine, s, item: WorkItem) -> ItemOut:
     if out.column == "working":
         out.progress = await _progress(engine, s, item)
     elif out.column == "needs_human":
-        out.attention = await _attention(s, item)
+        out.attention = await _attention(engine, s, item)
     return out
 
 
@@ -307,6 +336,12 @@ async def installation_repositories(installation_id: int) -> list[dict]:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"GitHub: {e}") from None
 
 
+@router.get("/models")
+async def list_models() -> dict:
+    """Models the board offers for a story, and the one used when a story and its step set none."""
+    return {"default": settings.default_model, "models": settings.models}
+
+
 @router.get("/projects")
 async def list_projects(db: Db) -> list[ProjectOut]:
     async with db.session() as s:
@@ -315,9 +350,10 @@ async def list_projects(db: Db) -> list[ProjectOut]:
 
 @router.patch("/projects/{slug}")
 async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
-    """Change base_branch / verify_command. slug, repo and installation_id are immutable.
+    """Change base_branch / verify_command / auto_merge. slug, repo and installation_id are immutable.
 
     verify_command applies from the next agent step of every story, running ones included.
+    auto_merge applies to every story that reaches its merge step from now on.
     base_branch only affects stories that have no workspace yet: started ones keep their base.
     """
     async with db.session() as s:
@@ -358,6 +394,44 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
     if body.start:
         await engine.start(item.id)
     return await _get_item_out(db, engine, item.id)
+
+
+@router.post("/projects/{slug}/import-issues")
+async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
+    """Put every open issue of the project's repo into the backlog as a story; nothing is started.
+
+    An issue that already has an item (in any state, cancelled included) is skipped, so a repeat is a no-op.
+    """
+    project = await _project(db, slug)
+    try:
+        gh = GitHub.for_project(project)
+    except RuntimeError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
+    try:
+        issues = await gh.list_issues(project.repo)
+    except httpx.HTTPError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"GitHub: {e}") from None
+    finally:
+        await gh.aclose()
+    async with db.session() as s:
+        # Compared in Python: JSON queries differ between SQLite and Postgres, and projects are small.
+        sources = await s.scalars(select(WorkItem.source).where(WorkItem.project_id == project.id))
+        known = {src.get("issue") for src in sources if src}
+        new = [
+            WorkItem(
+                project_id=project.id,
+                kind="story",
+                title=(issue.get("title") or f"Issue #{issue['number']}")[:300],  # ItemIn.title limit
+                body="\n\n".join(filter(None, [(issue.get("body") or "").strip(), f"Imported from {issue['html_url']}"])),
+                workflow="story",
+                source={"issue": issue["number"]},
+            )
+            for issue in issues
+            if issue["number"] not in known
+        ]
+        s.add_all(new)
+        await s.commit()
+        return ImportResult(imported=[_item_out(engine, i) for i in new], skipped=len(issues) - len(new))
 
 
 @router.get("/projects/{slug}/board")
@@ -494,6 +568,21 @@ async def start_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
         await engine.start(item_id)
     except EngineError as e:
         raise _engine_error(e) from None
+    return await _get_item_out(db, engine, item_id)
+
+
+@router.post("/items/{item_id}/run-now", status_code=status.HTTP_202_ACCEPTED)
+async def run_item_now(item_id: str, db: Db, engine: Eng, scheduler: Sched) -> ItemOut:
+    """Start the story's agent step that waits for a slot now, even while the scheduler is
+    paused or full: lets the operator resume stopped stories one by one."""
+    async with db.session() as s:
+        item = await s.get(WorkItem, item_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"item {item_id} not found")
+    try:
+        await scheduler.run_now(item.id, item.version)
+    except SchedulerError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
     return await _get_item_out(db, engine, item_id)
 
 

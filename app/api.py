@@ -11,6 +11,7 @@ from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
 
 from . import board_api, terminal
+from .archive import events_after, load_transcript
 from .config import settings
 from .db import Database
 from .engine import Engine, celery_enqueue
@@ -55,16 +56,41 @@ def get_store(request: Request) -> TaskStore:
 
 Store = Annotated[TaskStore, Depends(get_store)]
 
+
+def get_db(request: Request) -> Database:
+    return request.app.state.db
+
+
+Db = Annotated[Database, Depends(get_db)]
+
 app = FastAPI(title="Claude Code agent harness", lifespan=lifespan)
 app.include_router(board_api.router, dependencies=[Depends(require_token)])
 app.include_router(board_api.page)
 
 
-async def _get_or_404(store: TaskStore, task_id: str) -> TaskInfo:
+async def _get_or_404(store: TaskStore, task_id: str, db: Database | None = None) -> TaskInfo:
+    """The task from Redis, or from the Postgres archive (`db`) once Redis has expired it."""
     info = await store.get(task_id)
+    if info is None and db is not None and (transcript := await load_transcript(db, task_id)):
+        info = TaskInfo.model_validate(transcript.task)
     if info is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
     return info
+
+
+async def _archived_events(
+    store: TaskStore, db: Database, task_id: str, after: str, limit: int | None = None
+) -> list[dict] | None:
+    """Archived events of a task Redis no longer has; None while Redis is the source."""
+    if await store.get_raw(task_id) is not None:
+        return None
+    transcript = await load_transcript(db, task_id)
+    if transcript is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "task not found")
+    try:
+        return events_after(transcript.events, after, limit)
+    except ValueError:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"invalid event id {after!r}") from None
 
 
 @app.get("/healthz")
@@ -111,8 +137,8 @@ async def list_tasks(
 
 
 @app.get("/tasks/{task_id}", dependencies=[Depends(require_token)])
-async def get_task(task_id: str, store: Store) -> TaskInfo:
-    return await _get_or_404(store, task_id)
+async def get_task(task_id: str, store: Store, db: Db) -> TaskInfo:
+    return await _get_or_404(store, task_id, db)
 
 
 @app.post("/tasks/{task_id}/cancel", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_token)])
@@ -132,11 +158,14 @@ class Event(BaseModel):
 async def get_events(
     task_id: str,
     store: Store,
+    db: Db,
     after: str = "0",
     limit: Annotated[int, Query(ge=1, le=5000)] = 500,
 ) -> list[Event]:
     """Paged event log; pass the last seen `id` as `after` to continue."""
-    await _get_or_404(store, task_id)
+    archived = await _archived_events(store, db, task_id, after, limit)
+    if archived is not None:
+        return [Event(**e) for e in archived]
     return [Event(id=i, type=t, data=d) for i, t, d in await store.read_events(task_id, after, limit)]
 
 
@@ -144,13 +173,22 @@ async def get_events(
 async def stream_events(
     task_id: str,
     store: Store,
+    db: Db,
     request: Request,
     last_event_id: Annotated[str | None, Header()] = None,
     after: str = "0",
 ) -> EventSourceResponse:
     """Server-sent events: replays history, then follows live until the task finishes.
-    Reconnecting clients resume via the standard Last-Event-ID header."""
-    await _get_or_404(store, task_id)
+    Reconnecting clients resume via the standard Last-Event-ID header. A task Redis has
+    expired is replayed from the archive; it is finished, so there is nothing to follow."""
+    archived = await _archived_events(store, db, task_id, last_event_id or after)
+    if archived is not None:
+
+        async def replay() -> AsyncIterator[dict]:
+            for e in archived:
+                yield {"id": e["id"], "event": e["type"], "data": json.dumps(e["data"])}
+
+        return EventSourceResponse(replay(), ping=15)
 
     async def gen() -> AsyncIterator[dict]:
         cursor = last_event_id or after

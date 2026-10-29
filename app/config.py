@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     events_maxlen: int = 20_000
 
     # Defaults for agent runs; each can be overridden per task.
-    default_model: str = "claude-opus-5-5"
+    default_model: str = "claude-sonnet-5-5"
+    # Offered by the board's model picker on a story (JSON list); any model id is still accepted.
+    models: list[str] = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]
     default_permission_mode: str = "acceptEdits"
     default_allowed_tools: list[str] = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
     # Bash is allowed only for commands starting with one of these prefixes (JSON list, e.g.

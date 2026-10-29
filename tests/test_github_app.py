@@ -98,6 +98,33 @@ def test_installation_without_app_config_fails_fast(monkeypatch):
         GitHub(installation_id=7, repo="acme/app")
 
 
+async def test_list_issues_pages_and_skips_prs():
+    pages = []
+
+    def handler(request):
+        page = int(request.url.params["page"])
+        pages.append((page, request.url.params["state"], request.url.params["per_page"]))
+        if page == 1:
+            return httpx.Response(200, json=[{"number": n} for n in range(1, 100)] + [{"number": 100, "pull_request": {}}])
+        return httpx.Response(200, json=[{"number": 101}, {"number": 102, "pull_request": {}}])
+
+    def mock(gh, handler):  # a fresh client, so proxy mounts from the environment don't bypass the mock
+        gh.http = httpx.AsyncClient(base_url="https://api.github.test", transport=httpx.MockTransport(handler))
+
+    gh = GitHub(token="t")
+    await gh.aclose()
+    mock(gh, handler)
+    issues = await gh.list_issues("acme/app")
+    assert [i["number"] for i in issues] == [*range(1, 100), 101]
+    assert pages == [(1, "open", "100"), (2, "open", "100")]
+    await gh.aclose()
+
+    # Always-full pages stop at max_pages.
+    mock(gh, lambda r: httpx.Response(200, json=[{"number": 1}] * 100))
+    assert len(await gh.list_issues("acme/app", max_pages=3)) == 300
+    await gh.aclose()
+
+
 def test_api_status_and_project_validation(client, app_key, monkeypatch):
     transport, _ = fake_github(app_key)
     real_installations, real_repos = github_app.list_installations, github_app.list_repositories

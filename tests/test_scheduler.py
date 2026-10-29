@@ -8,7 +8,7 @@ from app.config import settings
 from app.db import Run
 from app.models import TaskCreate, TaskStatus
 from app.runner import AgentOutcome
-from app.scheduler import ACTIVE, QUOTA, Scheduler, record_rate_limit
+from app.scheduler import ACTIVE, QUOTA, Scheduler, SchedulerError, record_rate_limit
 from tests.test_engine import CIGitHub, Factory, ScriptedRunner
 from tests.test_issue_flow import origin  # noqa: F401  (fixture)
 
@@ -60,6 +60,27 @@ async def test_capacity_follows_subscription_windows(scheduler, redis):
     await scheduler.pause("deploy")
     assert await scheduler.capacity() == (0, "paused: deploy")
 
+
+
+async def test_run_now_skips_the_pause_and_limits_but_not_a_rejected_window(scheduler, redis, dispatched):
+    await scheduler.set_limits(max_agents=1)
+    await scheduler.submit("busy", 1, "A")
+    await scheduler.pause("stopped everything")
+    await scheduler.submit("a", 1, "A")
+    await scheduler.submit("b", 1, "A")
+    assert dispatched == ["busy"]
+
+    await scheduler.run_now("b", 1)
+    assert dispatched == ["busy", "b"]
+    assert await scheduler.is_pending("b", 1)  # holds a slot now
+    assert (await scheduler.status())["ready"] == ["a:1"]
+    with pytest.raises(SchedulerError, match="not waiting"):
+        await scheduler.run_now("b", 1)
+
+    await quota(redis, "five_hour", status="rejected", resets_at=time.time() + 600)
+    with pytest.raises(SchedulerError, match="five_hour limit reached"):
+        await scheduler.run_now("a", 1)
+    assert (await scheduler.status())["ready"] == ["a:1"]
 
 async def test_dispatch_by_priority_with_a_per_project_cap(scheduler, dispatched):
     await scheduler.pause("filling the queue")

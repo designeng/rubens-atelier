@@ -19,7 +19,8 @@ const githubLabel = computed(() =>
 const schedulerText = computed(() => {
   const sc = b.scheduler.value;
   if (!sc) return "";
-  return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${sc.reason}` : "");
+  const why = b.isPaused() ? "queue paused" : sc.reason;
+  return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${why}` : "");
 });
 
 function onLimit(key: "max_agents" | "max_agents_per_project", e: Event) {
@@ -32,6 +33,7 @@ function onToken(e: Event) {
   b.setToken((e.target as HTMLInputElement).value);
 }
 function onProject(e: Event) {
+  importText.value = "";
   b.selectProject((e.target as HTMLSelectElement).value);
 }
 function onTheme(e: Event) {
@@ -42,12 +44,27 @@ function addItem() {
   if (b.slug.value) emit("new-item", title.value.trim());
 }
 
+const importing = ref(false);
+const importText = ref("");
+async function importIssues() {
+  importing.value = true;
+  importText.value = "";
+  try {
+    const res = await b.importIssues();
+    importText.value = `imported ${res.imported.length}, skipped ${res.skipped}`;
+  } catch (e) {
+    b.fail(e);
+  } finally {
+    importing.value = false;
+  }
+}
+
 defineExpose({ clearTitle: () => (title.value = "") });
 </script>
 
 <template>
   <header>
-    <h1>Factory</h1>
+    <h1>Rubens Atelier</h1>
     <input type="password" placeholder="API token" size="14" :value="b.token.value" @change="onToken" />
     <select :value="b.slug.value" @change="onProject">
       <option v-for="p in b.projects.value" :key="p.id" :value="p.slug">{{ p.slug }}</option>
@@ -63,6 +80,14 @@ defineExpose({ clearTitle: () => (title.value = "") });
     <button @click="emit('new-project')">+ project</button>
     <input v-model="title" placeholder="New story title" size="28" @keydown.enter="addItem" />
     <button class="primary" :disabled="!b.slug.value" @click="addItem">Add &amp; start</button>
+    <button
+      title="Add the repo's open GitHub issues to the backlog (already imported ones are skipped)"
+      :disabled="!b.slug.value || importing"
+      @click="importIssues"
+    >
+      Import issues
+    </button>
+    <span v-if="importText" class="muted">{{ importText }}</span>
     <span class="muted">{{ schedulerText }}</span>
     <template v-if="b.scheduler.value">
       <label class="muted" title="Agents at once (applies right away; running agents above a lowered limit finish)">
@@ -102,7 +127,18 @@ defineExpose({ clearTitle: () => (title.value = "") });
     <select title="Theme" :value="theme" @change="onTheme">
       <option v-for="t in THEMES" :key="t.value" :value="t.value">{{ t.label }}</option>
     </select>
-    <button v-if="b.scheduler.value" @click="b.togglePause()">{{ b.isPaused() ? "Resume" : "Pause" }}</button>
+    <button
+      v-if="b.scheduler.value"
+      :class="{ primary: b.isPaused() }"
+      :title="
+        b.isPaused()
+          ? 'Agent steps are not dispatched. Resume to let queued steps start.'
+          : 'Stop dispatching new agent steps; running ones finish'
+      "
+      @click="b.togglePause()"
+    >
+      {{ b.isPaused() ? "Resume queue" : "Pause queue" }}
+    </button>
     <span id="err">{{ b.error.value }}</span>
   </header>
 </template>

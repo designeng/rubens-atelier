@@ -10,6 +10,10 @@ Definition of done (production-ready):
 6. Commit on the current branch `$branch` with clear messages.
    Do not push, rebase onto other branches or switch branches: the harness does that.
 
+Use the Read tool to read files and Edit/Write to change them. Keep Bash for running commands
+(tests, linters, git): editing files through heredocs, `python -c` or `sed -i` is often blocked
+by the sandbox's command checks, and every failed attempt costs a turn.
+
 If a merge of the base branch is in progress (the `sync_base` artifact lists the conflicts),
 resolve it first as that artifact describes.
 

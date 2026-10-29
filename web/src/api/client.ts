@@ -2,16 +2,20 @@ import type {
   Board,
   GithubApp,
   GitSnapshot,
+  ImportResult,
   ItemDetail,
   ItemIn,
   ItemOut,
   ProjectIn,
   ProjectOut,
   ItemPatch,
+  Models,
   ProjectPatch,
   Repository,
   SchedulerLimits,
   SchedulerStatus,
+  TaskEvent,
+  TaskInfo,
 } from "./types";
 
 export class ApiError extends Error {
@@ -26,6 +30,42 @@ export class ApiError extends Error {
 
 const seg = (s: string | number) => encodeURIComponent(String(s));
 
+async function apiError(res: Response): Promise<ApiError> {
+  const detail: unknown = ((await res.json().catch(() => ({}))) as { detail?: unknown }).detail;
+  const msg = detail || res.statusText;
+  return new ApiError(typeof msg === "string" ? msg : JSON.stringify(msg), res.status);
+}
+
+export interface SseMessage {
+  id: string;
+  event: string;
+  data: string;
+}
+
+// Splits a server-sent events buffer into complete messages; `rest` is the unfinished tail.
+// Comments (the server's pings) and messages without data are dropped.
+export function parseSse(buffer: string): { messages: SseMessage[]; rest: string } {
+  // A "\r" at the very end may be the first half of "\r\n": keep it for the next chunk.
+  const cut = buffer.endsWith("\r") ? buffer.length - 1 : buffer.length;
+  const blocks = buffer.slice(0, cut).replace(/\r\n?/g, "\n").split("\n\n");
+  const rest = blocks.pop()! + buffer.slice(cut);
+  const messages: SseMessage[] = [];
+  for (const block of blocks) {
+    const m: SseMessage = { id: "", event: "message", data: "" };
+    const data: string[] = [];
+    for (const line of block.split("\n")) {
+      if (!line || line.startsWith(":")) continue;
+      const i = line.indexOf(":");
+      const field = i < 0 ? line : line.slice(0, i);
+      const value = i < 0 ? "" : line.slice(i + 1).replace(/^ /, "");
+      if (field === "data") data.push(value);
+      else if (field === "id" || field === "event") m[field] = value;
+    }
+    if (data.length) messages.push({ ...m, data: data.join("\n") });
+  }
+  return { messages, rest };
+}
+
 // onOk runs after every successful call: the board clears its error line there, as before.
 export function createClient(
   getToken: () => string,
@@ -38,30 +78,57 @@ export function createClient(
       headers: { "content-type": "application/json", authorization: `Bearer ${getToken()}` },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (!res.ok) {
-      const detail: unknown = ((await res.json().catch(() => ({}))) as { detail?: unknown }).detail;
-      const msg = detail || res.statusText;
-      throw new ApiError(typeof msg === "string" ? msg : JSON.stringify(msg), res.status);
-    }
+    if (!res.ok) throw await apiError(res);
     const data = (await res.json()) as T;
     onOk();
     return data;
   }
 
+  // GET /tasks/{id}/stream: the agent's events after `after`, then live ones until the task
+  // finishes (the promise resolves then). fetch rather than EventSource, which can't send the token.
+  async function streamTask(
+    id: string,
+    after: string,
+    onEvent: (e: TaskEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await fetchImpl(`/tasks/${seg(id)}/stream?after=${encodeURIComponent(after)}`, {
+      headers: { accept: "text/event-stream", authorization: `Bearer ${getToken()}` },
+      signal,
+    });
+    if (!res.ok) throw await apiError(res);
+    onOk();
+    if (!res.body) return;
+    const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      const { messages, rest } = parseSse(buffer + value);
+      buffer = rest;
+      for (const m of messages) onEvent({ id: m.id, type: m.event, data: JSON.parse(m.data) });
+    }
+  }
+
   return {
+    listModels: () => api<Models>("/models"),
     listProjects: () => api<ProjectOut[]>("/projects"),
     createProject: (p: ProjectIn) => api<ProjectOut>("/projects", "POST", p),
     updateProject: (slug: string, patch: ProjectPatch) => api<ProjectOut>(`/projects/${seg(slug)}`, "PATCH", patch),
     getBoard: (slug: string) => api<Board>(`/projects/${seg(slug)}/board`),
     createItem: (slug: string, item: ItemIn) => api<ItemOut>(`/projects/${seg(slug)}/items`, "POST", item),
+    importIssues: (slug: string) => api<ImportResult>(`/projects/${seg(slug)}/import-issues`, "POST"),
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),
     updateItem: (id: string, patch: ItemPatch) => api<ItemOut>(`/items/${seg(id)}`, "PATCH", patch),
     getItemGit: (id: string, diff = false) => api<GitSnapshot>(`/items/${seg(id)}/git${diff ? "?diff=true" : ""}`),
     startItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/start`, "POST"),
     reopenItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/reopen`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
+    runItemNow: (id: string) => api<ItemOut>(`/items/${seg(id)}/run-now`, "POST"),
     answerRequest: (id: string, option: string, comment: string) =>
       api<{ advanced: boolean }>(`/requests/${seg(id)}/answer`, "POST", { option, comment }),
+    getTask: (id: string) => api<TaskInfo>(`/tasks/${seg(id)}`),
+    streamTask,
     getScheduler: () => api<SchedulerStatus>("/scheduler"),
     pauseScheduler: (reason = "") => api<SchedulerStatus>("/scheduler/pause", "POST", { reason }),
     resumeScheduler: () => api<SchedulerStatus>("/scheduler/resume", "POST", {}),
