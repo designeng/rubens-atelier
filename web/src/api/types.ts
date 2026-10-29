@@ -71,7 +71,13 @@ export interface ItemOut {
   priority: number;
   updated_at: string;
   column: Column;
+  issue: number | null;
   progress: Progress | null;
+}
+
+export interface ImportResult {
+  imported: ItemOut[];
+  skipped: number;
 }
 
 export interface RunOut {

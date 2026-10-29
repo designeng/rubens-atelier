@@ -8,7 +8,7 @@ defineProps<{ item: ItemOut }>();
 <template>
   <div class="card">
     <div>{{ item.title }}</div>
-    <div class="meta">{{ item.kind }} · {{ item.state || "backlog" }}{{ item.pr_url ? " · PR" : "" }}</div>
+    <div class="meta">{{ item.kind }} · {{ item.state || "backlog" }}{{ item.pr_url ? " · PR" : "" }}{{ item.issue ? ` · #${item.issue}` : "" }}</div>
     <ProgressBlock v-if="item.progress" :progress="item.progress" />
   </div>
 </template>

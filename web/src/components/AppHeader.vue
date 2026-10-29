@@ -24,10 +24,26 @@ function onToken(e: Event) {
   b.setToken((e.target as HTMLInputElement).value);
 }
 function onProject(e: Event) {
+  importText.value = "";
   b.selectProject((e.target as HTMLSelectElement).value);
 }
 function addItem() {
   if (b.slug.value) emit("new-item", title.value.trim());
+}
+
+const importing = ref(false);
+const importText = ref("");
+async function importIssues() {
+  importing.value = true;
+  importText.value = "";
+  try {
+    const res = await b.importIssues();
+    importText.value = `imported ${res.imported.length}, skipped ${res.skipped}`;
+  } catch (e) {
+    b.fail(e);
+  } finally {
+    importing.value = false;
+  }
 }
 
 defineExpose({ clearTitle: () => (title.value = "") });
@@ -51,6 +67,14 @@ defineExpose({ clearTitle: () => (title.value = "") });
     <button @click="emit('new-project')">+ project</button>
     <input v-model="title" placeholder="New story title" size="28" @keydown.enter="addItem" />
     <button class="primary" :disabled="!b.slug.value" @click="addItem">Add &amp; start</button>
+    <button
+      title="Add the repo's open GitHub issues to the backlog (already imported ones are skipped)"
+      :disabled="!b.slug.value || importing"
+      @click="importIssues"
+    >
+      Import issues
+    </button>
+    <span v-if="importText" class="muted">{{ importText }}</span>
     <span class="muted">{{ schedulerText }}</span>
     <button v-if="b.scheduler.value" @click="b.togglePause()">{{ b.isPaused() ? "Resume" : "Pause" }}</button>
     <span id="err">{{ b.error.value }}</span>

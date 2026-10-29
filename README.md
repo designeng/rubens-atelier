@@ -94,6 +94,7 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
 | `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
 | `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
+| `POST` | `/projects/{slug}/import-issues` | Put the repo's open GitHub issues (PRs left out, up to 1000) into the backlog as stories linked to their issue, so the PR closes it; nothing starts. An issue that already has an item in any state is skipped. Returns `{imported, skipped}`; the board's "Import issues" button calls it |
 | `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Open requests to a human |
 | `GET` | `/items/{id}` | Item, transition history, runs, artifacts, open request |

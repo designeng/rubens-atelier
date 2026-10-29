@@ -1,6 +1,6 @@
 import { inject, onMounted, onUnmounted, provide, ref, type InjectionKey } from "vue";
 import { createClient, storage } from "../api/client";
-import type { Board, GithubApp, ItemDetail, ItemIn, ProjectIn, ProjectOut, ProjectPatch, SchedulerStatus } from "../api/types";
+import type { Board, GithubApp, ImportResult, ItemDetail, ItemIn,ProjectIn, ProjectOut, ProjectPatch, SchedulerStatus } from "../api/types";
 
 export const POLL_MS = 5000;
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
@@ -131,6 +131,12 @@ export function useBoard() {
     await refresh();
   }
 
+  async function importIssues(): Promise<ImportResult> {
+    const res = await api.importIssues(slug.value);
+    await refresh();
+    return res;
+  }
+
   async function createProject(project: ProjectIn): Promise<void> {
     await api.createProject(project);
     storage.set("project", project.slug);
@@ -192,6 +198,7 @@ export function useBoard() {
     togglePause,
     isPaused,
     createItem,
+    importIssues,
     createProject,
     updateProject,
   };

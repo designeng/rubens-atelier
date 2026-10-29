@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from . import github_app, gitops, terminal
 from .config import settings
 from .execution import item_workspace
+from .github import GitHub
 from .db import Artifact, Database, HumanRequest, ItemEvent, Project, Run, WorkItem
 from .engine import Engine, EngineError
 from .scheduler import Scheduler
@@ -116,10 +117,17 @@ class ItemOut(Orm):
     model: str | None
     updated_at: datetime
     column: Column = "backlog"
+    # GitHub issue the story came from or should close (item.source["issue"]).
+    issue: int | None = None
     # Only for items in the working column: what is happening right now (see _progress).
     progress: dict[str, Any] | None = None
     # Only for items waiting for a human: why they are stuck (see _attention).
     attention: dict[str, str] | None = None
+
+
+class ImportResult(BaseModel):
+    imported: list[ItemOut]
+    skipped: int = Field(description="Open issues that already have an item, in any state")
 
 
 class RunOut(Orm):
@@ -186,7 +194,9 @@ def _column(engine: Engine, item: WorkItem) -> Column:
 
 
 def _item_out(engine: Engine, item: WorkItem) -> ItemOut:
-    return ItemOut.model_validate(item).model_copy(update={"column": _column(engine, item)})
+    return ItemOut.model_validate(item).model_copy(
+        update={"column": _column(engine, item), "issue": (item.source or {}).get("issue")}
+    )
 
 
 async def _progress(engine: Engine, s, item: WorkItem) -> dict[str, Any] | None:
@@ -355,6 +365,44 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
     if body.start:
         await engine.start(item.id)
     return await _get_item_out(db, engine, item.id)
+
+
+@router.post("/projects/{slug}/import-issues")
+async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
+    """Put every open issue of the project's repo into the backlog as a story; nothing is started.
+
+    An issue that already has an item (in any state, cancelled included) is skipped, so a repeat is a no-op.
+    """
+    project = await _project(db, slug)
+    try:
+        gh = GitHub.for_project(project)
+    except RuntimeError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
+    try:
+        issues = await gh.list_issues(project.repo)
+    except httpx.HTTPError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"GitHub: {e}") from None
+    finally:
+        await gh.aclose()
+    async with db.session() as s:
+        # Compared in Python: JSON queries differ between SQLite and Postgres, and projects are small.
+        sources = await s.scalars(select(WorkItem.source).where(WorkItem.project_id == project.id))
+        known = {src.get("issue") for src in sources if src}
+        new = [
+            WorkItem(
+                project_id=project.id,
+                kind="story",
+                title=(issue.get("title") or f"Issue #{issue['number']}")[:300],  # ItemIn.title limit
+                body="\n\n".join(filter(None, [(issue.get("body") or "").strip(), f"Imported from {issue['html_url']}"])),
+                workflow="story",
+                source={"issue": issue["number"]},
+            )
+            for issue in issues
+            if issue["number"] not in known
+        ]
+        s.add_all(new)
+        await s.commit()
+        return ImportResult(imported=[_item_out(engine, i) for i in new], skipped=len(issues) - len(new))
 
 
 @router.get("/projects/{slug}/board")
