@@ -73,7 +73,7 @@ def test_update_project_settings(client):
     assert r.status_code == 200
     assert r.json()["verify_command"] is None and r.json()["base_branch"] == "develop"
 
-    r = client.patch("/projects/app", json={"base_branch": None, "verify_command": "uv run pytest -q"})
+    r = client.patch("/projects/app", json={"base_branch": None, "verify_command": " uv run pytest -q "})
     assert (r.json()["base_branch"], r.json()["verify_command"]) == (None, "uv run pytest -q")
     (project,) = client.get("/projects").json()
     assert project["slug"] == "app" and project["repo"] == "acme/app"
@@ -92,6 +92,7 @@ def test_update_project_validation(client):
         {"base_branch": "a b"},
         {"base_branch": "b" * 201},
         {"verify_command": ""},
+        {"verify_command": "   "},
     ):
         assert client.patch("/projects/app", json=body).status_code == 422, body
     assert client.get("/projects").json() == [before]

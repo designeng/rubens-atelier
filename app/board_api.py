@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -60,7 +60,8 @@ class ProjectPatch(BaseModel):
 
     # Passed to git as a ref, so it must not start with "-" (would be read as an option).
     base_branch: str | None = Field(default=None, max_length=200, pattern=r"^[\w.][\w./-]*$")
-    verify_command: str | None = Field(default=None, min_length=1)
+    # Blank is rejected rather than stored: send null to clear.
+    verify_command: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
 
 
 class ProjectOut(Orm):
@@ -271,7 +272,7 @@ async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
         return ProjectOut.model_validate(project)
 
 
-@router.post("/projects/{slug}/items",status_code=status.HTTP_201_CREATED)
+@router.post("/projects/{slug}/items", status_code=status.HTTP_201_CREATED)
 async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
     project = await _project(db, slug)
     try:
