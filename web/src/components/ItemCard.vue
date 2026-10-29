@@ -6,7 +6,7 @@ defineProps<{ item: ItemOut }>();
 </script>
 
 <template>
-  <div class="card">
+  <div class="card" draggable="true">
     <div>{{ item.title }}</div>
     <div class="meta">{{ item.kind }} · {{ item.state || "backlog" }}{{ item.pr_url ? " · PR" : "" }}</div>
     <ProgressBlock v-if="item.progress" :progress="item.progress" />

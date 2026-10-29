@@ -59,6 +59,49 @@ const githubChanges = computed(() => {
   const base = project.base_branch ? `${encodeURIComponent(project.base_branch)}...` : "";
   return `https://github.com/${project.repo}/compare/${base}${i.branch.split("/").map(encodeURIComponent).join("/")}`;
 });
+// Edit the story in place. A step waiting for a slot picks the changes up when it starts,
+// a running one from the next agent step; a new priority reorders the queue right away.
+const editing = ref(false);
+const draft = ref({ title: "", body: "", priority: 0, model: "" });
+const editError = ref("");
+const editBusy = ref(false);
+const editable = computed(() => it.value?.column !== "done" && it.value?.column !== "failed");
+watch(
+  () => it.value?.id,
+  () => (editing.value = false),
+);
+function startEdit(): void {
+  const i = it.value;
+  if (!i) return;
+  draft.value = { title: i.title, body: i.body, priority: i.priority, model: i.model ?? "" };
+  editError.value = "";
+  editing.value = true;
+}
+async function saveEdit(): Promise<void> {
+  const i = it.value;
+  const d = draft.value;
+  if (!i) return;
+  if (!d.title.trim()) {
+    editError.value = "title is required";
+    return;
+  }
+  editBusy.value = true;
+  try {
+    await b.updateItem(i.id, {
+      title: d.title.trim(),
+      body: d.body,
+      priority: d.priority,
+      model: d.model.trim() || null,
+    });
+    editing.value = false;
+  } catch (e) {
+    editError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    editBusy.value = false;
+  }
+}
+
+const reopenable = computed(() => it.value?.column === "failed");
 const cancellable = computed(() => it.value?.column === "working" || it.value?.column === "needs_human");
 </script>
 
@@ -68,11 +111,34 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <div class="row">
         <button @click="b.closeItem()">✕</button>
         <button v-if="it.state === null" class="primary" @click="b.startItem(it.id)">Start</button>
+        <button v-if="reopenable" @click="b.reopenItem(it.id)">Back to backlog</button>
         <button v-if="cancellable" @click="b.cancelItem(it.id)">Cancel</button>
+        <button v-if="editable && !editing" @click="startEdit()">Edit</button>
       </div>
-      <h3>{{ it.title }}</h3>
+      <template v-if="editing">
+        <p v-if="it.progress?.queued" class="muted">Waiting for a slot: the agent starts with these changes.</p>
+        <p v-else-if="it.progress?.task_id" class="muted">An agent is running: changes apply from the next agent step.</p>
+        <label for="eTitle">Title</label>
+        <input id="eTitle" v-model="draft.title" maxlength="300" style="width: 100%" />
+        <label for="eBody">Description</label>
+        <textarea id="eBody" v-model="draft.body" rows="8" style="width: 100%"></textarea>
+        <div class="row">
+          <label for="ePriority">Priority (higher runs first)</label>
+          <input id="ePriority" v-model.number="draft.priority" type="number" min="-100" max="100" class="num" />
+        </div>
+        <label for="eModel">Model (empty: the default)</label>
+        <input id="eModel" v-model="draft.model" maxlength="100" style="width: 100%" />
+        <div class="row" style="margin-top: 8px">
+          <button class="primary" :disabled="editBusy" @click="saveEdit()">Save</button>
+          <button @click="editing = false">Cancel edit</button>
+          <span class="err">{{ editError }}</span>
+        </div>
+      </template>
+      <h3 v-else>{{ it.title }}</h3>
       <p class="muted">
         {{ it.kind }} · {{ it.workflow }} · state <b>{{ it.state || "backlog" }}</b>
+        <template v-if="it.priority"> · priority {{ it.priority }}</template>
+        <template v-if="it.model"> · {{ it.model }}</template>
         <template v-if="it.branch"> · {{ it.branch }}</template>
         <template v-if="it.pr_url"> · <a :href="it.pr_url" target="_blank" rel="noopener">PR</a></template>
       </p>
@@ -83,7 +149,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
           <li v-for="(t, n) in it.progress.todos" :key="n">{{ todoMark(t.status) }} {{ t.content }}</li>
         </ul>
       </template>
-      <pre v-if="it.body">{{ it.body }}</pre>
+      <pre v-if="it.body && !editing">{{ it.body }}</pre>
       <template v-if="req">
         <h4>Decision needed</h4>
         <p>{{ req.question }}</p>
