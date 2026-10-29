@@ -17,6 +17,22 @@ class TaskStatus(StrEnum):
         return self in (TaskStatus.succeeded, TaskStatus.failed, TaskStatus.cancelled)
 
 
+class FailureReason(StrEnum):
+    """Why an agent run ended without a result. A workflow's agent state can map each one in
+    `next` (e.g. `turn_limit: implement`); unmapped ones fall back to `error`."""
+
+    turn_limit = "turn_limit"  # the SDK stopped at max_turns
+    budget = "budget"  # the SDK stopped at max_budget_usd
+    model_error = "model_error"  # any other error the agent reported, or no result at all
+    verify_failed = "verify_failed"  # verify_command still failed after the last attempt
+    timeout = "timeout"
+    crashed = "crashed"  # an exception in the harness around the agent
+    workspace = "workspace"  # the workspace could not be prepared
+    worker_lost = "worker_lost"  # the worker died mid-run
+    restart_limit = "restart_limit"  # workers died mid-run more often than `restart_limit`
+    cancelled = "cancelled"
+
+
 PermissionMode = Literal["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk", "auto"]
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
@@ -85,6 +101,7 @@ class TaskInfo(BaseModel):
     result: str | None = None
     structured_output: Any = None
     error: str | None = None
+    failure_reason: FailureReason | None = None
     cost_usd: float | None = None
     num_turns: int | None = None
     branch: str | None = None
