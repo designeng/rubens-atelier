@@ -97,6 +97,8 @@ class ItemPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: ModelName | None = None
+    title: str = Field(default=None, min_length=1, max_length=300)
+    body: str = Field(default=None)
 
 
 class ItemOut(Orm):

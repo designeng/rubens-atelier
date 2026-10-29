@@ -41,6 +41,10 @@ def test_projects_items_board_and_inbox(client):
     assert r.json()["column"] == "failed"
     assert client.post(f"/items/{backlog['id']}/start").status_code == 409
 
+    r = client.patch(f"/items/{backlog['id']}", json={"title": "Renamed", "body": "new text"})
+    assert (r.json()["title"], client.get(f"/items/{backlog['id']}").json()["body"]) == ("Renamed", "new text")
+    assert client.patch(f"/items/{backlog['id']}", json={"title": ""}).status_code == 422
+
     # A cancelled story can go back to the backlog and be started again; a finished one cannot.
     r = client.post(f"/items/{backlog['id']}/reopen")
     assert r.json()["column"] == "backlog" and r.json()["state"] is None

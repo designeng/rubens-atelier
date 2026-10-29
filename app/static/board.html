@@ -170,6 +170,8 @@ async function showItem(id) {
   const keep = same && $("comment") && { value: $("comment").value, focus: document.activeElement === $("comment"),
     at: [$("comment").selectionStart, $("comment").selectionEnd], scroll: $("detail").scrollTop };
   const canOpenPr = !!it.branch && (it.column === "working" || it.column === "needs_human") && it.state !== "publish";
+  const edit = same && $("itEdit") && $("itEdit").open && { title: $("itTitle").value, body: $("itBody").value,
+    focus: document.activeElement && document.activeElement.id, scroll: $("detail").scrollTop };
   const latest = {}; it.artifacts.forEach((a) => { latest[a.name] = a; });
   $("detail").innerHTML = `
     <div class="row"><button id="close">✕</button>
@@ -186,6 +188,10 @@ async function showItem(id) {
     ${it.progress ? `<h4>Now</h4>${progressHtml(it.progress)}
       ${it.progress.todos ? `<ul class="todos">${it.progress.todos.map((t) => `<li>${t.status === "completed" ? "☑" : t.status === "in_progress" ? "▸" : "☐"} ${esc(t.content)}</li>`).join("")}</ul>` : ""}` : ""}
     ${it.attention ? `<div class="callout ${esc(it.attention.kind)}"><b>${esc(attnTitle(it.attention))}</b>\n${esc(it.attention.text)}</div>` : ""}
+    <details id="itEdit"><summary>${it.body ? "Description" : "Add a description"}</summary>
+      <input id="itTitle" style="width:100%" value="${esc(it.title)}">
+      <textarea id="itBody" rows="8" style="width:100%" placeholder="What to build, acceptance criteria">${esc(it.body)}</textarea>
+      <div class="row"><button id="itBodySave">Save</button><span class="muted">applies from the next agent step</span></div></details>
     ${it.body ? `<pre>${esc(it.body)}</pre>` : ""}
     ${req ? `<h4>Decision needed</h4><p>${esc(req.question)}</p>
       <textarea id="comment" rows="3" style="width:100%" placeholder="Comment for the next agent (optional)"></textarea>
@@ -202,12 +208,18 @@ async function showItem(id) {
       ${r.error ? `<div class="run-error">${esc(r.error)}</div>` : ""}</div>`).join("") || '<p class="muted">none</p>'}
     <h4>History</h4>${it.events.map((e) => `<div class="muted">${new Date(e.at).toLocaleString()} · ${esc(e.from_state || "∅")} -[${esc(e.verdict || "start")}]→ <b>${esc(e.to_state)}</b> · ${esc(e.actor)}</div>`).join("")}`;
   $("detail").classList.add("open");
+  if (edit) {
+    $("itEdit").open = true; $("itTitle").value = edit.title; $("itBody").value = edit.body; $("detail").scrollTop = edit.scroll;
+    if (edit.focus === "itTitle" || edit.focus === "itBody") $(edit.focus).focus();
+  }
   if (keep && $("comment")) {
     $("comment").value = keep.value;
     $("detail").scrollTop = keep.scroll;
     if (keep.focus) { $("comment").focus(); $("comment").setSelectionRange(...keep.at); }
   }
   $("close").onclick = () => { openItem = null; term = { id: null, log: "" }; git = { id: null, diff: false, text: "" }; $("detail").classList.remove("open"); };
+  $("itBodySave").onclick = () => api(`/items/${id}`, { method: "PATCH", body: JSON.stringify({ title: $("itTitle").value.trim(), body: $("itBody").value }) })
+    .then(() => showItem(id)).then(refresh).catch(fail);
   $("itModelSave").onclick = () => api(`/items/${id}`, { method: "PATCH", body: JSON.stringify({ model: $("itModel").value.trim() || null }) })
     .then(() => showItem(id)).catch(fail);
   if ($("start")) $("start").onclick = () => api(`/items/${id}/start`, { method: "POST" }).then(refresh).catch(fail);
