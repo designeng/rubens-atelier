@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     default_model: str = "claude-opus-5-5"
     default_permission_mode: str = "acceptEdits"
     default_allowed_tools: list[str] = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+    # Bash is allowed only for commands starting with one of these prefixes (JSON list, e.g.
+    # ["uv run", "pytest", "git status"]); anything else is denied. Empty = any command.
+    bash_allowed_commands: list[str] = []
+    # Run the agent's Bash in Claude Code's OS sandbox: writes confined to the workspace, no
+    # unsandboxed escape hatch. Needs bubblewrap/socat on Linux.
+    sandbox: bool = False
     default_max_turns: int = 50
     default_max_budget_usd: float = 5.0
     default_verify_attempts: int = 2

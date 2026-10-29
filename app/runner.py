@@ -56,6 +56,13 @@ def _clip(value: Any) -> Any:
     return value
 
 
+def effective_tools(allowed: list[str]) -> list[str]:
+    """Narrow a bare `Bash` to the configured command prefixes."""
+    if "Bash" not in allowed or not settings.bash_allowed_commands:
+        return allowed
+    return [t for t in allowed if t != "Bash"] + [f"Bash({c}:*)" for c in settings.bash_allowed_commands]
+
+
 def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgentOptions:
     system_prompt: dict[str, Any] = {"type": "preset", "preset": "claude_code"}
     if spec.system_prompt:
@@ -69,9 +76,12 @@ def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgen
         model=spec.model or settings.default_model,
         effort=spec.effort,
         permission_mode=spec.permission_mode or settings.default_permission_mode,
-        allowed_tools=spec.allowed_tools
-        if spec.allowed_tools is not None
-        else settings.default_allowed_tools,
+        allowed_tools=effective_tools(
+            spec.allowed_tools if spec.allowed_tools is not None else settings.default_allowed_tools
+        ),
+        sandbox={"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False}
+        if settings.sandbox
+        else None,
         disallowed_tools=spec.disallowed_tools or [],
         max_turns=spec.max_turns or settings.default_max_turns,
         max_budget_usd=spec.max_budget_usd or settings.default_max_budget_usd,

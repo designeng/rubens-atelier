@@ -137,5 +137,6 @@ A token is issued for one project repository and reissued 5 minutes before it ex
 The agent has Bash, and issue text can come from an outsider. Keep in mind:
 - the worker runs in a container as an unprivileged user;
 - the GitHub token (or the GitHub App private key) is used only by the harness: it is passed via `-c http.extraheader` rather than stored in `.git/config`, and is removed from the worker processes' env;
+- `HARNESS_BASH_ALLOWED_COMMANDS` limits Bash to command prefixes (empty = any) and `HARNESS_SANDBOX=true` runs it in Claude Code's OS sandbox (writes only in the workspace); both are off by default;
 - `allowed_tools`, `max_turns`, `max_budget_usd` and a timeout bound each task;
 - for production, isolate each task: its own container or microVM, an egress filter. You can also enable `sandbox` in `ClaudeAgentOptions`.
