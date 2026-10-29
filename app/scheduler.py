@@ -8,7 +8,8 @@ dispatched to Celery only when a slot is free:
   - fewer, or none, as subscription windows fill up. Claude Code reports each window's
     status and utilization (rate_limit events); a rejected window pauses dispatch until
     it resets, a nearly full one drops to a single agent, and weekly windows may not be
-    used faster than the week elapses.
+    used faster than the week elapses. `force` keeps the operator's limit through that
+    throttling (not through a rejected or nearly full window, where runs would just bounce).
 Action and check steps don't use Claude and bypass the scheduler.
 
 Layout (members are "<item_id>:<version>"):
@@ -19,7 +20,7 @@ Layout (members are "<item_id>:<version>"):
   harness:sched:active:task      hash   member → harness task id, once the step started it
   harness:sched:quota            hash   window type → latest rate-limit info (json)
   harness:sched:paused           string operator pause reason
-  harness:sched:limits           hash   max_agents / max_agents_per_project set by the operator
+  harness:sched:limits           hash   max_agents / max_agents_per_project / force set by the operator
 """
 
 import json
@@ -145,7 +146,8 @@ class Scheduler:
         if reason := await self.r.get(PAUSED):
             return 0, f"paused: {reason}"
         now = time.time()
-        max_agents = (await self.limits())["max_agents"]
+        limits = await self.limits()
+        max_agents = limits["max_agents"]
         limit, why = max_agents, "ok"
         for window, raw in (await self.r.hgetall(QUOTA)).items():
             q = json.loads(raw)
@@ -162,21 +164,29 @@ class Scheduler:
                 elapsed = 1 - (resets_at - now) / WEEK
                 if util > elapsed + settings.quota_pace_slack:
                     limit, why = 1, f"{window} at {util:.0%}, ahead of the weekly pace ({elapsed:.0%} elapsed)"
+        if limits["force"] and limit < max_agents:
+            return max_agents, f"forced: {why}"
         return min(limit, max_agents), why
 
-    async def limits(self) -> dict[str, int]:
+    async def limits(self) -> dict[str, Any]:
         """Slot limits in force: the operator's overrides on top of the settings."""
         overrides = await self.r.hgetall(LIMITS)
         return {
             k: int(overrides.get(k, getattr(settings, k))) for k in ("max_agents", "max_agents_per_project")
-        }
+        } | {"force": overrides.get("force") == "1"}
 
-    async def set_limits(self, max_agents: int | None = None, max_agents_per_project: int | None = None) -> None:
+    async def set_limits(
+        self, max_agents: int | None = None, max_agents_per_project: int | None = None, force: bool | None = None
+    ) -> None:
         """Change the slot limits for every dispatcher at once. Running agents above a lowered
         limit finish; new ones start only once the count is under it."""
         changes = {
             k: v
-            for k, v in (("max_agents", max_agents), ("max_agents_per_project", max_agents_per_project))
+            for k, v in (
+                ("max_agents", max_agents),
+                ("max_agents_per_project", max_agents_per_project),
+                ("force", None if force is None else int(force)),
+            )
             if v is not None
         }
         if changes:

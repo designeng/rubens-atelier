@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { SchedulerLimits } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
 
 const emit = defineEmits<{ settings: []; github: []; "new-project": []; "new-item": [title: string] }>();
@@ -21,7 +20,7 @@ const schedulerText = computed(() => {
   return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${sc.reason}` : "");
 });
 
-function onLimit(key: keyof SchedulerLimits, e: Event) {
+function onLimit(key: "max_agents" | "max_agents_per_project", e: Event) {
   const input = e.target as HTMLInputElement;
   const n = input.valueAsNumber;
   if (Number.isInteger(n) && n >= 1) b.setLimits({ [key]: n });
@@ -81,6 +80,17 @@ defineExpose({ clearTitle: () => (title.value = "") });
           :value="b.scheduler.value.limits.max_agents_per_project"
           @change="onLimit('max_agents_per_project', $event)"
         />
+      </label>
+      <label
+        class="muted"
+        title="Keep the slot limit while a subscription window is close to full (otherwise it drops to one agent). A rejected or nearly exhausted window still stops dispatch."
+      >
+        <input
+          type="checkbox"
+          :checked="b.scheduler.value.limits.force"
+          @change="b.setLimits({ force: ($event.target as HTMLInputElement).checked })"
+        />
+        force
       </label>
     </template>
     <button v-if="b.scheduler.value" @click="b.togglePause()">{{ b.isPaused() ? "Resume" : "Pause" }}</button>

@@ -144,6 +144,8 @@ export type Board = Record<Column, ItemOut[]>;
 export interface SchedulerLimits {
   max_agents: number;
   max_agents_per_project: number;
+  // Keep max_agents while a subscription window throttles to one agent.
+  force: boolean;
 }
 
 export interface SchedulerStatus {

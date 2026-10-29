@@ -100,7 +100,7 @@ async def test_global_cap_and_forget(scheduler, dispatched, monkeypatch):
 
 
 async def test_limits_change_on_the_fly(scheduler, dispatched):
-    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2}
+    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2, "force": False}
     await scheduler.set_limits(max_agents=1)
     for name in ("a1", "a2", "b1"):
         await scheduler.submit(name, 1, name[0].upper())
@@ -111,10 +111,25 @@ async def test_limits_change_on_the_fly(scheduler, dispatched):
     assert dispatched == ["a1", "b1"]
     await scheduler.set_limits(max_agents_per_project=2)
     assert dispatched == ["a1", "b1", "a2"]
-    assert (await scheduler.status())["limits"] == {"max_agents": 3, "max_agents_per_project": 2}
+    assert (await scheduler.status())["limits"] == {"max_agents": 3, "max_agents_per_project": 2, "force": False}
 
     await scheduler.reset_limits()
-    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2}
+    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2, "force": False}
+
+
+async def test_force_keeps_the_limit_through_throttling_but_not_a_full_window(scheduler, redis):
+    now = time.time()
+    await quota(redis, "five_hour", status="allowed", utilization=0.85, resets_at=now + 3600)
+    assert await scheduler.capacity() == (1, "five_hour at 85%")
+    await scheduler.set_limits(force=True)
+    assert await scheduler.capacity() == (4, "forced: five_hour at 85%")
+    await scheduler.set_limits(max_agents=2)
+    assert await scheduler.capacity() == (2, "forced: five_hour at 85%")
+
+    await quota(redis, "five_hour", status="rejected", resets_at=now + 600)
+    assert (await scheduler.capacity())[0] == 0
+    await scheduler.pause("deploy")
+    assert await scheduler.capacity() == (0, "paused: deploy")
 
 
 async def test_slots_of_dead_or_finished_steps_are_reclaimed(scheduler, dispatched, store, redis):

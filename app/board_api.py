@@ -562,12 +562,15 @@ async def resume_scheduler(scheduler: Sched) -> dict:
 class Limits(BaseModel):
     max_agents: int | None = Field(default=None, ge=1, le=64)
     max_agents_per_project: int | None = Field(default=None, ge=1, le=64)
+    force: bool | None = Field(
+        default=None, description="Keep max_agents while a subscription window throttles to one agent"
+    )
 
 
 @router.patch("/scheduler/limits")
 async def set_scheduler_limits(body: Limits, scheduler: Sched) -> dict:
     """Change how many agents run at once, without a restart. Omitted fields keep their value."""
-    await scheduler.set_limits(body.max_agents, body.max_agents_per_project)
+    await scheduler.set_limits(body.max_agents, body.max_agents_per_project, body.force)
     return await scheduler.status()
 
 
