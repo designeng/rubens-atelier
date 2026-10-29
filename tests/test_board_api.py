@@ -415,6 +415,15 @@ def test_blocked_item_cannot_start_until_blocker_succeeds(client):
     assert client.post(f"/items/{second['id']}/start").status_code == 202
 
 
+def test_create_with_start_and_unfinished_blocker_is_refused_and_stores_nothing(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    first = client.post("/projects/app/items", json={"title": "First"}).json()
+    r = client.post("/projects/app/items", json={"title": "Second", "blocked_by": [first["id"]], "start": True})
+    assert r.status_code == 409 and first["id"] in r.json()["detail"]
+    assert [i["title"] for i in client.get("/projects/app/board").json()["backlog"]] == ["First"]
+    assert client.enqueued == []
+
+
 def test_blocked_by_validation_and_patch(client):
     client.post("/projects", json={"slug": "app", "repo": "acme/app"})
     client.post("/projects", json={"slug": "other", "repo": "acme/other"})

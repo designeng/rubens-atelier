@@ -445,6 +445,9 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
             blocked_by=blocked_by,
             source={"issue": body.issue} if body.issue else {},
         )
+        if body.start and (waiting := await engine.unfinished_blockers(s, item)):
+            # Refused before anything is stored, so no half-created item is left behind.
+            raise HTTPException(status.HTTP_409_CONFLICT, f"blocked by: {', '.join(waiting)}")
         s.add(item)
         await s.commit()
     if body.start:
