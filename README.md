@@ -62,12 +62,17 @@ Workflow — это детерминированный конечный авто
 |---|---|
 | `agent` | роль из [prompts/](prompts/)`<role>.md` работает в workspace item'а; есть опции `verify`, `resume` (продолжить свою прошлую сессию), `verdicts`, `disallowed_tools` |
 | `action` | встроенный шаг harness'а, например `open_pr` |
+| `check` | внешнее условие, которое опрашивает beat, не занимая воркер; сейчас это `ci` |
 | `human` | запрос во inbox с вариантами ответа; ответ продвигает item дальше |
 | `terminal` | `succeeded`, `failed` или `cancelled` |
 
 `max_visits` и `on_exhausted` защищают от бесконечных циклов, например от пинг-понга implement ⇄ review. Если вердикта нет в `next`, item уходит в `next.error`, а если нет и его, то в `failed`.
 
-[workflows/story.yaml](workflows/story.yaml): `implement` (с verify) → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `awaiting_merge` (человек). `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+[workflows/story.yaml](workflows/story.yaml): `plan` (только чтение) → `implement` (с verify) → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (человек). `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+
+Планировщик пишет артефакт `planner`: подход, файлы, тест-план, риски. Implementer следует этому плану, а ревьюер сверяет с ним результат. Если нужны решения человека (`needs_clarification`), item идёт в `clarify`. Ответ человека возвращает его в `plan`, и планировщик продолжает свою сессию уже с ответом. Если story не помещается в один PR (`too_big`), она уходит в `needs_human` с предложением, как её разбить; оттуда её можно отправить в `replan` с комментарием. План утверждается без человека, а если он нужен, можно сделать отдельный вариант workflow с состоянием `approve_plan`.
+
+**CI-gate.** `check: ci` раз в `HARNESS_CHECKS_POLL_SECONDS` смотрит GitHub check runs и commit statuses на запушенном head-коммите PR. Если что-то упало, item возвращается в `implement`. Артефакт `ci` содержит имена упавших проверок, ссылки и хвост лога GitHub Actions. После фикса PR обновляется тем же push'ем. Если за `grace_seconds` не появилось ни одной проверки, это `no_checks`: в story такой item сразу идёт на merge. Если за `timeout_seconds` нет результата, item уходит к человеку.
 
 Шаги передают друг другу **артефакты**: итог implementer'а, ревью, комментарии человека, ошибки. Каждый следующий промпт получает последнюю версию каждого артефакта. Workspace (clone и ветка `agent/<kind>-<id>`) общий для всех шагов item'а.
 
@@ -80,6 +85,15 @@ Workflow — это детерминированный конечный авто
 | `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; комментарий становится артефактом для следующего агента |
+| `GET` | `/scheduler` | Занятые слоты, очередь, ёмкость и её причина, состояние окон подписки |
+| `POST` | `/scheduler/pause`, `/scheduler/resume` | Остановить или возобновить выдачу новых agent-шагов; уже работающие доработают |
+
+**Scheduler.** Agent-шаги не уходят в Celery сразу, а ждут в очереди с приоритетом: сначала больший `priority` item'а, при равном — FIFO. Выдаются, только если есть слот: всего не больше `HARNESS_MAX_AGENTS`, на один проект не больше `HARNESS_MAX_AGENTS_PER_PROJECT`. Темп задают окна подписки, о которых Claude Code сообщает `rate_limit`-событиями (статус, загрузка, время сброса):
+- `rejected` или загрузка ≥ `HARNESS_QUOTA_PAUSE_AT` → новых шагов нет до сброса окна;
+- загрузка ≥ `HARNESS_QUOTA_THROTTLE_AT` или `allowed_warning` → один агент;
+- недельные окна не расходуются быстрее, чем идёт неделя: допустимо использовать прошедшую долю недели плюс `HARNESS_QUOTA_PACE_SLACK`.
+
+Если запуск упёрся в лимит, это не ошибка работы. Шаг возвращается в очередь без эскалации и после сброса окна продолжает ту же сессию. Action- и check-шаги Claude не используют и идут мимо scheduler'а. Concurrency воркера Celery должна быть не меньше `HARNESS_MAX_AGENTS`; в compose она равна 6.
 
 Надёжность. Каждый переход — это compare-and-set по `work_items.version`. Шаг воркера (`harness.step`) и запрос к человеку привязаны к версии item'а, поэтому повторная доставка, двойной клик или устаревший ответ ничего не сдвигают. Agent-шаг выполняется как обычная harness-задача: с её событиями (`/tasks/{task_id}/stream`), отменой, lease и verify-циклом. `harness.reconcile` в beat заново ставит в очередь шаги, которые потеряли enqueue или воркер которых упал до того, как сообщил вердикт.
 

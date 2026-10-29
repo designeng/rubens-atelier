@@ -30,6 +30,11 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def aware(dt: datetime) -> datetime:
+    # SQLite hands timestamps back naive; Postgres keeps the tz.
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
 class Base(DeclarativeBase):
     type_annotation_map = {dict[str, Any]: JSON, list[str]: JSON, datetime: DateTime(timezone=True)}
 
@@ -63,6 +68,8 @@ class WorkItem(Base):
     branch: Mapped[str | None] = mapped_column(String(200))
     base_branch: Mapped[str | None] = mapped_column(String(200))
     pr_url: Mapped[str | None] = mapped_column(String(500))
+    head_sha: Mapped[str | None] = mapped_column(String(40))  # last pushed commit, for CI checks
+    priority: Mapped[int] = mapped_column(default=0)  # higher runs first
     # Claude session per role, so a role can resume its own context on the next visit.
     sessions: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # Where the item came from, e.g. {"issue": 42} for a GitHub issue.

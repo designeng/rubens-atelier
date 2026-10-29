@@ -36,6 +36,9 @@ celery_app.conf.update(
     beat_schedule={
         "reap-orphans": {"task": "harness.reap_orphans", "schedule": max(settings.lease_ttl_seconds, 30)},
         "reconcile-steps": {"task": "harness.reconcile", "schedule": 60},
+        # Picks up slots freed by crashed steps and windows that reset since the last dispatch.
+        "dispatch": {"task": "harness.dispatch", "schedule": 15},
+        "poll-checks": {"task": "harness.poll_checks", "schedule": settings.checks_poll_seconds},
     },
 )
 if settings.issue_repos:
@@ -76,12 +79,18 @@ def run_agent(task_id: str) -> None:
 
 async def _with_engine(fn):
     from .db import Database
-    from .engine import Engine
+    from .engine import Engine, celery_enqueue
+    from .scheduler import Scheduler
     from .workflow import load_workflows
 
     db = Database(settings.database_url)
+
+    def engine(store):
+        scheduler = Scheduler(store.r, celery_enqueue)
+        return Engine(db, load_workflows(settings.workflows_dir), store, celery_enqueue, scheduler)
+
     try:
-        return await _with_store(lambda store: fn(Engine(db, load_workflows(settings.workflows_dir), store), store))
+        return await _with_store(lambda store: fn(engine(store), store))
     finally:
         await db.dispose()
 
@@ -101,6 +110,18 @@ def reconcile() -> list[str]:
     if requeued:
         log.warning("re-enqueued stalled workflow steps: %s", requeued)
     return requeued
+
+
+@celery_app.task(name="harness.dispatch")
+def dispatch() -> list[str]:
+    return asyncio.run(_with_engine(lambda engine, _store: engine.scheduler.dispatch()))
+
+
+@celery_app.task(name="harness.poll_checks")
+def poll_checks() -> list:
+    from .checks import poll_checks as poll
+
+    return asyncio.run(_with_engine(lambda engine, _store: poll(engine)))
 
 
 @celery_app.task(name="harness.reap_orphans")

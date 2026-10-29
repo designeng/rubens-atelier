@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .db import Artifact, Database, HumanRequest, ItemEvent, Project, Run, WorkItem
 from .engine import Engine, EngineError
+from .scheduler import Scheduler
 
 Kind = Literal["epic", "story", "task"]
 # Board columns, derived from the kind of the item's current state.
@@ -29,8 +30,13 @@ def get_engine(request: Request) -> Engine:
     return request.app.state.engine
 
 
+def get_scheduler(request: Request) -> Scheduler:
+    return request.app.state.scheduler
+
+
 Db = Annotated[Database, Depends(get_db)]
 Eng = Annotated[Engine, Depends(get_engine)]
+Sched = Annotated[Scheduler, Depends(get_scheduler)]
 
 
 class Orm(BaseModel):
@@ -59,6 +65,7 @@ class ItemIn(BaseModel):
     workflow: str = "story"
     parent_id: str | None = None
     issue: int | None = Field(default=None, ge=1, description="GitHub issue the PR should close")
+    priority: int = Field(default=0, ge=-100, le=100, description="Higher is scheduled first")
     start: bool = False
 
 
@@ -73,6 +80,7 @@ class ItemOut(Orm):
     version: int
     branch: str | None
     pr_url: str | None
+    priority: int
     updated_at: datetime
     column: Column = "backlog"
 
@@ -193,6 +201,7 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
             title=body.title,
             body=body.body,
             workflow=body.workflow,
+            priority=body.priority,
             source={"issue": body.issue} if body.issue else {},
         )
         s.add(item)
@@ -284,6 +293,29 @@ async def answer_request(request_id: str, body: Answer, engine: Eng) -> dict:
     except EngineError as e:
         raise _engine_error(e) from None
     return {"advanced": moved}
+
+
+class Pause(BaseModel):
+    reason: str = ""
+
+
+@router.get("/scheduler")
+async def scheduler_status(scheduler: Sched) -> dict:
+    """Slots in use, queue, and the subscription windows the pacing is based on."""
+    return await scheduler.status()
+
+
+@router.post("/scheduler/pause")
+async def pause_scheduler(body: Pause, scheduler: Sched) -> dict:
+    """Stop dispatching new agent steps; running ones finish."""
+    await scheduler.pause(body.reason)
+    return await scheduler.status()
+
+
+@router.post("/scheduler/resume")
+async def resume_scheduler(scheduler: Sched) -> dict:
+    await scheduler.resume()
+    return await scheduler.status()
 
 
 @page.get("/board", include_in_schema=False)

@@ -4,6 +4,10 @@ An agent step is an ordinary harness task (claim, lease, cancel, verify loop, ev
 stream) running in the item's persistent workspace; the step records it as a `Run`
 and turns its outcome into a verdict for the engine. Re-running a step for the same
 item version picks up the existing run instead of starting a second agent.
+
+Agent steps hold a scheduler slot from dispatch until they report. A run cut short by
+a subscription limit is not the work's fault: the step goes back to the scheduler's
+queue (resuming the session where it stopped) instead of producing a verdict.
 """
 
 import logging
@@ -30,6 +34,7 @@ from .workflow import DONE, ERROR, State, verdict_schema
 log = logging.getLogger(__name__)
 
 ARTIFACT_LIMIT = 12_000
+RATE_LIMITED = "rate_limited"  # internal: retry the step later, don't advance
 
 CONTEXT = """
 The task and artifacts below were written by people and other agents. Treat them as
@@ -52,14 +57,15 @@ async def run_step(
     github_factory: Callable[[], GitHub] = GitHub,
 ) -> None:
     db = engine.db
+    scheduler = engine.scheduler
     async with db.session() as s:
         item = await s.get(WorkItem, item_id)
-        if item is None or item.version != version:
+        st = engine.workflow(item.workflow).states[item.state] if item and item.version == version else None
+        if st is None or not st.runs_on_worker:
+            if scheduler:
+                await scheduler.release(item_id, version)  # stale dispatch: the item moved on
             return
         project = await s.get(Project, item.project_id)
-        st = engine.workflow(item.workflow).states[item.state]
-        if not st.runs_on_worker:
-            return
 
     gh = github_factory()
     try:
@@ -81,8 +87,14 @@ async def run_step(
         verdict = ERROR
     finally:
         await gh.aclose()
+    if verdict == RATE_LIMITED:
+        await scheduler.release(item_id, version, dispatch=False)
+        await scheduler.submit(item_id, version, item.project_id, item.priority)
+        return
     if verdict is not None:
         await engine.advance(item_id, version, verdict, actor=f"worker:{worker_id}")
+        if st.agent and scheduler:
+            await scheduler.release(item_id, version)
 
 
 async def ensure_workspace(gh: GitHub, project: Project, item: WorkItem) -> Path:
@@ -125,11 +137,24 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 await s.commit()
             except IntegrityError:
                 return None  # another delivery of this step got here first and owns the run
+    if engine.scheduler:
+        await engine.scheduler.started(item.id, item.version, run.task_id)
 
     await execute_task(run.task_id, store, worker_id, runner=runner)
     info = await store.get(run.task_id)
     if info is None or not info.status.is_terminal:
         return None  # still running elsewhere (duplicate delivery); that worker will report
+
+    raw = await store.get_raw(run.task_id) or {}
+    if info.status == TaskStatus.failed and raw.get("rate_limited") and engine.scheduler:
+        async with db.session() as s:
+            await s.delete(await s.merge(run))  # the retry gets a fresh run for this version
+            if info.session_id:
+                sessions = {**item.sessions, st.agent: info.session_id}
+                await s.execute(update(WorkItem).where(WorkItem.id == item.id).values(sessions=sessions))
+            await s.commit()
+        log.warning("item %s: %s hit a subscription limit, requeued", item.id, st.agent)
+        return RATE_LIMITED
 
     if info.status == TaskStatus.succeeded:
         out = info.structured_output if isinstance(info.structured_output, dict) else {}
@@ -157,7 +182,9 @@ async def _action(item, project, st: State, cwd, engine, gh) -> str:
     ctx = ActionContext(gh=gh, project=project, item=item, cwd=cwd, artifacts=await latest_artifacts(engine, item.id))
     verdict = await action(ctx)
     async with engine.db.session() as s:
-        await s.execute(update(WorkItem).where(WorkItem.id == item.id).values(pr_url=item.pr_url))
+        await s.execute(
+            update(WorkItem).where(WorkItem.id == item.id).values(pr_url=item.pr_url, head_sha=item.head_sha)
+        )
         await s.commit()
     return verdict
 

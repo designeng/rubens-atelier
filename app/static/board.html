@@ -35,6 +35,8 @@
   <button id="newProject">+ project</button>
   <input id="title" placeholder="New story title" size="28">
   <button class="primary" id="add">Add &amp; start</button>
+  <span id="sched" class="muted"></span>
+  <button id="pause"></button>
   <span id="err"></span>
 </header>
 <main id="board"></main>
@@ -72,6 +74,11 @@ async function refresh() {
         <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div></div>`).join("")}
     </section>`).join("");
   if (openItem) await showItem(openItem);
+  const sc = await api("/scheduler");
+  const paused = sc.reason.startsWith("paused");
+  $("sched").textContent = `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${sc.reason}` : "");
+  $("pause").textContent = paused ? "Resume" : "Pause";
+  $("pause").onclick = () => api(`/scheduler/${paused ? "resume" : "pause"}`, { method: "POST", body: "{}" }).then(refresh).catch(fail);
 }
 
 async function showItem(id) {

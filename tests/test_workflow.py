@@ -12,7 +12,10 @@ def wf(**states):
 
 def test_story_workflow_loads_and_routes():
     story = load_workflows(settings.workflows_dir)["story"]
-    assert story.initial == "implement"
+    assert story.initial == "plan"
+    assert story.decide("plan", "ready") == "implement"
+    assert story.decide("plan", "needs_clarification") == "clarify"
+    assert story.decide("clarify", "answered") == "plan"
     assert story.decide("implement", "done") == "review"
     assert story.decide("review", "changes_requested") == "implement"
     assert story.decide("review", "approved") == "publish"

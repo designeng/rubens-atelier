@@ -28,7 +28,8 @@ services:
 
   worker:
     <<: *app
-    command: ["celery", "-A", "app.celery_app", "worker", "-l", "info", "--concurrency", "2"]
+    # At least HARNESS_MAX_AGENTS, plus room for actions (push, PR).
+    command: ["celery", "-A", "app.celery_app", "worker", "-l", "info", "--concurrency", "6"]
     volumes: [workspaces:/workspaces]
     # Warm shutdown waits for running agents; give them time before SIGKILL.
     stop_grace_period: 10m

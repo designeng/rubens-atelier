@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app.api import app
 from app.config import settings
 from app.engine import Engine
+from app.scheduler import Scheduler
 from app.store import TaskStore
 from app.workflow import load_workflows
 
@@ -17,6 +18,7 @@ def client(redis):
 
     with TestClient(app) as c:
         app.state.redis, app.state.store = redis, TaskStore(redis)
+        app.state.scheduler = Scheduler(redis, enqueue)
         app.state.engine = Engine(app.state.db, load_workflows(settings.workflows_dir), app.state.store, enqueue)
         c.enqueued = enqueued
         yield c
@@ -31,7 +33,7 @@ def test_projects_items_board_and_inbox(client):
     backlog = client.post("/projects/app/items", json={"title": "Later"}).json()
     started = client.post("/projects/app/items", json={"title": "Now", "body": "do it", "start": True}).json()
     assert backlog["column"] == "backlog" and backlog["state"] is None
-    assert started["state"] == "implement" and started["column"] == "working"
+    assert started["state"] == "plan" and started["column"] == "working"
     assert client.enqueued == [(started["id"], 1)]
 
     board = client.get("/projects/app/board").json()
@@ -40,7 +42,7 @@ def test_projects_items_board_and_inbox(client):
 
     # Simulate the worker getting the story to the merge gate.
     engine = app.state.engine
-    for verdict in ("done", "approved", "done"):
+    for verdict in ("ready", "done", "approved", "done", "passed"):
         item = client.get(f"/items/{started['id']}").json()
         client.portal.call(engine.advance, started["id"], item["version"], verdict)
 
@@ -48,7 +50,7 @@ def test_projects_items_board_and_inbox(client):
     assert req["state"] == "awaiting_merge"
     detail = client.get(f"/items/{started['id']}").json()
     assert detail["column"] == "needs_human" and detail["open_request"]["id"] == req["id"]
-    assert [e["to_state"] for e in detail["events"]] == ["implement", "review", "publish", "awaiting_merge"]
+    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "review", "publish", "ci", "awaiting_merge"]
 
     assert client.post(f"/requests/{req['id']}/answer", json={"option": "nope"}).status_code == 409
     r = client.post(f"/requests/{req['id']}/answer", json={"option": "merged", "comment": "thanks"})
@@ -72,3 +74,11 @@ def test_validation_and_scoping(client):
     assert client.get("/projects/b/board").json()["backlog"] == []
     assert client.get("/items/nope").status_code == 404
     assert client.get("/board").status_code == 200
+
+
+def test_scheduler_pause_and_resume(client):
+    status = client.get("/scheduler").json()
+    assert status["capacity"] == settings.max_agents and status["reason"] == "ok"
+    paused = client.post("/scheduler/pause", json={"reason": "release freeze"}).json()
+    assert paused["capacity"] == 0 and paused["reason"] == "paused: release freeze"
+    assert client.post("/scheduler/resume").json()["reason"] == "ok"

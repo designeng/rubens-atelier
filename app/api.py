@@ -13,7 +13,8 @@ from sse_starlette import EventSourceResponse
 from . import board_api
 from .config import settings
 from .db import Database
-from .engine import Engine
+from .engine import Engine, celery_enqueue
+from .scheduler import Scheduler
 from .models import IssueRef, TaskCreate, TaskInfo, TaskStatus
 from .service import SubmitError, submit
 from .store import TaskStore
@@ -28,7 +29,10 @@ async def lifespan(app: FastAPI):
     app.state.store = TaskStore(app.state.redis)
     app.state.db = Database(settings.database_url)
     await app.state.db.create_all()
-    app.state.engine = Engine(app.state.db, load_workflows(settings.workflows_dir), app.state.store)
+    app.state.scheduler = Scheduler(app.state.redis, celery_enqueue)
+    app.state.engine = Engine(
+        app.state.db, load_workflows(settings.workflows_dir), app.state.store, celery_enqueue, app.state.scheduler
+    )
     yield
     await app.state.db.dispose()
     await app.state.redis.aclose()

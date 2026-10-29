@@ -10,6 +10,7 @@ from typing import Any, Protocol
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    RateLimitEvent,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -109,6 +110,8 @@ async def run_claude(
                                 "content": _clip(block.content),
                             },
                         )
+            case RateLimitEvent(rate_limit_info=info):
+                await emit("rate_limit", {k: v for k, v in dataclasses.asdict(info).items() if k != "raw"})
             case ResultMessage():
                 result = msg
                 session_id = msg.session_id or session_id

@@ -17,6 +17,7 @@ from .config import settings
 from .github import GitHub
 from .models import TaskCreate, TaskStatus
 from .runner import AgentOutcome, AgentRunner, Emit, run_claude
+from .scheduler import record_rate_limit
 from .store import TaskStore
 
 log = logging.getLogger(__name__)
@@ -141,6 +142,11 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
         if type_ == "session" and data.get("session_id"):
             # Persist early so cancelled / timed-out runs can still be resumed.
             await store.set_fields(task_id, session_id=data["session_id"])
+        if type_ == "rate_limit":
+            await record_rate_limit(store.r, data)
+            if data.get("status") == "rejected":
+                # The run failed (or will) for lack of quota, not because of the work itself.
+                await store.set_fields(task_id, rate_limited="1")
         await store.append_event(task_id, type_, data)
 
     async def job() -> tuple[AgentOutcome, str | None]:

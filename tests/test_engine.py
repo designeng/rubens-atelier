@@ -3,6 +3,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select, update
 
+from app.checks import poll_checks
 from app.config import settings
 from app.db import Artifact, HumanRequest, ItemEvent, Project, Run, WorkItem, utcnow
 from app.engine import Engine, EngineError
@@ -12,17 +13,38 @@ from app.workflow import load_workflows
 from tests.test_issue_flow import FakeGitHub, git, origin  # noqa: F401  (origin is a fixture)
 
 
-class Factory:
-    """Engine with an in-process queue: `drain()` runs enqueued steps like a worker would."""
+class CIGitHub(FakeGitHub):
+    """FakeGitHub plus the Checks API; `checks` is what CI reports for any commit."""
 
-    def __init__(self, db, store, gh, runner):
+    def __init__(self, origin):
+        super().__init__(origin)
+        self.checks = [{"id": 1, "name": "test", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}}]
+        self.statuses: list[dict] = []
+        self.logs = {1: "collected 3 items\nFAILED test_hello.py::test_says_hi - AssertionError\n"}
+
+    async def check_runs(self, repo, ref):
+        return self.checks
+
+    async def commit_status(self, repo, ref):
+        return {"statuses": self.statuses}
+
+    async def job_log(self, repo, job_id):
+        return self.logs[job_id]
+
+
+class Factory:
+    """Engine with an in-process queue: `drain()` runs enqueued steps like a worker would
+    and polls check states like beat would, until nothing moves any more."""
+
+    def __init__(self, db, store, gh, runner, scheduler=None):
         self.queue: list[tuple[str, int]] = []
         self.gh, self.runner, self.store = gh, runner, store
 
         async def enqueue(item_id, version):
             self.queue.append((item_id, version))
 
-        self.engine = Engine(db, load_workflows(settings.workflows_dir), store, enqueue)
+        self.enqueue = enqueue
+        self.engine = Engine(db, load_workflows(settings.workflows_dir), store, enqueue, scheduler)
         self.db = db
 
     async def step(self, item_id, version):
@@ -32,8 +54,11 @@ class Factory:
         )
 
     async def drain(self):
-        while self.queue:
-            await self.step(*self.queue.pop(0))
+        while True:
+            while self.queue:
+                await self.step(*self.queue.pop(0))
+            if not await poll_checks(self.engine, github_factory=lambda: self.gh) and not self.queue:
+                return
 
     async def item(self, item_id) -> WorkItem:
         async with self.db.session() as s:
@@ -63,36 +88,42 @@ class Factory:
 
 
 class ScriptedRunner:
-    """Implementer commits a file; reviewer returns the next verdict from `reviews`."""
+    """Planner and reviewer return the next verdict from `plans` / `reviews` (the last one
+    repeats); implementer commits a file. Sessions and summaries are numbered per state."""
 
-    def __init__(self, reviews=("approved",), implement_ok=True):
-        self.reviews = list(reviews)
+    def __init__(self, reviews=("approved",), implement_ok=True, plans=("ready",)):
+        self.verdicts = {"plan": list(plans), "review": list(reviews)}
         self.implement_ok = implement_ok
         self.calls: list[dict] = []
 
+    def of(self, state: str) -> list[dict]:
+        return [c for c in self.calls if c["role"] == state]
+
     async def __call__(self, spec, *, cwd, resume, emit):
         role = spec.metadata["state"]
-        n = len(self.calls)
+        n = len(self.of(role))
         self.calls.append({"role": role, "prompt": spec.prompt, "resume": resume, "spec": spec})
-        await emit("session", {"session_id": f"{role}-{n}"})
+        session = f"{role}-{n}"
+        await emit("session", {"session_id": session})
         if role == "implement":
             if not self.implement_ok:
-                return AgentOutcome(f"{role}-{n}", None, True, error="max turns")
+                return AgentOutcome(session, None, True, error="max turns")
             (cwd / "hello.txt").write_text(f"hi {n}\n")
             git(cwd, "add", ".")
             git(cwd, "commit", "-m", f"greeting {n}")
-            return AgentOutcome(f"{role}-{n}", f"Implemented greeting (call {n}).", False, cost_usd=1.0)
-        verdict = self.reviews.pop(0) if len(self.reviews) > 1 else self.reviews[0]
+            return AgentOutcome(session, f"Implemented greeting (call {n}).", False, cost_usd=1.0)
+        queue = self.verdicts[role]
+        verdict = queue.pop(0) if len(queue) > 1 else queue[0]
         return AgentOutcome(
-            f"{role}-{n}", "ignored", False, cost_usd=0.5,
-            structured_output={"verdict": verdict, "summary": f"Review {n}: {verdict}, fix hello.txt:1"},
+            session, "ignored", False, cost_usd=0.5,
+            structured_output={"verdict": verdict, "summary": f"{role.capitalize()} {n}: {verdict}, see hello.txt:1"},
         )
 
 
 @pytest.fixture
 def make_factory(db, store, origin):  # noqa: F811
     def make(runner):
-        return Factory(db, store, FakeGitHub(origin), runner)
+        return Factory(db, store, CIGitHub(origin), runner)
 
     return make
 
@@ -104,21 +135,27 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     assert await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["implement", "review", "publish", "awaiting_merge"]
+    assert await f.path(item_id) == ["plan", "implement", "review", "publish", "ci", "awaiting_merge"]
     item = await f.item(item_id)
+    assert item.head_sha == git(origin, "rev-parse", item.branch).strip()
     assert item.branch == f"agent/story-{item_id[:8]}"
     assert item.pr_url == "https://gh/pr/1"
-    assert set(item.sessions) == {"implementer", "reviewer"}
+    assert set(item.sessions) == {"planner", "implementer", "reviewer"}
     pr = f.gh.prs[0]
     assert pr["head"] == item.branch and pr["base"] == "main"
-    assert "Closes #7" in pr["body"] and "Implemented greeting" in pr["body"] and "Review 1: approved" in pr["body"]
+    for part in ("Closes #7", "Plan 0: ready", "Implemented greeting", "Review 0: approved"):
+        assert part in pr["body"]
     assert "hi 0" in git(origin, "show", f"{item.branch}:hello.txt")
 
-    review = f.runner.calls[1]
+    (plan,) = f.runner.of("plan")
+    assert plan["spec"].disallowed_tools == ["Write", "Edit"]
+    assert plan["spec"].output_schema["properties"]["verdict"]["enum"] == ["ready", "needs_clarification", "too_big"]
+    assert '<artifact name="planner">' in f.runner.of("implement")[0]["prompt"]
+    (review,) = f.runner.of("review")
     assert review["spec"].output_schema["properties"]["verdict"]["enum"] == ["approved", "changes_requested", "needs_human"]
     assert review["spec"].disallowed_tools == ["Write", "Edit"]
     assert review["resume"] is None  # fresh context: the reviewer did not write the code
-    assert '<artifact name="implementer">' in review["prompt"]
+    assert '<artifact name="implementer">' in review["prompt"] and '<artifact name="planner">' in review["prompt"]
 
     req = await f.open_request(item_id)
     assert req.options == ["merged", "rework", "abandon"]
@@ -127,6 +164,7 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     async with f.db.session() as s:
         runs = (await s.scalars(select(Run).where(Run.item_id == item_id).order_by(Run.created_at))).all()
     assert [(r.state, r.verdict, r.status) for r in runs] == [
+        ("plan", "ready", "succeeded"),
         ("implement", "done", "succeeded"),
         ("review", "approved", "succeeded"),
     ]
@@ -138,10 +176,10 @@ async def test_review_feedback_loops_back_to_the_same_implementer_session(make_f
     await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["implement", "review", "implement", "review", "publish", "awaiting_merge"]
-    second_impl = f.runner.calls[2]
+    assert await f.path(item_id) == ["plan", "implement", "review", "implement", "review", "publish", "ci", "awaiting_merge"]
+    second_impl = f.runner.of("implement")[1]
     assert second_impl["resume"] == "implement-0"
-    assert "Review 1: changes_requested" in second_impl["prompt"]
+    assert "Review 0: changes_requested" in second_impl["prompt"]
 
 
 async def test_endless_review_ping_pong_is_cut_off_and_escalated(make_factory):
@@ -175,7 +213,7 @@ async def test_agent_failure_escalates_with_the_error(make_factory):
     await f.engine.answer(req.id, "retry", comment="try a smaller change")
     await f.drain()
     assert (await f.item(item_id)).state == "awaiting_merge"
-    assert "try a smaller change" in f.runner.calls[-2]["prompt"]
+    assert "try a smaller change" in f.runner.of("implement")[-1]["prompt"]
 
 
 async def test_duplicate_and_stale_steps_are_no_ops(make_factory):
@@ -188,7 +226,7 @@ async def test_duplicate_and_stale_steps_are_no_ops(make_factory):
     await f.step(*step)
     await f.step(*step)  # redelivered message: the item has moved on
     assert len(f.runner.calls) == 1
-    assert await f.path(item_id) == ["implement", "review"]
+    assert await f.path(item_id) == ["plan", "implement"]
 
     assert not await f.engine.advance(item_id, step[1], "done")  # stale verdict
 
@@ -232,5 +270,95 @@ async def test_reconcile_requeues_a_lost_step_once(make_factory):
         await s.commit()
     assert await f.engine.reconcile() == [item_id]
     assert await f.engine.reconcile() == []  # not again within the stale period
+    await f.drain()
+    assert (await f.item(item_id)).state == "awaiting_merge"
+
+
+async def test_red_ci_sends_the_story_back_with_the_failing_log(make_factory, origin):  # noqa: F811
+    f = make_factory(ScriptedRunner())
+    f.gh.checks[0]["conclusion"] = "failure"
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    # Run until CI has sent the story back, but not the fix itself yet.
+    while (await f.path(item_id))[-2:] != ["ci", "implement"]:
+        if f.queue:
+            await f.step(*f.queue.pop(0))
+        else:
+            assert await poll_checks(f.engine, github_factory=lambda: f.gh)
+
+    assert await f.path(item_id) == ["plan", "implement", "review", "publish", "ci", "implement"]
+    f.gh.checks[0]["conclusion"] = "success"  # the fix works
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    fix = f.runner.of("implement")[1]
+    assert fix["resume"] == "implement-0"
+    assert "FAILED test_hello.py::test_says_hi" in fix["prompt"] and "test: failure" in fix["prompt"]
+    assert len(f.gh.prs) == 1  # the fix updated the same PR
+    later = f.runner.of("review")[1]["prompt"]
+    assert "CI failed" in later  # the reviewer of the fix still sees why it was needed
+
+
+async def test_ci_waits_for_pending_checks_and_times_out(make_factory):
+    f = make_factory(ScriptedRunner())
+    f.gh.checks[0].update(status="in_progress", conclusion=None)
+    f.gh.statuses = [{"context": "legacy-ci", "state": "success"}]
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "ci"  # still pending
+
+    async with f.db.session() as s:
+        old = utcnow() - timedelta(seconds=3601)
+        await s.execute(update(WorkItem).where(WorkItem.id == item_id).values(updated_at=old))
+        await s.commit()
+    await f.drain()
+    assert (await f.item(item_id)).state == "needs_human"
+
+
+async def test_legacy_status_failure_and_no_checks(make_factory):
+    f = make_factory(ScriptedRunner())
+    f.gh.checks = []
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "ci"  # nothing reported yet, within grace
+
+    f.gh.statuses = [{"context": "jenkins", "state": "failure", "description": "build broke"}]
+    await f.drain()
+    async with f.db.session() as s:
+        ci = (await s.scalars(select(Artifact.content).where(Artifact.name == "ci"))).all()
+    assert "jenkins: failure" in ci[0] and "build broke" in ci[0]
+
+
+async def test_planner_questions_go_to_a_person_and_back(make_factory):
+    f = make_factory(ScriptedRunner(plans=["needs_clarification", "ready"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.path(item_id) == ["plan", "clarify"]
+    req = await f.open_request(item_id)
+    assert req.options == ["answered", "abandon"]
+    await f.engine.answer(req.id, "answered", comment="Lowercase, no punctuation.")
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    replan = f.runner.of("plan")[1]
+    assert replan["resume"] == "plan-0"  # the planner continues with its own questions in context
+    assert "Lowercase, no punctuation." in replan["prompt"]
+    assert "Plan 1: ready" in f.runner.of("implement")[0]["prompt"]
+
+
+async def test_too_big_story_is_escalated_and_can_be_replanned(make_factory):
+    f = make_factory(ScriptedRunner(plans=["too_big", "ready"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.path(item_id) == ["plan", "needs_human"]
+    assert f.runner.of("implement") == []
+    req = await f.open_request(item_id)
+    await f.engine.answer(req.id, "replan", comment="Only the greeting file, skip the rest.")
     await f.drain()
     assert (await f.item(item_id)).state == "awaiting_merge"

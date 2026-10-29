@@ -78,3 +78,17 @@ class GitHub:
             f"/repos/{repo}/pulls",
             json={"head": head, "base": base, "title": title, "body": body},
         )
+
+    async def check_runs(self, repo: str, ref: str) -> list[dict[str, Any]]:
+        data = await self._req("GET", f"/repos/{repo}/commits/{ref}/check-runs", params={"per_page": 100})
+        return data["check_runs"]
+
+    async def commit_status(self, repo: str, ref: str) -> dict[str, Any]:
+        """Combined legacy commit statuses (CI systems that don't use the Checks API)."""
+        return await self._req("GET", f"/repos/{repo}/commits/{ref}/status")
+
+    async def job_log(self, repo: str, job_id: int) -> str:
+        # Redirects to blob storage; httpx drops the Authorization header on the cross-origin hop.
+        resp = await self.http.get(f"/repos/{repo}/actions/jobs/{job_id}/logs", follow_redirects=True)
+        resp.raise_for_status()
+        return resp.text

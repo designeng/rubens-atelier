@@ -8,6 +8,7 @@ Anything unmapped — including `error` — falls back to `next.error`, then to 
 Every state is exactly one of:
   agent:    run a role's prompt in the item's workspace (optionally followed by verify)
   action:   a built-in harness step, e.g. open_pr
+  check:    poll an external condition, e.g. ci (GitHub checks on the PR head)
   human:    wait for a person to pick one of `options`
   terminal: the item is finished with the given outcome
 """
@@ -21,11 +22,14 @@ from pydantic import BaseModel, Field, model_validator
 Outcome = Literal["succeeded", "failed", "cancelled"]
 ERROR = "error"
 DONE = "done"
+KINDS = ("agent", "action", "check", "human", "terminal")
+CHECK_OUTCOMES = ["passed", "failed", "no_checks", "timeout"]
 
 
 class State(BaseModel):
     agent: str | None = None  # role name → prompts/<role>.md
     action: str | None = None
+    check: str | None = None
     human: str | None = None  # the question
     terminal: Outcome | None = None
 
@@ -36,6 +40,9 @@ class State(BaseModel):
     model: str | None = None
     effort: str | None = None
     disallowed_tools: list[str] = []
+    # check: give up with `timeout` after this long; `no_checks` if nothing reported within grace.
+    timeout_seconds: int = Field(default=3600, ge=1)
+    grace_seconds: int = Field(default=300, ge=0)
 
     next: dict[str, str] = {}
     # Loop guard: entering this state more often sends the item to `on_exhausted`.
@@ -44,7 +51,7 @@ class State(BaseModel):
 
     @property
     def kind(self) -> str:
-        return next(k for k in ("agent", "action", "human", "terminal") if getattr(self, k))
+        return next(k for k in KINDS if getattr(self, k))
 
     @property
     def runs_on_worker(self) -> bool:
@@ -56,15 +63,17 @@ class State(BaseModel):
                 return (self.verdicts or [DONE]) + [ERROR]
             case "action":
                 return [DONE, ERROR]
+            case "check":
+                return CHECK_OUTCOMES + [ERROR]
             case "human":
                 return self.options
         return []
 
     @model_validator(mode="after")
     def _check(self) -> "State":
-        kinds = [k for k in ("agent", "action", "human", "terminal") if getattr(self, k)]
+        kinds = [k for k in KINDS if getattr(self, k)]
         if len(kinds) != 1:
-            raise ValueError(f"a state must be exactly one of agent/action/human/terminal, got {kinds}")
+            raise ValueError(f"a state must be exactly one of {'/'.join(KINDS)}, got {kinds}")
         if self.human and not self.options:
             raise ValueError("a human state needs options")
         return self

@@ -6,19 +6,21 @@ duplicates (Celery redelivery, double clicks, a reconciler racing a slow worker)
 stale ones (the item was cancelled meanwhile) are no-ops instead of double moves.
 
 Agent and action states are executed by workers (`steps.run_step`), which report the
-verdict back through `advance`. Human states open a request in the inbox; `answer`
-closes it and advances with the chosen option.
+verdict back through `advance`; agent steps first wait for a slot in the scheduler.
+Check states are polled by `checks.poll_checks`. Human states open a request in the
+inbox; `answer` closes it and advances with the chosen option.
 """
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func, select, update
 
 from .config import settings
-from .db import Artifact, Database, HumanRequest, ItemEvent, Run, WorkItem, utcnow
+from .db import Artifact, Database, HumanRequest, ItemEvent, Run, WorkItem, aware, utcnow
+from .scheduler import Scheduler
 from .store import TaskStore
 from .workflow import Workflow
 
@@ -44,11 +46,13 @@ class Engine:
         workflows: dict[str, Workflow],
         store: TaskStore,
         enqueue: Enqueue = celery_enqueue,
+        scheduler: Scheduler | None = None,
     ):
         self.db = db
         self.workflows = workflows
         self.store = store
         self.enqueue = enqueue
+        self.scheduler = scheduler
 
     def workflow(self, name: str) -> Workflow:
         try:
@@ -113,11 +117,14 @@ class Engine:
             items = (await s.scalars(select(WorkItem).where(WorkItem.state.is_not(None)))).all()
             for item in items:
                 wf = self.workflows.get(item.workflow)
-                if wf is None or not wf.states[item.state].runs_on_worker:
+                st = wf.states[item.state] if wf else None
+                if st is None or not st.runs_on_worker:
                     continue
+                if st.agent and self.scheduler and await self.scheduler.is_pending(item.id, item.version):
+                    continue  # waiting for a slot, or holding one: the scheduler accounts for it
                 run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
                 if run is None:
-                    stale = _aware(item.updated_at) < cutoff
+                    stale = aware(item.updated_at) < cutoff
                 else:
                     raw = await self.store.get_raw(run.task_id)
                     stale = raw is None or raw["status"] != "running" or not await self.store.lease_alive(run.task_id)
@@ -126,7 +133,7 @@ class Engine:
                 key = f"harness:requeue:{item.id}:{item.version}"
                 if stale and await self.store.r.set(key, "1", nx=True, ex=settings.step_stale_seconds):
                     requeued.append(item.id)
-                    await self.enqueue(item.id, item.version)
+                    await self._schedule(item, st, item.version)
         return requeued
 
     async def _enter(self, s, item: WorkItem, wf: Workflow, target: str, verdict: str | None, actor: str) -> bool:
@@ -165,9 +172,17 @@ class Engine:
         item.state, item.version = target, version + 1
         log.info("item %s: %s -[%s]-> %s", item.id, from_state, verdict, target)
 
+        if self.scheduler:
+            await self.scheduler.forget(item.id, version)
         if st.runs_on_worker:
-            await self.enqueue(item.id, version + 1)
+            await self._schedule(item, st, version + 1)
         return True
+
+    async def _schedule(self, item: WorkItem, st, version: int) -> None:
+        if st.agent and self.scheduler:
+            await self.scheduler.submit(item.id, version, item.project_id, item.priority)
+        else:
+            await self.enqueue(item.id, version)
 
 
 async def _get(s, item_id: str) -> WorkItem:
@@ -175,8 +190,3 @@ async def _get(s, item_id: str) -> WorkItem:
     if item is None:
         raise EngineError("item not found")
     return item
-
-
-def _aware(dt: datetime) -> datetime:
-    # SQLite hands timestamps back naive; Postgres keeps the tz.
-    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)

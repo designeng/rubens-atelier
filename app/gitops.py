@@ -84,3 +84,8 @@ async def commit_all_if_dirty(cwd: Path, message: str) -> bool:
 async def commits_ahead(cwd: Path, base: str) -> int:
     _, out = await run("git", "rev-list", "--count", f"origin/{base}..HEAD", cwd=cwd)
     return int(out.strip() or 0)
+
+
+async def head_sha(cwd: Path) -> str:
+    _, out = await run("git", "rev-parse", "HEAD", cwd=cwd)
+    return out.strip()

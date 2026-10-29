@@ -1,8 +1,22 @@
 name: story
-description: Implement one story, have it reviewed in a fresh session, open a PR, wait for the merge.
-initial: implement
+description: Plan one story, implement it, have it reviewed in a fresh session, open a PR, pass CI, wait for the merge.
+initial: plan
 
 states:
+  plan:
+    agent: planner
+    disallowed_tools: [Write, Edit]
+    verdicts: [ready, needs_clarification, too_big]
+    resume: true
+    max_visits: 3
+    on_exhausted: needs_human
+    next: {ready: implement, needs_clarification: clarify, too_big: needs_human, error: needs_human}
+
+  clarify:
+    human: The planner has questions (see the plan artifact). Answer them in the comment.
+    options: [answered, abandon]
+    next: {answered: plan, abandon: cancelled}
+
   implement:
     agent: implementer
     verify: true
@@ -19,7 +33,13 @@ states:
 
   publish:
     action: open_pr
-    next: {done: awaiting_merge, error: needs_human}
+    next: {done: ci, error: needs_human}
+
+  ci:
+    check: ci
+    timeout_seconds: 3600
+    grace_seconds: 300
+    next: {passed: awaiting_merge, no_checks: awaiting_merge, failed: implement, timeout: needs_human, error: needs_human}
 
   awaiting_merge:
     human: The PR is open. Merge it, or send it back with a comment.
@@ -27,9 +47,9 @@ states:
     next: {merged: done, rework: implement, abandon: cancelled}
 
   needs_human:
-    human: The workflow is stuck (see the latest artifacts). Retry with a comment, or abandon.
-    options: [retry, abandon]
-    next: {retry: implement, abandon: cancelled}
+    human: The workflow is stuck (see the latest artifacts). Retry or replan with a comment, or abandon.
+    options: [retry, replan, abandon]
+    next: {retry: implement, replan: plan, abandon: cancelled}
 
   done: {terminal: succeeded}
   failed: {terminal: failed}

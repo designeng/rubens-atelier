@@ -15,6 +15,20 @@ class Settings(BaseSettings):
     prompts_dir: Path = ROOT / "prompts"
     # Agent/action steps with no progress for this long are re-enqueued by the reconciler.
     step_stale_seconds: int = 600
+
+    # Scheduler: how many agents run at once and how they pace subscription usage.
+    # Celery worker concurrency must be at least max_agents (actions need a few more).
+    max_agents: int = 4
+    max_agents_per_project: int = 2
+    # Utilization (0..1) of a subscription window at which dispatch drops to one agent / stops.
+    quota_throttle_at: float = 0.8
+    quota_pause_at: float = 0.95
+    # Weekly windows may be used up to the elapsed share of the week plus this slack.
+    quota_pace_slack: float = 0.1
+    # A dispatched step that hasn't started its agent within this time gives its slot back.
+    dispatch_ttl_seconds: int = 1800
+    # How often check states (CI) are polled.
+    checks_poll_seconds: int = 30
     # Optional bearer token for the HTTP API. Empty = auth disabled (local dev only).
     api_token: str = ""
 
