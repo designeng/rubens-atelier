@@ -78,6 +78,7 @@ Workflow — это детерминированный конечный авто
 | Метод | Путь | |
 |---|---|---|
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
+| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` очищает значение; `slug`, `repo` и `installation_id` менять нельзя |
 | `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
 | `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
@@ -86,6 +87,8 @@ Workflow — это детерминированный конечный авто
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; комментарий становится артефактом для следующего агента |
 | `GET` | `/scheduler` | Занятые слоты, очередь, ёмкость и её причина, состояние окон подписки |
 | `POST` | `/scheduler/pause`, `/scheduler/resume` | Остановить или возобновить выдачу новых agent-шагов; уже работающие доработают |
+
+Настройки проекта можно менять и на доске (**Settings**). Новая `verify_command` действует со следующего agent-шага каждой story, в том числе уже запущенной. Новая `base_branch` действует только на story, у которых ещё нет workspace; уже начатые сохраняют свою базу.
 
 **Scheduler.** Agent-шаги не уходят в Celery сразу, а ждут в очереди с приоритетом: сначала больший `priority` item'а, при равном — FIFO. Выдаются, только если есть слот: всего не больше `HARNESS_MAX_AGENTS`, на один проект не больше `HARNESS_MAX_AGENTS_PER_PROJECT`. Темп задают окна подписки, о которых Claude Code сообщает `rate_limit`-событиями (статус, загрузка, время сброса):
 - `rejected` или загрузка ≥ `HARNESS_QUOTA_PAUSE_AT` → новых шагов нет до сброса окна;

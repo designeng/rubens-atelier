@@ -44,6 +44,7 @@
   <h1>Factory</h1>
   <input id="token" type="password" placeholder="API token" size="14">
   <select id="project"></select>
+  <button id="projSettings" title="Project settings">Settings</button>
   <button id="ghBtn" title="GitHub App connection">GitHub</button>
   <button id="newProject">+ project</button>
   <input id="title" placeholder="New story title" size="28">
@@ -72,6 +73,16 @@
     <span id="pErr" style="color:var(--bad)"></span>
   </div>
 </dialog>
+<dialog id="setDlg">
+  <h3 style="margin-top:0">Project settings</h3>
+  <div class="muted" id="sRepo"></div>
+  <label for="sBase">Base branch (empty: the repository's default branch; applies to new stories only)</label><input id="sBase">
+  <label for="sVerify">Verify command (empty: no harness checks)</label><input id="sVerify">
+  <div class="row" style="margin-top:14px">
+    <button class="primary" id="sSave">Save</button><button id="sCancel">Cancel</button>
+    <span id="sErr" style="color:var(--bad)"></span>
+  </div>
+</dialog>
 <script>
 const $ = (id) => document.getElementById(id);
 const COLS = { backlog: "Backlog", working: "Agents working", needs_human: "Needs you", done: "Done", failed: "Failed / cancelled" };
@@ -79,6 +90,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<
 const store = { get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
                 set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 let openItem = null;
+let projects = [];
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { "content-type": "application/json", authorization: `Bearer ${$("token").value}` } });
@@ -89,7 +101,7 @@ async function api(path, opts = {}) {
 const fail = (e) => { $("err").textContent = e.message; };
 
 async function loadProjects() {
-  const projects = await api("/projects");
+  projects = await api("/projects");
   const want = store.get("project");
   $("project").innerHTML = projects.map((p) => `<option ${p.slug === want ? "selected" : ""}>${esc(p.slug)}</option>`).join("");
   await refresh();
@@ -247,6 +259,22 @@ $("pCreate").onclick = () => {
   api("/projects", { method: "POST", body: JSON.stringify(body) })
     .then(() => { $("projDlg").close(); store.set("project", slug); return loadProjects(); })
     .catch((e) => { $("pErr").textContent = e.message; });
+};
+$("projSettings").onclick = () => {
+  const p = projects.find((x) => x.slug === $("project").value);
+  if (!p) { fail(new Error("no project")); return; }
+  $("sRepo").textContent = `${p.slug} · ${p.repo}`;
+  $("sBase").value = p.base_branch || "";
+  $("sVerify").value = p.verify_command || "";
+  $("sErr").textContent = "";
+  $("setDlg").showModal();
+};
+$("sCancel").onclick = () => $("setDlg").close();
+$("sSave").onclick = () => {
+  const body = { base_branch: $("sBase").value.trim() || null, verify_command: $("sVerify").value.trim() || null };
+  api(`/projects/${encodeURIComponent($("project").value)}`, { method: "PATCH", body: JSON.stringify(body) })
+    .then(() => { $("setDlg").close(); return loadProjects(); })
+    .catch((e) => { $("sErr").textContent = e.message; });
 };
 loadProjects().catch(fail);
 refreshGithub().catch(() => {});

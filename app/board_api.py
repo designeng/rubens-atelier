@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -51,6 +51,17 @@ class ProjectIn(BaseModel):
     base_branch: str | None = None
     verify_command: str | None = None
     installation_id: int | None = Field(default=None, description="GitHub App installation granting access to repo")
+
+
+class ProjectPatch(BaseModel):
+    """Editable project settings; fields left out stay as they are, null clears them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Passed to git as a ref, so it must not start with "-" (would be read as an option).
+    base_branch: str | None = Field(default=None, max_length=200, pattern=r"^[\w.][\w./-]*$")
+    # Blank is rejected rather than stored: send null to clear.
+    verify_command: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
 
 
 class ProjectOut(Orm):
@@ -242,6 +253,23 @@ async def installation_repositories(installation_id: int) -> list[dict]:
 async def list_projects(db: Db) -> list[ProjectOut]:
     async with db.session() as s:
         return [ProjectOut.model_validate(p) for p in await s.scalars(select(Project).order_by(Project.slug))]
+
+
+@router.patch("/projects/{slug}")
+async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
+    """Change base_branch / verify_command. slug, repo and installation_id are immutable.
+
+    verify_command applies from the next agent step of every story, running ones included.
+    base_branch only affects stories that have no workspace yet: started ones keep their base.
+    """
+    async with db.session() as s:
+        project = await s.scalar(select(Project).where(Project.slug == slug))
+        if project is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(project, field, value)
+        await s.commit()
+        return ProjectOut.model_validate(project)
 
 
 @router.post("/projects/{slug}/items", status_code=status.HTTP_201_CREATED)
