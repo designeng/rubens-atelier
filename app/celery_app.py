@@ -2,7 +2,7 @@
 
 Run:
   celery -A app.celery_app worker -l info --concurrency 2
-  celery -A app.celery_app beat -l info        # orphan reaper + issue poller
+  celery -A app.celery_app beat -l info        # orphan reaper, check and issue pollers
 """
 
 import asyncio
@@ -38,7 +38,11 @@ celery_app.conf.update(
         "reconcile-steps": {"task": "harness.reconcile", "schedule": 60},
         # Picks up slots freed by crashed steps and windows that reset since the last dispatch.
         "dispatch": {"task": "harness.dispatch", "schedule": 15},
-        "poll-checks": {"task": "harness.poll_checks", "schedule": settings.checks_poll_seconds},
+        # With webhooks on, GitHub events trigger the checks and polling is only a fallback.
+        "poll-checks": {
+            "task": "harness.poll_checks",
+            "schedule": settings.checks_fallback_poll_seconds if settings.github_webhook_secret else settings.checks_poll_seconds,
+        },
     },
 )
 if settings.issue_repos:
@@ -127,10 +131,11 @@ def dispatch() -> list[str]:
 
 
 @celery_app.task(name="harness.poll_checks")
-def poll_checks() -> list:
+def poll_checks(item_ids: list[str] | None = None) -> list:
+    """All items in check states (beat), or just `item_ids` (a GitHub webhook)."""
     from .checks import poll_checks as poll
 
-    return asyncio.run(_with_engine(lambda engine, _store: poll(engine)))
+    return asyncio.run(_with_engine(lambda engine, _store: poll(engine, item_ids=item_ids)))
 
 
 @celery_app.task(name="harness.reap_orphans")

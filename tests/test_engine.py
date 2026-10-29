@@ -497,3 +497,24 @@ async def test_pr_closed_without_merge_abandons_the_story(make_factory):
     f.gh.pr_state = {"state": "closed", "merged_at": None}
     await f.drain()
     assert (await f.item(item_id)).state == "cancelled"
+
+
+async def test_poll_checks_can_be_limited_to_some_items(make_factory):
+    f = make_factory(ScriptedRunner())
+    f.gh.checks[0].update(status="in_progress", conclusion=None)
+    a = await f.new_item()
+    async with f.db.session() as s:
+        b = WorkItem(project_id=(await s.get(WorkItem, a)).project_id, kind="story", title="Other",
+                     body="Create hello.txt saying hi.", workflow="story")
+        s.add(b)
+        await s.commit()
+        b = b.id
+    for item_id in (a, b):
+        await f.engine.start(item_id)
+    await f.drain()
+    assert [(await f.item(i)).state for i in (a, b)] == ["ci", "ci"]
+
+    f.gh.checks[0].update(status="completed", conclusion="success")
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh, item_ids=[a]) == [(a, "passed")]
+    assert [(await f.item(i)).state for i in (a, b)] == ["awaiting_merge", "ci"]
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh, item_ids=[]) == []

@@ -71,7 +71,7 @@ Workflow — это детерминированный конечный авто
 |---|---|
 | `agent` | роль из [prompts/](../prompts/)`<role>.md` работает в workspace item'а; есть опции `verify`, `resume` (продолжить свою прошлую сессию), `verdicts`, `disallowed_tools` |
 | `action` | встроенный шаг harness'а, например `open_pr` |
-| `check` | внешнее условие, которое опрашивает beat, не занимая воркер; сейчас это `ci` |
+| `check` | внешнее условие, которое проверяется по webhook'ам GitHub и beat'ом, не занимая воркер; сейчас это `ci` |
 | `human` | запрос во inbox с вариантами ответа; ответ продвигает item дальше |
 | `terminal` | `succeeded`, `failed` или `cancelled` |
 
@@ -83,7 +83,7 @@ Workflow — это детерминированный конечный авто
 
 Планировщик пишет артефакт `planner`: подход, файлы, тест-план, риски. Implementer следует этому плану, а ревьюер сверяет с ним результат. Если нужны решения человека (`needs_clarification`), item идёт в `clarify`. Ответ человека возвращает его в `plan`, и планировщик продолжает свою сессию уже с ответом. Если story не помещается в один PR (`too_big`), она уходит в `needs_human` с предложением, как её разбить; оттуда её можно отправить в `replan` с комментарием. План утверждается без человека, а если он нужен, можно сделать отдельный вариант workflow с состоянием `approve_plan`.
 
-**CI-gate.** `check: ci` раз в `HARNESS_CHECKS_POLL_SECONDS` смотрит GitHub check runs и commit statuses на запушенном head-коммите PR. Если что-то упало, item возвращается в `implement`. Артефакт `ci` содержит имена упавших проверок, ссылки и хвост лога GitHub Actions. После фикса PR обновляется тем же push'ем. Если за `grace_seconds` не появилось ни одной проверки, это `no_checks`: в story такой item сразу идёт на merge. Если за `timeout_seconds` нет результата, item уходит к человеку.
+**CI-gate.** `check: ci` смотрит GitHub check runs и commit statuses на запушенном head-коммите PR, когда webhook сообщает о завершённой проверке (см. [GitHub webhook](#github-webhook)), и в любом случае раз в `HARNESS_CHECKS_POLL_SECONDS` (`HARNESS_CHECKS_FALLBACK_POLL_SECONDS`, если webhook'и включены). Если что-то упало, item возвращается в `implement`. Артефакт `ci` содержит имена упавших проверок, ссылки и хвост лога GitHub Actions. После фикса PR обновляется тем же push'ем. Если за `grace_seconds` не появилось ни одной проверки, это `no_checks`: в story такой item сразу идёт на merge. Если за `timeout_seconds` нет результата, item уходит к человеку.
 
 Шаги передают друг другу **артефакты**: итог implementer'а, ревью, комментарии человека, ошибки. Каждый следующий промпт получает последнюю версию каждого артефакта. Workspace (clone и ветка `agent/<kind>-<id>`) общий для всех шагов item'а.
 
@@ -101,6 +101,7 @@ Workflow — это детерминированный конечный авто
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; комментарий становится артефактом для следующего агента |
 | `GET` | `/scheduler` | Занятые слоты, очередь, ёмкость и её причина, состояние окон подписки |
 | `POST` | `/scheduler/pause`, `/scheduler/resume` | Остановить или возобновить выдачу новых agent-шагов; уже работающие доработают |
+| `POST` | `/github/webhook` | события GitHub (подписаны `HARNESS_GITHUB_WEBHOOK_SECRET`, а не bearer-токеном): перепроверить item'ы, ждущие этот коммит или PR, см. [GitHub webhook](#github-webhook) |
 
 Настройки проекта можно менять и на доске (**Settings**). Новая `verify_command` действует со следующего agent-шага каждой story, в том числе уже запущенной. Новая `base_branch` действует только на story, у которых ещё нет workspace; уже начатые сохраняют свою базу.
 
@@ -141,6 +142,18 @@ Push идёт в ветку с PR, а не в `main`: production-готовно�
 3. На доске нажмите «+ project», затем «Install the app / change repositories». После установки нажмите «refresh», выберите установку и репозиторий.
 
 Токен выпускается на один репозиторий проекта и перевыпускается за 5 минут до истечения. Срок жизни (1 час) задаёт GitHub, изменить его нельзя. Проекты без установки используют `HARNESS_GITHUB_TOKEN`. Поллер issues (`HARNESS_ISSUE_REPOS`) и `/issues/run` пока работают только с ним.
+
+## GitHub webhook
+
+Без webhook'а beat раз в `HARNESS_CHECKS_POLL_SECONDS` (30 с) спрашивает GitHub о каждом item'е в `ci` и `awaiting_merge`: 120–240 запросов в час на item, и при многих story это упирается в rate limit. С ним GitHub сам сообщает о событиях, и перепроверяются только те item'ы, которых они касаются:
+
+1. Придумайте случайный секрет (`openssl rand -hex 32`) и задайте `HARNESS_GITHUB_WEBHOOK_SECRET`.
+2. Payload URL `<host>/github/webhook`, content type `application/json`, тот же секрет. События: Check runs, Check suites, Statuses, Pull requests.
+   - GitHub App: настройки App → Webhook (Active). Для Statuses нужно дополнительное право «Commit statuses: read».
+   - PAT: Settings → Webhooks репозитория.
+3. Перезапустите beat: опрос становится запасным, раз в `HARNESS_CHECKS_FALLBACK_POLL_SECONDS` (по умолчанию 300 с), — на случай потерянных доставок и для `no_checks`/`timeout`, которые поэтому срабатывают с опозданием до этого интервала.
+
+Доставки проверяются по HMAC в `X-Hub-Signature-256`, а не по API-токену; событие лишь запускает перепроверку через GitHub и само ничего не решает. Без секрета endpoint отвечает 404.
 
 ## Безопасность
 

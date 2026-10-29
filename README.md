@@ -73,7 +73,7 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 |---|---|
 | `agent` | a role from [prompts/](prompts/)`<role>.md` works in the item's workspace; options `verify`, `resume` (continue its previous session), `verdicts`, `disallowed_tools` |
 | `action` | a built-in harness step, e.g. `open_pr` |
-| `check` | an external condition polled by beat without holding a worker; currently `ci` |
+| `check` | an external condition evaluated without holding a worker, on GitHub webhooks and by beat; currently `ci` |
 | `human` | a request to the inbox with answer options; the answer moves the item on |
 | `terminal` | `succeeded`, `failed` or `cancelled` |
 
@@ -85,7 +85,7 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 The planner writes a `planner` artifact: approach, files, test plan, risks. The implementer follows the plan, and the reviewer checks the result against it. If human decisions are needed (`needs_clarification`), the item goes to `clarify`. The human's answer sends it back to `plan`, and the planner continues its session with the answer. If a story does not fit in one PR (`too_big`), it goes to `needs_human` with a proposed split; from there it can be sent to `replan` with a comment. The plan is approved without a human; if you want one, make a workflow variant with an `approve_plan` state.
 
-**CI gate.** `check: ci` looks at GitHub check runs and commit statuses on the PR's pushed head commit every `HARNESS_CHECKS_POLL_SECONDS`. If something fails, the item goes back to `implement`. The `ci` artifact contains the names of the failed checks, links and the tail of the GitHub Actions log. After the fix, the same push updates the PR. If no checks appear within `grace_seconds`, the result is `no_checks`: in a story, such an item goes straight to merge. If there is no result within `timeout_seconds`, the item goes to a human.
+**CI gate.** `check: ci` looks at GitHub check runs and commit statuses on the PR's pushed head commit when a webhook reports a finished check (see [GitHub webhook](#github-webhook)), and in any case every `HARNESS_CHECKS_POLL_SECONDS` (`HARNESS_CHECKS_FALLBACK_POLL_SECONDS` with webhooks on). If something fails, the item goes back to `implement`. The `ci` artifact contains the names of the failed checks, links and the tail of the GitHub Actions log. After the fix, the same push updates the PR. If no checks appear within `grace_seconds`, the result is `no_checks`: in a story, such an item goes straight to merge. If there is no result within `timeout_seconds`, the item goes to a human.
 
 Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps.
 
@@ -103,6 +103,7 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; the comment becomes an artifact for the next agent |
 | `GET` | `/scheduler` | Busy slots, queue, capacity and its reason, subscription window state |
 | `POST` | `/scheduler/pause`, `/scheduler/resume` | Stop or resume handing out new agent steps; running ones finish |
+| `POST` | `/github/webhook` | GitHub events (signed with `HARNESS_GITHUB_WEBHOOK_SECRET`, not the bearer token): re-check the items waiting on that commit or PR, see [GitHub webhook](#github-webhook) |
 
 Project settings can also be edited on the board (**Settings**). A changed `verify_command` applies from the next agent step of every story, including running ones. A changed `base_branch` applies only to stories that have not created their workspace yet; started ones keep their base.
 
@@ -143,6 +144,18 @@ Instead of a single PAT, the project can work through a GitHub App: access only 
 3. On the board, click "+ project", then "Install the app / change repositories". After installing, click "refresh", pick the installation and the repository.
 
 A token is issued for one project repository and reissued 5 minutes before it expires. The lifetime (1 hour) is set by GitHub and cannot be changed. Projects without an installation use `HARNESS_GITHUB_TOKEN`. The issue poller (`HARNESS_ISSUE_REPOS`) and `/issues/run` work only with it for now.
+
+## GitHub webhook
+
+Without a webhook, beat asks GitHub about every item in `ci` and `awaiting_merge` every `HARNESS_CHECKS_POLL_SECONDS` (30s), 120–240 requests per hour per item, which runs into the rate limit with many stories. With one, GitHub reports events and only the items they concern are re-checked:
+
+1. Pick a random secret (`openssl rand -hex 32`) and set `HARNESS_GITHUB_WEBHOOK_SECRET`.
+2. Payload URL `<host>/github/webhook`, content type `application/json`, the same secret. Events: Check runs, Check suites, Statuses, Pull requests.
+   - GitHub App: the App's settings → Webhook (Active). Statuses need the extra permission "Commit statuses: read".
+   - PAT: the repository's Settings → Webhooks.
+3. Restart beat: polling becomes a fallback every `HARNESS_CHECKS_FALLBACK_POLL_SECONDS` (300s by default) for lost deliveries and for `no_checks`/`timeout`, which therefore land up to that much late.
+
+Deliveries are verified by their `X-Hub-Signature-256` HMAC rather than the API token; an event only triggers a re-check against GitHub, never a verdict by itself. Without a secret the endpoint answers 404.
 
 ## Security
 

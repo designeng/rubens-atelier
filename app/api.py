@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
 
-from . import board_api, terminal
+from . import board_api, checks, terminal, webhooks
 from .config import settings
 from .db import Database
 from .engine import Engine, celery_enqueue
@@ -31,6 +31,7 @@ async def lifespan(app: FastAPI):
     await app.state.db.create_all()
     app.state.scheduler = Scheduler(app.state.redis, celery_enqueue)
     app.state.exec_enqueue = terminal.celery_enqueue
+    app.state.checks_enqueue = checks.celery_enqueue
     app.state.engine = Engine(
         app.state.db, load_workflows(settings.workflows_dir), app.state.store, celery_enqueue, app.state.scheduler
     )
@@ -58,6 +59,8 @@ Store = Annotated[TaskStore, Depends(get_store)]
 app = FastAPI(title="Claude Code agent harness", lifespan=lifespan)
 app.include_router(board_api.router, dependencies=[Depends(require_token)])
 app.include_router(board_api.page)
+# Signed by GitHub with the webhook secret instead of the bearer token.
+app.include_router(webhooks.router)
 
 
 async def _get_or_404(store: TaskStore, task_id: str) -> TaskInfo:
