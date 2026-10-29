@@ -65,12 +65,25 @@ async def prepare_workspace(
     return Workspace(cwd, spec.prompt)
 
 
+async def run_agent(
+    spec: TaskCreate, prompt: str, cwd: Path, resume: str | None, runner: AgentRunner, emit: Emit, store: TaskStore
+) -> AgentOutcome:
+    """One agent call, priced on its own: for a resumed session the SDK reports the cost of
+    the whole session so far, so subtract the total its previous call reported."""
+    before = await store.session_cost(resume) if resume else 0.0
+    outcome = await runner(spec.model_copy(update={"prompt": prompt}), cwd=cwd, resume=resume, emit=emit)
+    if outcome.session_id and outcome.cost_usd is not None:
+        await store.set_session_cost(outcome.session_id, outcome.cost_usd)
+        outcome.cost_usd = max(outcome.cost_usd - before, 0.0)
+    return outcome
+
+
 async def run_with_verify(
-    spec: TaskCreate, ws: Workspace, runner: AgentRunner, emit: Emit
+    spec: TaskCreate, ws: Workspace, runner: AgentRunner, emit: Emit, store: TaskStore
 ) -> AgentOutcome:
     """Run the agent, then the verify command; on failure resume the same session
     with the output until it passes or attempts run out."""
-    outcome = await runner(spec.model_copy(update={"prompt": ws.prompt}), cwd=ws.cwd, resume=ws.resume, emit=emit)
+    outcome = await run_agent(spec, ws.prompt, ws.cwd, ws.resume, runner, emit, store)
     cost, turns = outcome.cost_usd or 0.0, outcome.num_turns or 0
 
     command = spec.verify_command or (settings.issue_verify_command if spec.issue else None)
@@ -91,9 +104,7 @@ async def run_with_verify(
             "Find the root cause, fix it, re-run the checks and commit.\n\n"
             f"Output (tail):\n```\n{tail}\n```"
         )
-        outcome = await runner(
-            spec.model_copy(update={"prompt": fix_prompt}), cwd=ws.cwd, resume=outcome.session_id, emit=emit
-        )
+        outcome = await run_agent(spec, fix_prompt, ws.cwd, outcome.session_id, runner, emit, store)
         cost, turns = cost + (outcome.cost_usd or 0.0), turns + (outcome.num_turns or 0)
 
     outcome.cost_usd, outcome.num_turns = cost, turns
@@ -162,7 +173,7 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
         await store.append_event(task_id, type_, data)
 
     async def job() -> tuple[AgentOutcome, str | None]:
-        outcome = await run_with_verify(spec, ws, runner, emit)
+        outcome = await run_with_verify(spec, ws, runner, emit, store)
         pr_url = None
         if spec.issue and not outcome.is_error:
             await emit("publish", {"branch": issue_flow.branch_name(spec.issue)})
