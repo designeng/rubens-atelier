@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Optional bearer token for the HTTP API. Empty = auth disabled (local dev only).
     api_token: str = ""
 
+    # Board terminal: run shell commands in a story's workspace. Remote code execution, so it
+    # is off by default and refused unless `api_token` is set.
+    terminal_enabled: bool = False
+    terminal_timeout_seconds: int = 120
+
     workspaces_root: Path = Path("./workspaces")
     worker_concurrency: int = 2
     # Worker refreshes the lease every lease_ttl/3 seconds; a task whose lease

@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from . import github_app, gitops
+from . import github_app, gitops, terminal
+from .config import settings
 from .execution import item_workspace
 from .db import Artifact, Database, HumanRequest, ItemEvent, Project, Run, WorkItem
 from .engine import Engine, EngineError
@@ -438,6 +439,43 @@ async def item_git(item_id: str, db: Db, diff: bool = False) -> dict:
     if not item.branch or not (cwd / ".git").exists():
         raise HTTPException(status.HTTP_409_CONFLICT, "no workspace for this story (yet, or it is on another host)")
     return await gitops.snapshot(cwd, item.base_branch, diff)
+
+
+class ExecIn(BaseModel):
+    command: str = Field(min_length=1, max_length=terminal.COMMAND_LIMIT)
+
+
+@router.post("/items/{item_id}/exec", status_code=status.HTTP_202_ACCEPTED)
+async def exec_in_workspace(item_id: str, body: ExecIn, request: Request, db: Db, engine: Eng) -> dict:
+    """Run a shell command in the story's workspace (on the worker); poll GET .../exec/{id}.
+    Refused while an agent is working there, and unless the terminal is enabled and the API
+    is token-protected."""
+    if not settings.terminal_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "the terminal is disabled (HARNESS_TERMINAL_ENABLED)")
+    if not settings.api_token:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "the terminal needs HARNESS_API_TOKEN to be set")
+    async with db.session() as s:
+        item = await s.get(WorkItem, item_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
+    if not item.branch:
+        raise HTTPException(status.HTTP_409_CONFLICT, "the story has no workspace yet")
+    if _column(engine, item) == "working" and (st := engine.workflows[item.workflow].states[item.state]).agent:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"the {st.agent} agent is working in this workspace")
+    redis = engine.store.r
+    exec_id = await terminal.create(redis, item_id, body.command)
+    if exec_id is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "another command is still running in this workspace")
+    await request.app.state.exec_enqueue(exec_id)
+    return {"id": exec_id}
+
+
+@router.get("/items/{item_id}/exec/{exec_id}")
+async def exec_result(item_id: str, exec_id: str, engine: Eng) -> dict:
+    row = await terminal.get(engine.store.r, exec_id)
+    if row is None or row["item_id"] != item_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "command not found (results are kept for an hour)")
+    return {"id": exec_id, **{k: row.get(k) for k in ("command", "status", "exit_code", "output")}}
 
 
 @router.post("/items/{item_id}/start", status_code=status.HTTP_202_ACCEPTED)

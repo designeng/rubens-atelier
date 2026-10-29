@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
 
-from . import board_api
+from . import board_api, terminal
 from .config import settings
 from .db import Database
 from .engine import Engine, celery_enqueue
@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
     app.state.db = Database(settings.database_url)
     await app.state.db.create_all()
     app.state.scheduler = Scheduler(app.state.redis, celery_enqueue)
+    app.state.exec_enqueue = terminal.celery_enqueue
     app.state.engine = Engine(
         app.state.db, load_workflows(settings.workflows_dir), app.state.store, celery_enqueue, app.state.scheduler
     )

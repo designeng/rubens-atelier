@@ -105,6 +105,14 @@ def step(item_id: str, version: int) -> None:
     asyncio.run(_with_engine(lambda engine, store: run_step(item_id, version, engine=engine, store=store, worker_id=worker_id)))
 
 
+@celery_app.task(name="harness.exec", time_limit=settings.terminal_timeout_seconds + 60)
+def exec_command(exec_id: str) -> None:
+    """A shell command started from the board's terminal (see app.terminal)."""
+    from . import terminal
+
+    asyncio.run(_with_store(lambda store: terminal.run(store.r, exec_id)))
+
+
 @celery_app.task(name="harness.reconcile")
 def reconcile() -> list[str]:
     requeued = asyncio.run(_with_engine(lambda engine, _store: engine.reconcile()))

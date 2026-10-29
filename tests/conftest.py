@@ -54,4 +54,10 @@ def client(redis):
         app.state.scheduler = Scheduler(redis, enqueue)
         app.state.engine = Engine(app.state.db, load_workflows(settings.workflows_dir), app.state.store, enqueue)
         c.enqueued = enqueued
+        c.execs = []
+
+        async def exec_enqueue(exec_id):
+            c.execs.append(exec_id)
+
+        app.state.exec_enqueue = exec_enqueue
         yield c

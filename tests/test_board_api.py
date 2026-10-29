@@ -214,3 +214,54 @@ def test_item_git_view(client):
     assert g["branch"] == "agent/story-x" and "change" in g["commits"] and "a.txt" in g["stat"]
     assert "?? b.txt" in g["status"] and "diff" not in g
     assert "+two" in client.get(f"/items/{iid}/git?diff=true").json()["diff"]
+
+
+def test_terminal(client, monkeypatch):
+    import subprocess
+
+    from app import terminal
+    from app.execution import item_workspace
+
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    iid = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()["id"]
+    body = {"command": "echo hi; echo err >&2; echo $HARNESS_API_TOKEN; exit 3"}
+    assert client.post(f"/items/{iid}/exec", json=body).status_code == 403  # disabled
+    monkeypatch.setattr(settings, "terminal_enabled", True)
+    assert client.post(f"/items/{iid}/exec", json=body).status_code == 403  # no API token
+    monkeypatch.setattr(settings, "api_token", "secret")
+    auth = {"authorization": "Bearer secret"}
+    assert client.post(f"/items/{iid}/exec", json=body, headers=auth).status_code == 409  # no workspace
+
+    cwd = item_workspace(iid)
+    cwd.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=cwd, check=True)
+
+    async def seed():
+        from app.db import WorkItem
+
+        async with app.state.db.session() as s:
+            (await s.get(WorkItem, iid)).branch = "agent/story-x"
+            await s.commit()
+
+    client.portal.call(seed)
+    assert client.post(f"/items/{iid}/exec", json=body, headers=auth).status_code == 409  # plan agent is working
+    client.portal.call(app.state.engine.advance, iid, client.get(f"/items/{iid}", headers=auth).json()["version"], "error")
+
+    monkeypatch.setenv("HARNESS_API_TOKEN", "secret")
+    r = client.post(f"/items/{iid}/exec", json=body, headers=auth)
+    assert r.status_code == 202 and client.execs == [r.json()["id"]]
+    exec_id = r.json()["id"]
+    assert client.post(f"/items/{iid}/exec", json=body, headers=auth).status_code == 409  # still running
+    assert client.get(f"/items/{iid}/exec/{exec_id}", headers=auth).json()["status"] == "running"
+
+    client.portal.call(terminal.run, app.state.redis, exec_id)
+    res = client.get(f"/items/{iid}/exec/{exec_id}", headers=auth).json()
+    assert res["status"] == "done" and res["exit_code"] == 3
+    assert "hi" in res["output"] and "err" in res["output"] and "secret" not in res["output"]
+    assert client.get(f"/items/other/exec/{exec_id}", headers=auth).status_code == 404
+
+    monkeypatch.setattr(settings, "terminal_timeout_seconds", 1)
+    exec_id = client.post(f"/items/{iid}/exec", json={"command": "sleep 30"}, headers=auth).json()["id"]
+    client.portal.call(terminal.run, app.state.redis, exec_id)
+    res = client.get(f"/items/{iid}/exec/{exec_id}", headers=auth).json()
+    assert res["status"] == "timeout" and "timed out" in res["output"]
