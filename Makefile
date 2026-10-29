@@ -3,7 +3,7 @@
 RUN = uv run --env-file .env
 PORT ?= 8000
 
-.PHONY: help infra api worker beat dev stop test
+.PHONY: help infra api worker beat dev stop test web-build web-dev web-test
 
 help:
 	@echo "make dev     redis + postgres, then api, worker and beat together (Ctrl-C stops them)"
@@ -13,6 +13,9 @@ help:
 	@echo "make beat    celery beat (orphan reaper, CI poller, issue poller)"
 	@echo "make stop    stop redis and postgres"
 	@echo "make test    run the test suite"
+	@echo "make web-build  build the board (web/, Vue + Vite) into app/static/dist (needs Node 22 and pnpm)"
+	@echo "make web-dev    Vite dev server for the board on :5173/board/, API proxied to :$(PORT) (run make api too)"
+	@echo "make web-test   type check and unit tests of the board"
 
 infra:
 	docker compose up -d --wait redis postgres
@@ -28,11 +31,24 @@ worker:
 beat:
 	$(RUN) celery -A app.celery_app beat -l info -s /tmp/celerybeat-schedule
 
-dev: infra
+# The board is built only when missing; after changing web/ run make web-build (or use make web-dev).
+dev: infra app/static/dist/index.html
 	$(MAKE) -j3 api worker beat
+
+app/static/dist/index.html:
+	$(MAKE) web-build
 
 stop:
 	docker compose stop redis postgres
 
 test:
 	uv run pytest
+
+web-build:
+	cd web && pnpm install --frozen-lockfile && pnpm build
+
+web-dev:
+	cd web && pnpm install --frozen-lockfile && pnpm dev
+
+web-test:
+	cd web && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test

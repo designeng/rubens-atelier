@@ -31,6 +31,16 @@ uv run celery -A app.celery_app beat -l info
 uv run pytest
 ```
 
+### Доска (web/)
+
+Доска: приложение на Vue 3 + Vite + TypeScript в `web/`. Нужны Node 22 и pnpm (`corepack enable` подставит версию из `web/package.json`). `vite build` пишет сборку в `app/static/dist/` (в git её нет), `GET /board` отдаёт её оттуда. Без сборки `/board` показывает страницу с просьбой выполнить `make web-build`; API и Python-тестам Node не нужен.
+
+- `make web-build`: установить зависимости и собрать доску. `make dev` делает это сам, если `app/static/dist/` нет; после изменений в `web/` пересоберите или используйте dev-сервер.
+- `make web-dev`: dev-сервер Vite с hot reload на http://localhost:5173/board/. Запросы к API идут на http://localhost:8000, поэтому рядом запустите `make api` (или `make dev`).
+- `make web-test`: проверка типов (`vue-tsc --noEmit`) и юнит-тесты (Vitest). Внутри `web/`: `pnpm typecheck`, `pnpm test`.
+
+Docker-образ собирает доску сам, в отдельной Node-стадии.
+
 ## API
 
 | Метод | Путь | |

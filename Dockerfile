@@ -1,3 +1,12 @@
+# The board (web/) is built in a Node stage; only its dist/ goes into the image.
+FROM node:22-slim AS web
+RUN corepack enable
+WORKDIR /src/web
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web ./
+RUN pnpm build
+
 FROM python:3.13-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
@@ -10,6 +19,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
+COPY --from=web /src/app/static/dist ./app/static/dist
 COPY workflows ./workflows
 COPY prompts ./prompts
 RUN mkdir -p /workspaces && chown agent /workspaces

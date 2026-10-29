@@ -4,5 +4,7 @@ __pycache__/
 .env
 workspaces/
 celerybeat-schedule*
+app/static/dist/
+web/node_modules/
 
 .playwright-mcp/

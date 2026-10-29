@@ -1,3 +1,4 @@
+from app import board_api
 from app.api import app
 from app.config import settings
 
@@ -51,7 +52,27 @@ def test_validation_and_scoping(client):
     assert client.post("/projects/a/items", json={"title": "z", "workflow": "nope"}).status_code == 422
     assert client.get("/projects/b/board").json()["backlog"] == []
     assert client.get("/items/nope").status_code == 404
-    assert client.get("/board").status_code == 200
+
+
+def test_board_page_without_build(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(board_api, "DIST", tmp_path)
+    r = client.get("/board")
+    assert r.status_code == 200 and "make web-build" in r.text
+    assert client.get("/board/assets/app.js").status_code == 404
+
+
+def test_board_page_serves_build(client, tmp_path, monkeypatch):
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<div id=app></div>")
+    (tmp_path / "assets" / "app.js").write_text("console.log(1)")
+    monkeypatch.setattr(board_api, "DIST", tmp_path)
+    r = client.get("/board", params={"installation_id": 1, "setup_action": "install"})
+    assert r.status_code == 200 and r.text == "<div id=app></div>"
+    js = client.get("/board/assets/app.js")
+    assert js.status_code == 200 and "javascript" in js.headers["content-type"]
+    assert client.get("/board/assets/missing.js").status_code == 404
+    assert client.get("/board/assets/..%2Findex.html").status_code == 404
+    assert client.get("/board/assets/%2E%2E/index.html").status_code == 404
 
 
 def test_scheduler_pause_and_resume(client):
