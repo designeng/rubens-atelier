@@ -40,11 +40,11 @@ describe("createClient", () => {
   it("patches an item", async () => {
     const f = fakeFetch(() => json({}));
     const api = createClient(() => "t", f.impl);
-    await api.updateItem("a/b", { priority: 3, model: null });
+    await api.updateItem("a/b", { priority: 3, model: null, blocked_by: ["x"] });
     expect([f.calls[0].url, f.calls[0].init.method, JSON.parse(f.calls[0].init.body as string)]).toEqual([
       "/items/a%2Fb",
       "PATCH",
-      { priority: 3, model: null },
+      { priority: 3, model: null, blocked_by: ["x"] },
     ]);
   });
 

@@ -96,9 +96,11 @@ class Factory:
 
     async def new_item(self, auto_merge=False, **kw) -> str:
         async with self.db.session() as s:
-            project = Project(slug="app", repo="acme/app", verify_command="test -f hello.txt", auto_merge=auto_merge)
-            s.add(project)
-            await s.flush()
+            project = await s.scalar(select(Project).where(Project.slug == "app"))
+            if project is None:
+                project = Project(slug="app", repo="acme/app", verify_command="test -f hello.txt", auto_merge=auto_merge)
+                s.add(project)
+                await s.flush()
             item = WorkItem(project_id=project.id, kind="story", title="Add greeting",
                             body="Create hello.txt saying hi.", workflow="story", **kw)
             s.add(item)
@@ -578,6 +580,33 @@ async def test_pr_closed_without_merge_abandons_the_story(make_factory):
     f.gh.pr_state = {"state": "closed", "merged_at": None}
     await f.drain()
     assert (await f.item(item_id)).state == "cancelled"
+
+
+async def test_start_waits_for_blockers_to_succeed(make_factory):
+    f = make_factory(ScriptedRunner())
+    blocker_id = await f.new_item()
+    async with f.db.session() as s:
+        project_id = (await s.get(WorkItem, blocker_id)).project_id
+        dependent = WorkItem(project_id=project_id, kind="story", title="Next", workflow="story",
+                             blocked_by=[blocker_id, "gone"])
+        s.add(dependent)
+        await s.commit()
+        dependent_id = dependent.id
+
+    with pytest.raises(EngineError, match=rf"blocked by: Add greeting \({blocker_id}\), gone"):
+        await f.engine.start(dependent_id)
+    assert (await f.item(dependent_id)).state is None
+
+    await f.engine.start(blocker_id)
+    await f.engine.cancel(blocker_id)  # a failed or cancelled blocker still blocks
+    with pytest.raises(EngineError, match="blocked by"):
+        await f.engine.start(dependent_id)
+
+    async with f.db.session() as s:
+        await s.execute(update(WorkItem).where(WorkItem.id == blocker_id).values(state="done"))
+        (await s.get(WorkItem, dependent_id)).blocked_by = [blocker_id]
+        await s.commit()
+    assert await f.engine.start(dependent_id)
 
 
 async def test_automerge_merges_the_reviewed_green_pr(make_factory, origin):  # noqa: F811

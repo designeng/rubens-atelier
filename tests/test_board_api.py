@@ -392,3 +392,73 @@ def test_terminal(client, monkeypatch):
     client.portal.call(terminal.run, app.state.redis, exec_id)
     res = client.get(f"/items/{iid}/exec/{exec_id}", headers=auth).json()
     assert res["status"] == "timeout" and "timed out" in res["output"]
+
+
+def _finish(client, item_id):
+    """Drive a started story through the workflow to the merge gate, then merge it."""
+    for verdict in ("ready", "done", "done", "approved", "done", "passed", "manual"):
+        item = client.get(f"/items/{item_id}").json()
+        client.portal.call(app.state.engine.advance, item_id, item["version"], verdict)
+    req = client.get(f"/items/{item_id}").json()["open_request"]
+    client.post(f"/requests/{req['id']}/answer", json={"option": "merged"})
+
+
+def test_blocked_item_cannot_start_until_blocker_succeeds(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    first = client.post("/projects/app/items", json={"title": "First"}).json()
+    second = client.post("/projects/app/items", json={"title": "Second", "blocked_by": [first["id"]]}).json()
+    assert second["blocked_by"] == [first["id"]]
+
+    board = {i["title"]: i for i in client.get("/projects/app/board").json()["backlog"]}
+    assert board["Second"]["blocked"] == [f"First ({first['id']})"]
+    assert board["First"]["blocking"] == [second["id"]] and board["First"]["blocked"] == []
+    assert client.get(f"/items/{second['id']}").json()["blocked"] == board["Second"]["blocked"]
+
+    r = client.post(f"/items/{second['id']}/start")
+    assert r.status_code == 409 and first["id"] in r.json()["detail"]
+    assert client.enqueued == []
+
+    # A cancelled blocker still blocks; only a succeeded one lets the item go.
+    client.post(f"/items/{first['id']}/cancel")
+    assert client.post(f"/items/{second['id']}/start").status_code == 409
+
+    client.post(f"/items/{first['id']}/reopen")
+    client.post(f"/items/{first['id']}/start")
+    _finish(client, first["id"])
+    assert client.get(f"/items/{first['id']}").json()["column"] == "done"
+    assert client.post(f"/items/{second['id']}/start").status_code == 202
+
+
+def test_create_with_start_and_unfinished_blocker_is_refused_and_stores_nothing(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    first = client.post("/projects/app/items", json={"title": "First"}).json()
+    r = client.post("/projects/app/items", json={"title": "Second", "blocked_by": [first["id"]], "start": True})
+    assert r.status_code == 409 and first["id"] in r.json()["detail"]
+    assert [i["title"] for i in client.get("/projects/app/board").json()["backlog"]] == ["First"]
+    assert client.enqueued == []
+
+
+def test_blocked_by_validation_and_patch(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    client.post("/projects", json={"slug": "other", "repo": "acme/other"})
+    a = client.post("/projects/app/items", json={"title": "A"}).json()
+    b = client.post("/projects/app/items", json={"title": "B"}).json()
+    foreign = client.post("/projects/other/items", json={"title": "Foreign"}).json()
+
+    def patch(item, blocked_by):
+        return client.patch(f"/items/{item['id']}", json={"blocked_by": blocked_by})
+
+    assert patch(a, [a["id"]]).status_code == 422  # itself
+    assert patch(a, [foreign["id"]]).status_code == 422  # another project
+    assert patch(a, ["nope"]).status_code == 422  # unknown
+    assert patch(a, [str(n) for n in range(21)]).status_code == 422  # too many
+    assert client.patch(f"/items/{a['id']}", json={"blocked_by": None}).status_code == 422
+    r = client.post("/projects/app/items", json={"title": "C", "blocked_by": ["nope"]})
+    assert r.status_code == 422
+
+    assert patch(a, [b["id"], b["id"]]).json()["blocked_by"] == [b["id"]]
+    assert patch(b, [a["id"]]).status_code == 422  # direct cycle
+    c = client.post("/projects/app/items", json={"title": "C", "blocked_by": [a["id"]]}).json()
+    assert patch(b, [c["id"]]).status_code == 422  # b -> c -> a -> b
+    assert patch(a, []).json()["blocked_by"] == []
+    assert client.post(f"/items/{a['id']}/start").status_code == 202

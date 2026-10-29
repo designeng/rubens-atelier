@@ -93,12 +93,12 @@ Workflow — это детерминированный конечный авто
 |---|---|---|
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?, auto_merge?}` |
 | `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?, auto_merge?}`; `null` очищает значение; `slug`, `repo` и `installation_id` менять нельзя |
-| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
+| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, blocked_by?, start?}`. `blocked_by` — до 20 элементов того же проекта, которые должны успешно завершиться до старта этого (иначе `start` отвечает 409 с их именами; упавший или отменённый блокер продолжает блокировать, пока его не переоткроют и он не завершится успешно, или пока его не уберут из списка; цикл — 422). Зависимые элементы сами не стартуют |
 | `POST` | `/projects/{slug}/import-issues` | Кладёт открытые GitHub issues репозитория (без PR, до 1000) в backlog историями, привязанными к своему issue, так что PR его закроет; ничего не запускается. Issue, у которого уже есть элемент в любом состоянии, пропускается. Возвращает `{imported, skipped}`; его вызывает кнопка «Import issues» на доске |
 | `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
 | `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |
-| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?}`, также в борде (**Edit**; модель — через выбор **Model**, он сохраняет сразу). Шаг, ждущий слот, стартует уже с изменениями, работающий подхватит их со следующего agent-шага; новый priority сразу переставляет его в очереди |
+| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?, blocked_by?}`, также в борде (**Edit**; модель — через выбор **Model**, он сохраняет сразу). Шаг, ждущий слот, стартует уже с изменениями, работающий подхватит их со следующего agent-шага; новый priority сразу переставляет его в очереди |
 | `GET` | `/models` | Модели для выбора в борде (`HARNESS_MODELS`) и `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Выполнить shell-команду в рабочей копии задачи (терминал доски). По умолчанию выключено: нужны `HARNESS_TERMINAL_ENABLED=true` и `HARNESS_API_TOKEN`; отказ, пока там работает агент; выполняется на воркере без `HARNESS_*` в окружении, убивается через `HARNESS_TERMINAL_TIMEOUT_SECONDS` |

@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -23,6 +23,8 @@ from .scheduler import Scheduler, SchedulerError
 Kind = Literal["epic", "story", "task"]
 # Board columns, derived from the kind of the item's current state.
 Column = Literal["backlog", "working", "needs_human", "done", "failed"]
+
+MAX_BLOCKERS = 20
 
 router = APIRouter()
 page = APIRouter()
@@ -92,6 +94,7 @@ class ItemIn(BaseModel):
     issue: int | None = Field(default=None, ge=1, description="GitHub issue the PR should close")
     priority: int = Field(default=0, ge=-100, le=100, description="Higher is scheduled first")
     model: ModelName | None = None
+    blocked_by: list[str] = Field(default_factory=list, max_length=MAX_BLOCKERS, description="Items that must succeed first")
     start: bool = False
 
 
@@ -106,6 +109,7 @@ class ItemPatch(BaseModel):
     priority: int = Field(default=None, ge=-100, le=100)
     title: str = Field(default=None, min_length=1, max_length=300)
     body: str = Field(default=None)
+    blocked_by: list[str] = Field(default=None, max_length=MAX_BLOCKERS)
 
 
 class ItemOut(Orm):
@@ -121,6 +125,7 @@ class ItemOut(Orm):
     pr_url: str | None
     priority: int
     model: str | None
+    blocked_by: list[str] = []
     updated_at: datetime
     column: Column = "backlog"
     # GitHub issue the story came from or should close (item.source["issue"]).
@@ -129,6 +134,15 @@ class ItemOut(Orm):
     progress: dict[str, Any] | None = None
     # Only for items waiting for a human: why they are stuck (see _attention).
     attention: dict[str, str] | None = None
+    # Only for backlog items: the blockers that have not succeeded yet, as "title (id)".
+    blocked: list[str] = []
+    # Ids of the backlog items that wait for this one.
+    blocking: list[str] = []
+
+    @field_validator("blocked_by", mode="before")
+    @classmethod
+    def _no_blockers(cls, v):
+        return v or []  # rows from before the column existed hold NULL
 
 
 class ImportResult(BaseModel):
@@ -270,8 +284,27 @@ async def _attention(engine: Engine, s, item: WorkItem) -> dict[str, str] | None
     return {"kind": entered.verdict, "text": "", "from": entered.from_state or ""}
 
 
-async def _item_with_progress(engine: Engine, s, item: WorkItem) -> ItemOut:
+async def _dependents(s, project_id: str) -> dict[str, list[str]]:
+    """For every item of the project, the ids of the backlog items it blocks."""
+    rows = await s.execute(
+        select(WorkItem.id, WorkItem.blocked_by).where(WorkItem.project_id == project_id, WorkItem.state.is_(None))
+    )
+    deps: dict[str, list[str]] = {}
+    for dependent_id, blockers in rows:
+        for blocker_id in blockers or []:
+            deps.setdefault(blocker_id, []).append(dependent_id)
+    return deps
+
+
+async def _item_with_progress(
+    engine: Engine, s, item: WorkItem, dependents: dict[str, list[str]] | None = None
+) -> ItemOut:
     out = _item_out(engine, item)
+    if dependents is None:
+        dependents = await _dependents(s, item.project_id)
+    out.blocking = dependents.get(item.id, [])
+    if out.column == "backlog":
+        out.blocked = await engine.unfinished_blockers(s, item)
     if out.column == "working":
         out.progress = await _progress(engine, s, item)
     elif out.column == "needs_human":
@@ -285,6 +318,31 @@ async def _project(db: Database, slug: str) -> Project:
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     return project
+
+
+async def _check_blockers(s, item_id: str | None, project_id: str, blocked_by: list[str]) -> list[str]:
+    """Validated, de-duplicated blocker ids: they exist in the project, none is the item itself,
+    and following their own blockers never leads back to the item."""
+    ids = list(dict.fromkeys(blocked_by))
+
+    def refuse(why: str) -> HTTPException:
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, why)
+
+    if item_id in ids:
+        raise refuse("an item cannot block itself")
+    rows = (await s.execute(select(WorkItem.id, WorkItem.project_id, WorkItem.blocked_by))).all() if ids else []
+    graph = {r.id: r.blocked_by or [] for r in rows if r.project_id == project_id}
+    if missing := [i for i in ids if i not in graph]:
+        raise refuse(f"blocker not found in this project: {', '.join(missing)}")
+    seen, todo = set(), list(ids)
+    while todo:
+        current = todo.pop()
+        if current == item_id:
+            raise refuse("blockers form a cycle")
+        if current not in seen:
+            seen.add(current)
+            todo.extend(graph.get(current, []))
+    return ids
 
 
 def _engine_error(e: EngineError) -> HTTPException:
@@ -378,6 +436,7 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
             parent = await s.get(WorkItem, body.parent_id)
             if parent is None or parent.project_id != project.id:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "parent not found in this project")
+        blocked_by = await _check_blockers(s, None, project.id, body.blocked_by)
         item = WorkItem(
             project_id=project.id,
             parent_id=body.parent_id,
@@ -387,8 +446,12 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
             workflow=body.workflow,
             priority=body.priority,
             model=body.model,
+            blocked_by=blocked_by,
             source={"issue": body.issue} if body.issue else {},
         )
+        if body.start and (waiting := await engine.unfinished_blockers(s, item)):
+            # Refused before anything is stored, so no half-created item is left behind.
+            raise HTTPException(status.HTTP_409_CONFLICT, f"blocked by: {', '.join(waiting)}")
         s.add(item)
         await s.commit()
     if body.start:
@@ -442,8 +505,9 @@ async def board(slug: str, db: Db, engine: Eng) -> dict[Column, list[ItemOut]]:
         items = await s.scalars(
             select(WorkItem).where(WorkItem.project_id == project.id).order_by(WorkItem.updated_at.desc())
         )
+        dependents = await _dependents(s, project.id)
         for item in items.all():
-            out = await _item_with_progress(engine, s, item)
+            out = await _item_with_progress(engine, s, item, dependents)
             columns[out.column].append(out)
     return columns
 
@@ -464,9 +528,9 @@ async def inbox(slug: str, db: Db) -> list[RequestOut]:
 async def _get_item_out(db: Database, engine: Engine, item_id: str) -> ItemOut:
     async with db.session() as s:
         item = await s.get(WorkItem, item_id)
-    if item is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
-    return _item_out(engine, item)
+        if item is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
+        return await _item_with_progress(engine, s, item)
 
 
 @router.get("/items/{item_id}")
@@ -502,13 +566,15 @@ async def update_item(item_id: str, body: ItemPatch, db: Db, engine: Eng) -> Ite
             raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
         old_priority = item.priority
         for field, value in body.model_dump(exclude_unset=True).items():
-            if value is None and field in ("title", "body", "priority"):
+            if value is None and field in ("title", "body", "priority", "blocked_by"):
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} cannot be null")
+            if field == "blocked_by":
+                value = await _check_blockers(s, item.id, item.project_id, value)
             setattr(item, field, value)
         await s.commit()
         if engine.scheduler and item.priority != old_priority:
             await engine.scheduler.reprioritize(item.id, item.version, old_priority, item.priority)
-        return _item_out(engine, item)
+        return await _item_with_progress(engine, s, item)
 
 
 @router.get("/items/{item_id}/git")
