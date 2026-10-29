@@ -21,6 +21,8 @@ Board: http://localhost:8000/board (enter the `HARNESS_API_TOKEN` token in the f
 
 The agent inside the container needs `ANTHROPIC_API_KEY`. You can set `CLAUDE_CODE_OAUTH_TOKEN` instead; `claude setup-token` issues one. The login from the host keychain does not reach the container.
 
+Local development: `make dev` starts Redis and Postgres in Docker, then the api, worker and beat on the host (Ctrl-C stops all three). See `make help` for the other targets.
+
 Locally without Docker, with only Redis:
 
 ```bash
