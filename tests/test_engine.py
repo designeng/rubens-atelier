@@ -1,3 +1,4 @@
+import subprocess
 from datetime import timedelta
 
 import pytest
@@ -20,6 +21,7 @@ class CIGitHub(FakeGitHub):
         super().__init__(origin)
         self.checks = [{"id": 1, "name": "test", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}}]
         self.statuses: list[dict] = []
+        self.pr_state: dict = {"state": "open", "merged_at": None}
         self.logs = {1: "collected 3 items\nFAILED test_hello.py::test_says_hi - AssertionError\n"}
 
     async def check_runs(self, repo, ref):
@@ -30,6 +32,9 @@ class CIGitHub(FakeGitHub):
 
     async def job_log(self, repo, job_id):
         return self.logs[job_id]
+
+    async def get_pr(self, repo, number):
+        return {"number": number, **self.pr_state}
 
 
 class Factory:
@@ -135,11 +140,11 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     assert await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["plan", "implement", "review", "publish", "ci", "awaiting_merge"]
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
     item = await f.item(item_id)
     assert item.head_sha == git(origin, "rev-parse", item.branch).strip()
     assert item.branch == f"agent/story-{item_id[:8]}"
-    assert item.pr_url == "https://gh/pr/1"
+    assert item.pr_url == "https://gh/pull/1"
     assert set(item.sessions) == {"planner", "implementer", "reviewer"}
     pr = f.gh.prs[0]
     assert pr["head"] == item.branch and pr["base"] == "main"
@@ -158,7 +163,7 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     assert '<artifact name="implementer">' in review["prompt"] and '<artifact name="planner">' in review["prompt"]
 
     req = await f.open_request(item_id)
-    assert req.options == ["merged", "rework", "abandon"]
+    assert req.options == ["merged", "update", "rework", "abandon"]
     assert await f.engine.answer(req.id, "merged")
     assert (await f.item(item_id)).state == "done"
     async with f.db.session() as s:
@@ -170,13 +175,30 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     ]
 
 
+async def test_verify_command_changed_mid_story_is_used_by_the_next_step(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    async with f.db.session() as s:
+        await s.execute(update(Project).values(verify_command=None))
+        await s.commit()
+    assert await f.engine.start(item_id)
+    await f.step(*f.queue.pop(0))  # plan
+
+    # What PATCH /projects/{slug} does: the implement step reads the project afresh.
+    async with f.db.session() as s:
+        await s.execute(update(Project).values(verify_command="test -f hello.txt"))
+        await s.commit()
+    await f.drain()
+    assert f.runner.of("implement")[0]["spec"].verify_command == "test -f hello.txt"
+
+
 async def test_review_feedback_loops_back_to_the_same_implementer_session(make_factory):
     f = make_factory(ScriptedRunner(reviews=["changes_requested", "approved"]))
     item_id = await f.new_item()
     await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["plan", "implement", "review", "implement", "review", "publish", "ci", "awaiting_merge"]
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
     second_impl = f.runner.of("implement")[1]
     assert second_impl["resume"] == "implement-0"
     assert "Review 0: changes_requested" in second_impl["prompt"]
@@ -286,7 +308,7 @@ async def test_red_ci_sends_the_story_back_with_the_failing_log(make_factory, or
         else:
             assert await poll_checks(f.engine, github_factory=lambda _project: f.gh)
 
-    assert await f.path(item_id) == ["plan", "implement", "review", "publish", "ci", "implement"]
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "implement"]
     f.gh.checks[0]["conclusion"] = "success"  # the fix works
     await f.drain()
 
@@ -362,3 +384,116 @@ async def test_too_big_story_is_escalated_and_can_be_replanned(make_factory):
     await f.engine.answer(req.id, "replan", comment="Only the greeting file, skip the rest.")
     await f.drain()
     assert (await f.item(item_id)).state == "awaiting_merge"
+
+
+def land_on_main(origin, tmp_path, filename, content, name="other"):
+    """Another story's PR gets merged: a commit lands on origin/main."""
+    clone = tmp_path / f"land-{name}"
+    if not clone.exists():
+        git(tmp_path, "clone", "-q", str(origin), str(clone))
+    git(clone, "pull", "-q", "origin", "main")
+    (clone / filename).write_text(content)
+    git(clone, "add", ".")
+    git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", f"{name}: {filename}")
+    git(clone, "push", "-q", "origin", "main")
+
+
+class ConflictingMerge(ScriptedRunner):
+    """While the first implement run works, another story changes the same file on main."""
+
+    def __init__(self, origin, tmp_path, **kw):
+        super().__init__(**kw)
+        self.origin, self.tmp_path = origin, tmp_path
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        out = await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+        if spec.metadata["state"] == "implement" and len(self.of("implement")) == 1:
+            land_on_main(self.origin, self.tmp_path, "hello.txt", "HELLO from main\n")
+            land_on_main(self.origin, self.tmp_path, "other.txt", "unrelated\n")
+        return out
+
+
+async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, origin, tmp_path):  # noqa: F811
+    f = make_factory(ConflictingMerge(origin, tmp_path))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.path(item_id) == [
+        "plan", "implement", "sync_base", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge",
+    ]
+    resolve = f.runner.of("implement")[1]
+    assert resolve["resume"] == "implement-0"
+    assert "conflicts in:\n- hello.txt" in resolve["prompt"] and "Do not abort the merge" in resolve["prompt"]
+
+    branch = (await f.item(item_id)).branch
+    assert git(origin, "show", f"{branch}:hello.txt") == "hi 1\n"  # the implementer's resolution
+    assert git(origin, "show", f"{branch}:other.txt") == "unrelated\n"  # main's work came along
+    assert git(origin, "log", "--merges", "--format=%s", branch).strip()  # concluded as a merge commit
+    # The PR now merges cleanly: main is an ancestor of the branch.
+    assert subprocess.run(["git", "merge-base", "--is-ancestor", "main", branch], cwd=origin).returncode == 0
+
+
+async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_path):  # noqa: F811
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    land_on_main(origin, tmp_path, "docs.md", "# docs\n")
+
+    req = await f.open_request(item_id)
+    await f.engine.answer(req.id, "update")
+    await f.drain()
+
+    assert (await f.path(item_id))[-6:] == ["awaiting_merge", "sync_base", "review", "publish", "ci", "awaiting_merge"]
+    assert len(f.runner.of("implement")) == 1  # a clean merge needs no agent to fix anything
+    branch = (await f.item(item_id)).branch
+    assert git(origin, "show", f"{branch}:docs.md") == "# docs\n"
+    async with f.db.session() as s:
+        report = (await s.scalars(select(Artifact.content).where(Artifact.name == "sync_base"))).all()
+    assert report[0] == "Up to date with origin/main." and report[-1].startswith("Merged origin/main cleanly")
+
+
+async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, origin, tmp_path):  # noqa: F811
+    class LeavesMarkers(ConflictingMerge):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            if spec.metadata["state"] == "implement" and len(self.of("implement")) == 1:
+                self.calls.append({"role": "implement", "prompt": spec.prompt, "resume": resume, "spec": spec})
+                return AgentOutcome("implement-1", "gave up", False)  # merge still in progress
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    f = make_factory(LeavesMarkers(origin, tmp_path))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    path = await f.path(item_id)
+    assert path[:6] == ["plan", "implement", "sync_base", "implement", "sync_base", "implement"]
+    async with f.db.session() as s:
+        reports = (await s.scalars(select(Artifact.content).where(Artifact.name == "sync_base"))).all()
+    assert reports[1].startswith("The merge of origin/main still has conflicts")
+    assert "<<<<<<<" not in git(origin, "show", f"{(await f.item(item_id)).branch}:hello.txt")
+
+
+async def test_merged_pr_moves_the_story_to_done_by_itself(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "awaiting_merge"  # PR still open: keeps waiting
+
+    f.gh.pr_state = {"state": "closed", "merged_at": "2026-10-29T10:00:00Z"}
+    await f.drain()
+    assert (await f.item(item_id)).state == "done"
+    assert await f.open_request(item_id) is None
+
+
+async def test_pr_closed_without_merge_abandons_the_story(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    f.gh.pr_state = {"state": "closed", "merged_at": None}
+    await f.drain()
+    assert (await f.item(item_id)).state == "cancelled"

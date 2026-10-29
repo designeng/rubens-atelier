@@ -6,6 +6,7 @@ import type {
   ItemOut,
   ProjectIn,
   ProjectOut,
+  ProjectPatch,
   Repository,
   SchedulerStatus,
 } from "./types";
@@ -47,6 +48,7 @@ export function createClient(
   return {
     listProjects: () => api<ProjectOut[]>("/projects"),
     createProject: (p: ProjectIn) => api<ProjectOut>("/projects", "POST", p),
+    updateProject: (slug: string, patch: ProjectPatch) => api<ProjectOut>(`/projects/${seg(slug)}`, "PATCH", patch),
     getBoard: (slug: string) => api<Board>(`/projects/${seg(slug)}/board`),
     createItem: (slug: string, item: ItemIn) => api<ItemOut>(`/projects/${seg(slug)}/items`, "POST", item),
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),

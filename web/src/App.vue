@@ -6,10 +6,12 @@ import GithubDialog from "./components/GithubDialog.vue";
 import ItemDetail from "./components/ItemDetail.vue";
 import NewItemDialog from "./components/NewItemDialog.vue";
 import NewProjectDialog from "./components/NewProjectDialog.vue";
+import SettingsDialog from "./components/SettingsDialog.vue";
 import { provideBoard, useBoard } from "./composables/useBoard";
 
 provideBoard(useBoard());
 
+const settingsDialog = ref<InstanceType<typeof SettingsDialog>>();
 const githubDialog = ref<InstanceType<typeof GithubDialog>>();
 const projectDialog = ref<InstanceType<typeof NewProjectDialog>>();
 const itemDialog = ref<InstanceType<typeof NewItemDialog>>();
@@ -19,12 +21,14 @@ const header = ref<InstanceType<typeof AppHeader>>();
 <template>
   <AppHeader
     ref="header"
+    @settings="settingsDialog?.open()"
     @github="githubDialog?.open()"
     @new-project="projectDialog?.open()"
     @new-item="(title) => itemDialog?.open(title)"
   />
   <BoardColumns />
   <ItemDetail />
+  <SettingsDialog ref="settingsDialog" />
   <GithubDialog ref="githubDialog" />
   <NewProjectDialog ref="projectDialog" />
   <NewItemDialog ref="itemDialog" @created="header?.clearTitle()" />

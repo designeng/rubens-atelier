@@ -1,5 +1,7 @@
 name: story
-description: Plan one story, implement it, have it reviewed in a fresh session, open a PR, pass CI, wait for the merge.
+description: >-
+  Plan one story, implement it, merge in the latest base branch, have it reviewed in a fresh
+  session, open a PR, pass CI, wait for the merge.
 initial: plan
 
 states:
@@ -23,7 +25,14 @@ states:
     resume: true
     max_visits: 4
     on_exhausted: needs_human
-    next: {done: review, error: needs_human}
+    next: {done: sync_base, error: needs_human}
+
+  # Bring in what other stories merged meanwhile, so the reviewer sees the code as it will
+  # land and the PR doesn't conflict. Conflicts go back to the implementer.
+  sync_base:
+    action: sync_base
+    verdicts: [done, conflict]
+    next: {done: review, conflict: implement, error: needs_human}
 
   review:
     agent: reviewer
@@ -42,9 +51,12 @@ states:
     next: {passed: awaiting_merge, no_checks: awaiting_merge, failed: implement, timeout: needs_human, error: needs_human}
 
   awaiting_merge:
-    human: The PR is open. Merge it, or send it back with a comment.
-    options: [merged, rework, abandon]
-    next: {merged: done, rework: implement, abandon: cancelled}
+    human: >-
+      The PR is open. Merge it, send it back with a comment, or update it when the base branch
+      has moved on or GitHub reports conflicts.
+    watch: merge  # answers `merged` / `abandon` by itself once GitHub reports the PR's fate
+    options: [merged, update, rework, abandon]
+    next: {merged: done, update: sync_base, rework: implement, abandon: cancelled}
 
   needs_human:
     human: The workflow is stuck (see the latest artifacts). Retry or replan with a comment, or abandon.

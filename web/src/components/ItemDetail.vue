@@ -57,8 +57,8 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       </template>
       <h4>Artifacts</h4>
       <template v-for="a in artifacts" :key="a.id">
-        <p><b>{{ a.name }}</b></p>
-        <pre>{{ a.content }}</pre>
+        <p><b :style="a.name === 'error' ? { color: 'var(--bad)' } : undefined">{{ a.name }}</b></p>
+        <pre :class="{ error: a.name === 'error' }">{{ a.content }}</pre>
       </template>
       <p v-if="!artifacts.length" class="muted">none yet</p>
       <h4>Runs</h4>
@@ -66,6 +66,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
         {{ r.state }} · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> → {{ r.verdict }}</template>
         <template v-if="r.cost_usd != null"> · ${{ r.cost_usd.toFixed(2) }}</template>
         <span class="muted">task {{ r.task_id.slice(0, 8) }}</span>
+        <div v-if="r.error" class="run-error">{{ r.error }}</div>
       </div>
       <p v-if="!it.runs.length" class="muted">none</p>
       <h4>History</h4>

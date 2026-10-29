@@ -1,4 +1,5 @@
-"""Built-in, non-agent workflow steps. Each returns a verdict (`done`, or raises → `error`)."""
+"""Built-in, non-agent workflow steps. Each returns a verdict (`done` unless the state lists
+its own `verdicts`), or raises → `error`."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -17,9 +18,49 @@ class ActionContext:
     item: WorkItem
     cwd: Path
     artifacts: dict[str, str]  # latest content per artifact name
+    report: str = ""  # becomes an artifact named after the action
 
 
 Action = Callable[[ActionContext], Awaitable[str]]
+
+CONFLICT = "conflict"
+
+
+async def sync_base(ctx: ActionContext) -> str:
+    """Merge the latest base branch into the item's branch, so parallel stories build on each
+    other's merged work and PRs don't conflict. Merges rather than rebases: reviewed history
+    stays intact. On conflict the merge is left in progress for the implementer to resolve
+    (`conflict` verdict); the conflicted files go into the `sync_base` artifact."""
+    item, cwd = ctx.item, ctx.cwd
+    base = f"origin/{item.base_branch}"
+    if gitops.merge_in_progress(cwd):
+        if conflicts := await gitops.unmerged_files(cwd):
+            ctx.report = _conflict_report(base, conflicts, still=True)
+            return CONFLICT
+        await gitops.commit_all_if_dirty(cwd, f"Merge {base} into {item.branch}")
+    await gitops.commit_all_if_dirty(cwd, f"{item.title} (uncommitted agent changes)")
+    await gitops.fetch(cwd, item.base_branch, token=await ctx.gh.git_token())
+    if await gitops.is_ancestor(cwd, base):
+        ctx.report = f"Up to date with {base}."
+        return DONE
+    conflicts = await gitops.merge(cwd, base, f"Merge {base} into {item.branch}")
+    if conflicts:
+        ctx.report = _conflict_report(base, conflicts)
+        return CONFLICT
+    ctx.report = f"Merged {base} cleanly: {(await gitops.head_sha(cwd))[:12]}."
+    return DONE
+
+
+def _conflict_report(base: str, files: list[str], still: bool = False) -> str:
+    listing = "\n".join(f"- {f}" for f in files)
+    return (
+        f"{'The merge of ' + base + ' still has' if still else 'Merging ' + base + ' into this branch left'} "
+        f"conflicts in:\n{listing}\n\n"
+        "A merge is in progress in the workspace. Resolve each conflict so that both this task's "
+        f"changes and the intent of the changes on {base} survive (read `git log {base}` for what "
+        "they did), run the tests, then `git add` the files and `git commit` to conclude the merge. "
+        "Do not abort the merge, rebase or reset."
+    )
 
 
 async def open_pr(ctx: ActionContext) -> str:
@@ -45,4 +86,4 @@ async def open_pr(ctx: ActionContext) -> str:
     return DONE
 
 
-ACTIONS: dict[str, Action] = {"open_pr": open_pr}
+ACTIONS: dict[str, Action] = {"open_pr": open_pr, "sync_base": sync_base}

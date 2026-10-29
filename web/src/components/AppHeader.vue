@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import { useBoardStore } from "../composables/useBoard";
 
-const emit = defineEmits<{ github: []; "new-project": []; "new-item": [title: string] }>();
+const emit = defineEmits<{ settings: []; github: []; "new-project": []; "new-item": [title: string] }>();
 const b = useBoardStore();
 const title = ref("");
 
@@ -40,6 +40,7 @@ defineExpose({ clearTitle: () => (title.value = "") });
     <select :value="b.slug.value" @change="onProject">
       <option v-for="p in b.projects.value" :key="p.id" :value="p.slug">{{ p.slug }}</option>
     </select>
+    <button title="Project settings" :disabled="!b.slug.value" @click="emit('settings')">Settings</button>
     <button
       title="GitHub App connection"
       :class="{ primary: b.github.value.configured && !liveInstallations.length }"

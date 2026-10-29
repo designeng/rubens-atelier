@@ -21,7 +21,7 @@ def test_projects_items_board_and_inbox(client):
 
     # Simulate the worker getting the story to the merge gate.
     engine = app.state.engine
-    for verdict in ("ready", "done", "approved", "done", "passed"):
+    for verdict in ("ready", "done", "done", "approved", "done", "passed"):
         item = client.get(f"/items/{started['id']}").json()
         client.portal.call(engine.advance, started["id"], item["version"], verdict)
 
@@ -29,7 +29,7 @@ def test_projects_items_board_and_inbox(client):
     assert req["state"] == "awaiting_merge"
     detail = client.get(f"/items/{started['id']}").json()
     assert detail["column"] == "needs_human" and detail["open_request"]["id"] == req["id"]
-    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "review", "publish", "ci", "awaiting_merge"]
+    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
 
     assert client.post(f"/requests/{req['id']}/answer", json={"option": "nope"}).status_code == 409
     r = client.post(f"/requests/{req['id']}/answer", json={"option": "merged", "comment": "thanks"})
@@ -81,6 +81,42 @@ def test_scheduler_pause_and_resume(client):
     paused = client.post("/scheduler/pause", json={"reason": "release freeze"}).json()
     assert paused["capacity"] == 0 and paused["reason"] == "paused: release freeze"
     assert client.post("/scheduler/resume").json()["reason"] == "ok"
+
+
+def test_update_project_settings(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app", "verify_command": "make test"})
+
+    r = client.patch("/projects/app", json={"base_branch": "develop"})
+    assert r.status_code == 200
+    assert r.json()["base_branch"] == "develop" and r.json()["verify_command"] == "make test"
+
+    r = client.patch("/projects/app", json={"verify_command": None})
+    assert r.status_code == 200
+    assert r.json()["verify_command"] is None and r.json()["base_branch"] == "develop"
+
+    r = client.patch("/projects/app", json={"base_branch": None, "verify_command": " uv run pytest -q "})
+    assert (r.json()["base_branch"], r.json()["verify_command"]) == (None, "uv run pytest -q")
+    (project,) = client.get("/projects").json()
+    assert project["slug"] == "app" and project["repo"] == "acme/app"
+    assert (project["base_branch"], project["verify_command"]) == (None, "uv run pytest -q")
+
+
+def test_update_project_validation(client):
+    assert client.patch("/projects/missing", json={"verify_command": "make test"}).status_code == 404
+    before = client.post("/projects", json={"slug": "app", "repo": "acme/app", "base_branch": "main"}).json()
+    for body in (
+        {"slug": "x"},
+        {"repo": "a/b"},
+        {"installation_id": 1},
+        {"base_branch": ""},
+        {"base_branch": "-x"},
+        {"base_branch": "a b"},
+        {"base_branch": "b" * 201},
+        {"verify_command": ""},
+        {"verify_command": "   "},
+    ):
+        assert client.patch("/projects/app", json=body).status_code == 422, body
+    assert client.get("/projects").json() == [before]
 
 
 def test_working_items_report_progress(client):

@@ -79,7 +79,9 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 `max_visits` and `on_exhausted` guard against endless loops, such as implement ⇄ review ping-pong. If a verdict is missing from `next`, the item goes to `next.error`, and if that is missing too, to `failed`.
 
-[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (human). `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
+[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (human). `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
+
+**sync_base** merges the latest base branch into the story's branch, so stories running in parallel build on each other's merged work and their PRs don't conflict. It merges rather than rebases, so reviewed history stays intact. On a conflict the merge is left in progress and the story goes back to `implement`; the `sync_base` artifact lists the conflicted files. The implementer resolves them and commits, and then the story goes through `sync_base` and review again. In `awaiting_merge`, the `update` option runs `sync_base` for an open PR when the base branch has moved on or GitHub reports conflicts.
 
 The planner writes a `planner` artifact: approach, files, test plan, risks. The implementer follows the plan, and the reviewer checks the result against it. If human decisions are needed (`needs_clarification`), the item goes to `clarify`. The human's answer sends it back to `plan`, and the planner continues its session with the answer. If a story does not fit in one PR (`too_big`), it goes to `needs_human` with a proposed split; from there it can be sent to `replan` with a comment. The plan is approved without a human; if you want one, make a workflow variant with an `approve_plan` state.
 
@@ -90,6 +92,7 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | Method | Path | |
 |---|---|---|
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
+| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
 | `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
 | `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Open requests to a human |
@@ -98,6 +101,8 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; the comment becomes an artifact for the next agent |
 | `GET` | `/scheduler` | Busy slots, queue, capacity and its reason, subscription window state |
 | `POST` | `/scheduler/pause`, `/scheduler/resume` | Stop or resume handing out new agent steps; running ones finish |
+
+Project settings can also be edited on the board (**Settings**). A changed `verify_command` applies from the next agent step of every story, including running ones. A changed `base_branch` applies only to stories that have not created their workspace yet; started ones keep their base.
 
 **Scheduler.** Agent steps do not go to Celery right away; they wait in a priority queue: higher item `priority` first, FIFO on ties. A step is handed out only when a slot is free: at most `HARNESS_MAX_AGENTS` in total and at most `HARNESS_MAX_AGENTS_PER_PROJECT` per project. The pace follows the subscription windows that Claude Code reports through `rate_limit` events (status, utilization, reset time):
 - `rejected` or utilization ≥ `HARNESS_QUOTA_PAUSE_AT` → no new steps until the window resets;
@@ -142,5 +147,6 @@ A token is issued for one project repository and reissued 5 minutes before it ex
 The agent has Bash, and issue text can come from an outsider. Keep in mind:
 - the worker runs in a container as an unprivileged user;
 - the GitHub token (or the GitHub App private key) is used only by the harness: it is passed via `-c http.extraheader` rather than stored in `.git/config`, and is removed from the worker processes' env;
+- `HARNESS_BASH_ALLOWED_COMMANDS` limits Bash to command prefixes (empty = any) and `HARNESS_SANDBOX=true` runs it in Claude Code's OS sandbox (writes only in the workspace); both are off by default;
 - `allowed_tools`, `max_turns`, `max_budget_usd` and a timeout bound each task;
 - for production, isolate each task: its own container or microVM, an egress filter. You can also enable `sandbox` in `ClaudeAgentOptions`.

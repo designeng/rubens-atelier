@@ -11,6 +11,12 @@ export interface ProjectIn {
   installation_id?: number | null;
 }
 
+// PATCH /projects/{slug}: fields left out stay as they are, null clears them.
+export interface ProjectPatch {
+  base_branch?: string | null;
+  verify_command?: string | null;
+}
+
 export interface ProjectOut {
   id: string;
   slug: string;
@@ -78,6 +84,7 @@ export interface RunOut {
   verdict: string | null;
   cost_usd: number | null;
   created_at: string;
+  error: string | null; // the `error` artifact of a run that ended in the error verdict
 }
 
 export interface ArtifactOut {

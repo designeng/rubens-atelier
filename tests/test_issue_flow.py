@@ -63,7 +63,7 @@ class FakeGitHub:
         return next((p for p in self.prs if p["head"] == branch), None)
 
     async def create_pr(self, repo, *, head, base, title, body):
-        pr = {"head": head, "base": base, "title": title, "body": body, "html_url": f"https://gh/pr/{len(self.prs) + 1}"}
+        pr = {"head": head, "base": base, "title": title, "body": body, "html_url": f"https://gh/pull/{len(self.prs) + 1}"}
         self.prs.append(pr)
         return pr
 
@@ -90,7 +90,7 @@ async def test_issue_end_to_end(store, origin):
 
     info = await store.get(task_id)
     assert info.status == TaskStatus.succeeded, info.error
-    assert info.pr_url == "https://gh/pr/1"
+    assert info.pr_url == "https://gh/pull/1"
     assert info.branch == "agent/issue-7"
 
     prompt = calls[0]["prompt"]

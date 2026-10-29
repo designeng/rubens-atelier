@@ -177,3 +177,22 @@ async def test_progress_falls_back_to_the_event_log(store):
     progress = await store.progress(task_id)
     assert progress["activity"] == "Read: app/api.py" and progress["turn"] is None
     assert progress["max_turns"] == settings.default_max_turns
+
+
+def test_bash_allowlist_and_sandbox(monkeypatch):
+    from pathlib import Path
+
+    from app.config import settings
+    from app.models import TaskCreate
+    from app.runner import build_options
+
+    spec = TaskCreate(prompt="x")
+    opts = build_options(spec, Path("."), None)
+    assert "Bash" in opts.allowed_tools and not opts.sandbox
+
+    monkeypatch.setattr(settings, "bash_allowed_commands", ["pytest", "git status"])
+    monkeypatch.setattr(settings, "sandbox", True)
+    opts = build_options(spec, Path("."), None)
+    assert "Bash" not in opts.allowed_tools
+    assert {"Bash(pytest:*)", "Bash(git status:*)", "Read"} <= set(opts.allowed_tools)
+    assert opts.sandbox["enabled"] and not opts.sandbox["allowUnsandboxedCommands"]

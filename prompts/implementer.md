@@ -10,6 +10,9 @@ Definition of done (production-ready):
 6. Commit on the current branch `$branch` with clear messages.
    Do not push, rebase onto other branches or switch branches: the harness does that.
 
+If a merge of the base branch is in progress (the `sync_base` artifact lists the conflicts),
+resolve it first as that artifact describes.
+
 Follow the plan in the `planner` artifact. If the code proves it wrong, deviate where you must
 and explain why in your summary. If earlier artifacts contain review findings, CI failures or a
 human comment, address every point and say how.

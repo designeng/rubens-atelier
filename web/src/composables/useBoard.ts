@@ -1,6 +1,6 @@
 import { inject, onMounted, onUnmounted, provide, ref, type InjectionKey } from "vue";
 import { createClient, storage } from "../api/client";
-import type { Board, GithubApp, ItemDetail, ItemIn, ProjectIn, ProjectOut, SchedulerStatus } from "../api/types";
+import type { Board, GithubApp, ItemDetail, ItemIn, ProjectIn, ProjectOut, ProjectPatch, SchedulerStatus } from "../api/types";
 
 export const POLL_MS = 5000;
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
@@ -123,6 +123,11 @@ export function useBoard() {
     await loadProjects();
   }
 
+  async function updateProject(patch: ProjectPatch): Promise<void> {
+    await api.updateProject(slug.value, patch);
+    await loadProjects();
+  }
+
   let timer: ReturnType<typeof setInterval> | undefined;
   const onFocus = () => refreshGithub(); // back from github.com after installing the app
 
@@ -162,6 +167,7 @@ export function useBoard() {
     isPaused,
     createItem,
     createProject,
+    updateProject,
   };
 }
 

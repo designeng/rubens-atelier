@@ -9,7 +9,8 @@ Every state is exactly one of:
   agent:    run a role's prompt in the item's workspace (optionally followed by verify)
   action:   a built-in harness step, e.g. open_pr
   check:    poll an external condition, e.g. ci (GitHub checks on the PR head)
-  human:    wait for a person to pick one of `options`
+  human:    wait for a person to pick one of `options`; an optional `watch` check polls
+            meanwhile and answers on their behalf once it knows the outcome (e.g. merge)
   terminal: the item is finished with the given outcome
 """
 
@@ -31,9 +32,10 @@ class State(BaseModel):
     action: str | None = None
     check: str | None = None
     human: str | None = None  # the question
+    watch: str | None = None  # human: a check polled while waiting; its verdict must be an option
     terminal: Outcome | None = None
 
-    verdicts: list[str] = []  # agent: allowed verdicts; empty = success is `done`
+    verdicts: list[str] = []  # agent/action: allowed verdicts; empty = success is `done`
     options: list[str] = []  # human: allowed answers
     verify: bool = False  # agent: run the project's verify command, feeding failures back
     resume: bool = False  # agent: continue this role's previous session on the item
@@ -62,7 +64,7 @@ class State(BaseModel):
             case "agent":
                 return (self.verdicts or [DONE]) + [ERROR]
             case "action":
-                return [DONE, ERROR]
+                return (self.verdicts or [DONE]) + [ERROR]
             case "check":
                 return CHECK_OUTCOMES + [ERROR]
             case "human":
@@ -74,6 +76,8 @@ class State(BaseModel):
         kinds = [k for k in KINDS if getattr(self, k)]
         if len(kinds) != 1:
             raise ValueError(f"a state must be exactly one of {'/'.join(KINDS)}, got {kinds}")
+        if self.watch and not self.human:
+            raise ValueError("`watch` only applies to human states")
         if self.human and not self.options:
             raise ValueError("a human state needs options")
         return self

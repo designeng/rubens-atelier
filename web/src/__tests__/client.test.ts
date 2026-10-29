@@ -47,11 +47,15 @@ describe("createClient", () => {
     await api.getBoard("a/b?c");
     await api.getItem("../x");
     await api.installationRepositories(42);
+    await api.updateProject("my proj", { verify_command: null });
     expect(f.calls.map((c) => c.url)).toEqual([
       "/projects/a%2Fb%3Fc/board",
       "/items/..%2Fx",
       "/github/installations/42/repositories",
+      "/projects/my%20proj",
     ]);
+    expect(f.calls[3].init.method).toBe("PATCH");
+    expect(JSON.parse(f.calls[3].init.body as string)).toEqual({ verify_command: null });
   });
 
   it("raises ApiError with the server's detail", async () => {

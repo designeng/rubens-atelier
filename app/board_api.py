@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -51,6 +51,17 @@ class ProjectIn(BaseModel):
     base_branch: str | None = None
     verify_command: str | None = None
     installation_id: int | None = Field(default=None, description="GitHub App installation granting access to repo")
+
+
+class ProjectPatch(BaseModel):
+    """Editable project settings; fields left out stay as they are, null clears them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Passed to git as a ref, so it must not start with "-" (would be read as an option).
+    base_branch: str | None = Field(default=None, max_length=200, pattern=r"^[\w.][\w./-]*$")
+    # Blank is rejected rather than stored: send null to clear.
+    verify_command: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
 
 
 class ProjectOut(Orm):
@@ -101,6 +112,7 @@ class RunOut(Orm):
     verdict: str | None
     cost_usd: float | None
     created_at: datetime
+    error: str | None = None  # the `error` artifact of a run that ended in the error verdict
 
 
 class ArtifactOut(Orm):
@@ -244,6 +256,23 @@ async def list_projects(db: Db) -> list[ProjectOut]:
         return [ProjectOut.model_validate(p) for p in await s.scalars(select(Project).order_by(Project.slug))]
 
 
+@router.patch("/projects/{slug}")
+async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
+    """Change base_branch / verify_command. slug, repo and installation_id are immutable.
+
+    verify_command applies from the next agent step of every story, running ones included.
+    base_branch only affects stories that have no workspace yet: started ones keep their base.
+    """
+    async with db.session() as s:
+        project = await s.scalar(select(Project).where(Project.slug == slug))
+        if project is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(project, field, value)
+        await s.commit()
+        return ProjectOut.model_validate(project)
+
+
 @router.post("/projects/{slug}/items", status_code=status.HTTP_201_CREATED)
 async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
     project = await _project(db, slug)
@@ -315,15 +344,18 @@ async def get_item(item_id: str, db: Db, engine: Eng) -> ItemDetail:
         if item is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
         runs = await s.scalars(select(Run).where(Run.item_id == item_id).order_by(Run.created_at))
-        artifacts = await s.scalars(select(Artifact).where(Artifact.item_id == item_id).order_by(Artifact.created_at))
+        artifacts = list(
+            await s.scalars(select(Artifact).where(Artifact.item_id == item_id).order_by(Artifact.created_at))
+        )
         events = await s.scalars(select(ItemEvent).where(ItemEvent.item_id == item_id).order_by(ItemEvent.id))
         request = await s.scalar(
             select(HumanRequest).where(HumanRequest.item_id == item_id, HumanRequest.answer.is_(None))
         )
+        errors = {a.run_id: a.content for a in artifacts if a.name == "error" and a.run_id}
         return ItemDetail(
             **(await _item_with_progress(engine, s, item)).model_dump(),
             body=item.body,
-            runs=[RunOut.model_validate(r) for r in runs],
+            runs=[RunOut.model_validate(r).model_copy(update={"error": errors.get(r.id)}) for r in runs],
             artifacts=[ArtifactOut.model_validate(a) for a in artifacts],
             events=[EventOut.model_validate(e) for e in events],
             open_request=RequestOut.model_validate(request) if request else None,
