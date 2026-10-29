@@ -70,6 +70,7 @@ export function useBoard() {
     const want = storage.get("project");
     slug.value = projects.value.find((p) => p.slug === want)?.slug ?? projects.value[0]?.slug ?? "";
     await refresh();
+    syncFromHash();
   }
 
   async function refreshGithub(): Promise<void> {
@@ -90,13 +91,26 @@ export function useBoard() {
     refresh().catch(fail);
   }
 
+  const HASH = "#item=";
+  const hashId = () => (location.hash.startsWith(HASH) ? decodeURIComponent(location.hash.slice(HASH.length)) : null);
+
+  // The open story lives in the URL hash so it can be shared as a link.
+  function syncFromHash(): void {
+    const id = hashId();
+    if (id === openItemId.value) return;
+    if (id) openItem(id).catch(fail);
+    else closeItem();
+  }
+
   async function openItem(id: string): Promise<void> {
+    if (hashId() !== id) history.pushState(null, "", HASH + encodeURIComponent(id));
     openItemId.value = id;
     const it = await api.getItem(id);
     if (openItemId.value === id) item.value = it;
   }
 
   function closeItem(): void {
+    if (hashId()) history.pushState(null, "", location.pathname + location.search);
     openItemId.value = null;
     item.value = null;
   }
@@ -129,6 +143,12 @@ export function useBoard() {
   }
 
   let timer: ReturnType<typeof setInterval> | undefined;
+  // A click outside the open story (not on a card, dialog or the header) closes it.
+  const onDocClick = (e: MouseEvent) => {
+    if (!openItemId.value) return;
+    const t = e.target as Element | null;
+    if (t && t.isConnected && !t.closest("#detail, .card, dialog, header")) closeItem();
+  };
   const onFocus = () => refreshGithub(); // back from github.com after installing the app
 
   onMounted(() => {
@@ -136,10 +156,16 @@ export function useBoard() {
     refreshGithub();
     timer = setInterval(() => refresh().catch(fail), POLL_MS);
     window.addEventListener("focus", onFocus);
+    window.addEventListener("hashchange", syncFromHash);
+    window.addEventListener("popstate", syncFromHash);
+    document.addEventListener("click", onDocClick);
   });
   onUnmounted(() => {
     clearInterval(timer);
     window.removeEventListener("focus", onFocus);
+    window.removeEventListener("hashchange", syncFromHash);
+    window.removeEventListener("popstate", syncFromHash);
+    document.removeEventListener("click", onDocClick);
   });
 
   return {
