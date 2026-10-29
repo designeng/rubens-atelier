@@ -28,6 +28,7 @@
   @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
   .todos { list-style:none; padding:0; margin:6px 0; } .todos li { font-size:13px; }
   .col[data-col=needs_human] h2 { color:var(--warn); } .col[data-col=done] h2 { color:var(--ok); } .col[data-col=failed] h2 { color:var(--bad); }
+  .card.dragging { opacity:.5; } .col.drop { outline:2px dashed var(--accent); outline-offset:-2px; }
   #detail { position:fixed; inset:0 0 0 auto; width:min(560px, 100%); background:var(--card); border-left:1px solid var(--line); padding:16px; overflow:auto; display:none; }
   #detail.open { display:block; }
   #detail pre { white-space:pre-wrap; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; }
@@ -101,6 +102,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<
 const store = { get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
                 set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 let openItem = null;
+let term = { id: null, log: "" };  // the open item's terminal scrollback
 let git = { id: null, diff: false, text: "" };  // the on-demand git view of the open item
 let projects = [];
 
@@ -148,7 +150,7 @@ async function refresh() {
   const board = await api(`/projects/${slug}/board`);
   $("board").innerHTML = Object.entries(COLS).map(([col, name]) => `
     <section class="col" data-col="${col}"><h2>${name} · ${board[col].length}</h2>
-      ${board[col].map((i) => `<div class="card" data-id="${i.id}"><div>${esc(i.title)}</div>
+      ${board[col].map((i) => `<div class="card" data-id="${i.id}" draggable="true"><div>${esc(i.title)}</div>
         <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div>${progressHtml(i.progress)}
         ${i.attention ? `<div class="attn ${esc(i.attention.kind)}" title="${esc(i.attention.text)}">${esc(attnLine(i.attention))}</div>` : ""}</div>`).join("")}
     </section>`).join("");
@@ -189,7 +191,11 @@ async function showItem(id) {
       <textarea id="comment" rows="3" style="width:100%" placeholder="Comment for the next agent (optional)"></textarea>
       <div class="row">${req.options.map((o) => `<button class="primary" data-answer="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
     ${it.branch ? `<h4>Workspace</h4><div class="row"><button id="gitStatus">Git status</button><button id="gitDiff">Git status + diff</button></div>
-      ${git.id === id ? `<pre id="gitOut">${esc(git.text)}</pre>` : ""}` : ""}
+      ${git.id === id ? `<pre id="gitOut">${esc(git.text)}</pre>` : ""}
+      <h4>Terminal</h4>
+      <pre id="termOut" style="max-height:240px">${term.id === id ? esc(term.log) : ""}</pre>
+      <div class="row"><input id="termCmd" placeholder="command, runs in the workspace (e.g. git log --oneline -5)" style="flex:1" autocomplete="off">
+        <button id="termRun">Run</button></div>` : ""}
     <h4>Artifacts</h4>${Object.values(latest).map((a) => `<p><b${a.name === "error" ? ' style="color:var(--bad)"' : ""}>${esc(a.name)}</b></p><pre${a.name === "error" ? ' class="error"' : ""}>${esc(a.content)}</pre>`).join("") || '<p class="muted">none yet</p>'}
     <h4>Runs</h4>${it.runs.map((r) => `<div>${esc(r.state)} · ${esc(r.role)} · ${esc(r.status)}${r.verdict ? ` → ${esc(r.verdict)}` : ""}
       ${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}` : ""} <span class="muted">task ${esc(r.task_id.slice(0, 8))}</span>
@@ -201,7 +207,7 @@ async function showItem(id) {
     $("detail").scrollTop = keep.scroll;
     if (keep.focus) { $("comment").focus(); $("comment").setSelectionRange(...keep.at); }
   }
-  $("close").onclick = () => { openItem = null; git = { id: null, diff: false, text: "" }; $("detail").classList.remove("open"); };
+  $("close").onclick = () => { openItem = null; term = { id: null, log: "" }; git = { id: null, diff: false, text: "" }; $("detail").classList.remove("open"); };
   $("itModelSave").onclick = () => api(`/items/${id}`, { method: "PATCH", body: JSON.stringify({ model: $("itModel").value.trim() || null }) })
     .then(() => showItem(id)).catch(fail);
   if ($("start")) $("start").onclick = () => api(`/items/${id}/start`, { method: "POST" }).then(refresh).catch(fail);
@@ -216,10 +222,61 @@ async function showItem(id) {
   }).catch(fail);
   if ($("gitStatus")) { $("gitStatus").onclick = () => loadGit(false); $("gitDiff").onclick = () => loadGit(true); }
   if ($("reopen")) $("reopen").onclick = () => api(`/items/${id}/reopen`, { method: "POST" }).then(() => showItem(id)).then(refresh).catch(fail);
+  if ($("termRun")) {
+    const out = $("termOut"); out.scrollTop = out.scrollHeight;
+    const run = async () => {
+      const cmd = $("termCmd").value.trim(); if (!cmd) return;
+      $("termCmd").value = "";
+      if (term.id !== id) term = { id, log: "" };
+      const show = (extra) => { out.textContent = term.log + extra; out.scrollTop = out.scrollHeight; };
+      term.log += `$ ${cmd}\n`; show("");
+      try {
+        const { id: execId } = await api(`/items/${id}/exec`, { method: "POST", body: JSON.stringify({ command: cmd }) });
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 700));
+          const r = await api(`/items/${id}/exec/${execId}`);
+          if (r.status === "running") { show(r.output || "…"); continue; }
+          term.log += `${r.output}${r.output && !r.output.endsWith("\n") ? "\n" : ""}${r.status === "timeout" ? "" : `[exit ${r.exit_code}]\n`}\n`;
+          break;
+        }
+      } catch (e) { term.log += `${e.message}\n\n`; }
+      if (openItem === id) show("");
+    };
+    $("termRun").onclick = run;
+    $("termCmd").onkeydown = (e) => { if (e.key === "Enter") run(); };
+  }
   if ($("cancel")) $("cancel").onclick = () => api(`/items/${id}/cancel`, { method: "POST" }).then(refresh).catch(fail);
   document.querySelectorAll("[data-answer]").forEach((b) => b.onclick = () =>
     api(`/requests/${req.id}/answer`, { method: "POST", body: JSON.stringify({ option: b.dataset.answer, comment: $("comment").value }) }).then(refresh).catch(fail));
 }
+
+// Dragging a card to a column is a shortcut for the matching button; other moves belong to the workflow.
+const DROPS = { "failed>backlog": "reopen", "backlog>working": "start", "working>failed": "cancel", "needs_human>failed": "cancel" };
+let dragged = null;
+$("board").ondragstart = (e) => {
+  const card = e.target.closest(".card");
+  if (!card) return;
+  dragged = { id: card.dataset.id, from: card.closest(".col").dataset.col };
+  card.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", dragged.id);
+};
+$("board").ondragend = () => { dragged = null; document.querySelectorAll(".dragging, .drop").forEach((n) => n.classList.remove("dragging", "drop")); };
+$("board").ondragover = (e) => {
+  const col = e.target.closest(".col");
+  document.querySelectorAll(".drop").forEach((n) => n !== col && n.classList.remove("drop"));
+  if (!dragged || !col || !DROPS[`${dragged.from}>${col.dataset.col}`]) return;
+  e.preventDefault();
+  col.classList.add("drop");
+};
+$("board").ondrop = (e) => {
+  const col = e.target.closest(".col");
+  const action = dragged && col && DROPS[`${dragged.from}>${col.dataset.col}`];
+  if (!action) return;
+  e.preventDefault();
+  const id = dragged.id;
+  api(`/items/${id}/${action}`, { method: "POST" }).then(refresh).catch(fail);
+};
 
 $("board").onclick = (e) => { const card = e.target.closest(".card"); if (card) showItem(card.dataset.id).catch(fail); };
 $("token").value = store.get("token");
