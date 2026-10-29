@@ -1,7 +1,9 @@
-:root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e3e6eb; --accent:#3b5bdb; --warn:#c2410c; --ok:#15803d; --bad:#b91c1c; }
+/* Themes: Day is the light palette, Midnight the dark one. Without data-theme on <html> (Auto) the OS decides. */
+:root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e3e6eb; --accent:#3b5bdb; --warn:#c2410c; --ok:#15803d; --bad:#b91c1c; color-scheme:light; }
 @media (prefers-color-scheme: dark) {
-  :root { --bg:#14161b; --card:#1d2027; --ink:#e6e8ec; --muted:#9aa1ad; --line:#2c3039; --accent:#748ffc; --warn:#fb923c; --ok:#4ade80; --bad:#f87171; }
+  :root:not([data-theme=day]) { --bg:#14161b; --card:#1d2027; --ink:#e6e8ec; --muted:#9aa1ad; --line:#2c3039; --accent:#748ffc; --warn:#fb923c; --ok:#4ade80; --bad:#f87171; color-scheme:dark; }
 }
+:root[data-theme=midnight] { --bg:#14161b; --card:#1d2027; --ink:#e6e8ec; --muted:#9aa1ad; --line:#2c3039; --accent:#748ffc; --warn:#fb923c; --ok:#4ade80; --bad:#f87171; color-scheme:dark; }
 * { box-sizing: border-box; }
 /* Portrait in the top-left corner; its right and bottom edges fade out so no border shows. */
 body::before { content:""; position:fixed; top:0; left:0; width:min(560px, 60vw); aspect-ratio:1036 / 1518; z-index:-1; pointer-events:none;

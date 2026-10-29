@@ -41,6 +41,8 @@ The board is a Vue 3 + Vite + TypeScript app in `web/`. It needs Node 22 and pnp
 - `make web-dev`: Vite dev server with hot reload at http://localhost:5173/board/. API requests go to http://localhost:8000, so run `make api` (or `make dev`) next to it.
 - `make web-test`: type check (`vue-tsc --noEmit`) and unit tests (Vitest). Inside `web/`: `pnpm typecheck`, `pnpm test`.
 
+The header's theme switch (Auto, Day, Midnight) is remembered per browser. Auto follows the OS colour scheme; Day and Midnight pin the light and dark palette.
+
 The Docker image builds the board itself in a Node stage.
 
 ## API

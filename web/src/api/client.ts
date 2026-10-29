@@ -76,14 +76,14 @@ export type Client = ReturnType<typeof createClient>;
 
 // localStorage can throw (private mode, disabled storage): the board then just forgets.
 export const storage = {
-  get: (key: "token" | "project"): string => {
+  get: (key: "token" | "project" | "theme"): string => {
     try {
       return localStorage.getItem(key) || "";
     } catch {
       return "";
     }
   },
-  set: (key: "token" | "project", value: string): void => {
+  set: (key: "token" | "project" | "theme", value: string): void => {
     try {
       localStorage.setItem(key, value);
     } catch {

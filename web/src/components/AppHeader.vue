@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useBoardStore } from "../composables/useBoard";
+import { loadTheme, saveTheme, THEMES, type Theme } from "../theme";
 
 const emit = defineEmits<{ settings: []; github: []; "new-project": []; "new-item": [title: string] }>();
 const b = useBoardStore();
 const title = ref("");
+const theme = ref<Theme>(loadTheme());
 
 const liveInstallations = computed(() => b.github.value.installations.filter((i) => !i.suspended));
 const githubLabel = computed(() =>
@@ -31,6 +33,10 @@ function onToken(e: Event) {
 }
 function onProject(e: Event) {
   b.selectProject((e.target as HTMLSelectElement).value);
+}
+function onTheme(e: Event) {
+  theme.value = (e.target as HTMLSelectElement).value as Theme;
+  saveTheme(theme.value);
 }
 function addItem() {
   if (b.slug.value) emit("new-item", title.value.trim());
@@ -93,6 +99,9 @@ defineExpose({ clearTitle: () => (title.value = "") });
         force
       </label>
     </template>
+    <select title="Theme" :value="theme" @change="onTheme">
+      <option v-for="t in THEMES" :key="t.value" :value="t.value">{{ t.label }}</option>
+    </select>
     <button v-if="b.scheduler.value" @click="b.togglePause()">{{ b.isPaused() ? "Resume" : "Pause" }}</button>
     <span id="err">{{ b.error.value }}</span>
   </header>
