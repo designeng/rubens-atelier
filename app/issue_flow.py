@@ -55,7 +55,7 @@ async def prepare(gh: GitHub, issue: IssueRef, cwd: Path, extra_prompt: str) -> 
     branch = branch_name(issue)
 
     await gh.set_labels(issue.repo, issue.number, add=[IN_PROGRESS], remove=[settings.issue_label, FAILED])
-    await gitops.clone(gh.clone_url(issue.repo), cwd, ref=base, token=gh.token)
+    await gitops.clone(gh.clone_url(issue.repo), cwd, ref=base, token=await gh.git_token())
     await gitops.configure_identity(cwd, settings.git_author_name, settings.git_author_email)
     await gitops.checkout_new_branch(cwd, branch)
 
@@ -82,7 +82,7 @@ async def finalize(gh: GitHub, issue: IssueRef, cwd: Path, summary: str | None) 
     base = issue.base_branch or (await gh.get_repo(issue.repo))["default_branch"]
     if await gitops.commits_ahead(cwd, base) == 0:
         raise RuntimeError("agent finished without producing any commits")
-    await gitops.push(cwd, branch, token=gh.token)
+    await gitops.push(cwd, branch, token=await gh.git_token())
 
     pr_url = None
     if issue.open_pr:

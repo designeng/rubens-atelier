@@ -24,6 +24,10 @@
   #detail.open { display:block; }
   #detail pre { white-space:pre-wrap; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; }
   .row { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+  dialog { background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:16px; width:min(420px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  dialog label { display:block; margin:10px 0 4px; font-size:12px; color:var(--muted); }
+  dialog input, dialog select { width:100%; }
   .muted { color:var(--muted); } #err { color:var(--bad); }
 </style>
 </head>
@@ -41,6 +45,19 @@
 </header>
 <main id="board"></main>
 <aside id="detail"></aside>
+<dialog id="projDlg">
+  <h3 style="margin-top:0">New project</h3>
+  <label for="pSlug">Slug (a-z, 0-9, -)</label><input id="pSlug">
+  <label for="pInst">GitHub access</label><select id="pInst"></select>
+  <div class="muted" id="pInstHint" style="font-size:12px; margin-top:4px"></div>
+  <label for="pRepo">Repository (owner/name)</label>
+  <input id="pRepo" list="pRepos" autocomplete="off"><datalist id="pRepos"></datalist>
+  <label for="pVerify">Verify command (optional, e.g. make test)</label><input id="pVerify">
+  <div class="row" style="margin-top:14px">
+    <button class="primary" id="pCreate">Create</button><button id="pCancel">Cancel</button>
+    <span id="pErr" style="color:var(--bad)"></span>
+  </div>
+</dialog>
 <script>
 const $ = (id) => document.getElementById(id);
 const COLS = { backlog: "Backlog", working: "Agents working", needs_human: "Needs you", done: "Done", failed: "Failed / cancelled" };
@@ -119,12 +136,45 @@ $("add").onclick = () => {
   api(`/projects/${$("project").value}/items`, { method: "POST", body: JSON.stringify({ title, body, start: true }) })
     .then(() => { $("title").value = ""; return refresh(); }).catch(fail);
 };
-$("newProject").onclick = () => {
-  const slug = prompt("Project slug (a-z, 0-9, -):"); if (!slug) return;
-  const repo = prompt("GitHub repo (owner/name):"); if (!repo) return;
-  const verify = prompt("Verify command (e.g. make test), optional:") || null;
-  api("/projects", { method: "POST", body: JSON.stringify({ slug, repo, verify_command: verify }) })
-    .then(() => { store.set("project", slug); return loadProjects(); }).catch(fail);
+let ghApp = { configured: false, installations: [] };
+
+async function loadInstallations() {
+  ghApp = await api("/github/app").catch(() => ({ configured: false, installations: [] }));
+  const opts = ghApp.installations.filter((i) => !i.suspended).map((i) =>
+    `<option value="${i.id}">${esc(i.account)} · ${i.repository_selection === "all" ? "all repos" : "selected repos"}</option>`);
+  opts.push('<option value="">Server token (HARNESS_GITHUB_TOKEN)</option>');
+  $("pInst").innerHTML = opts.join("");
+  const link = ghApp.install_url
+    ? `<a href="${esc(ghApp.install_url)}" target="_blank" rel="noopener">Install the app / change repositories ↗</a> · <a href="#" id="pReload">refresh</a>`
+    : ghApp.configured ? "" : "GitHub App is not configured on the server.";
+  $("pInstHint").innerHTML = link;
+  if ($("pReload")) $("pReload").onclick = (e) => { e.preventDefault(); loadInstallations().then(loadRepos).catch(fail); };
+}
+
+async function loadRepos() {
+  const id = $("pInst").value;
+  $("pRepos").innerHTML = "";
+  if (!id) return;
+  const repos = await api(`/github/installations/${id}/repositories`);
+  $("pRepos").innerHTML = repos.map((r) => `<option value="${esc(r.full_name)}">`).join("");
+  if (repos.length === 1) $("pRepo").value = repos[0].full_name;
+}
+
+$("newProject").onclick = async () => {
+  $("pErr").textContent = "";
+  await loadInstallations();
+  await loadRepos().catch(fail);
+  $("projDlg").showModal();
+};
+$("pInst").onchange = () => loadRepos().catch(fail);
+$("pCancel").onclick = () => $("projDlg").close();
+$("pCreate").onclick = () => {
+  const slug = $("pSlug").value.trim(), repo = $("pRepo").value.trim();
+  if (!slug || !repo) { $("pErr").textContent = "slug and repository are required"; return; }
+  const body = { slug, repo, verify_command: $("pVerify").value.trim() || null, installation_id: Number($("pInst").value) || null };
+  api("/projects", { method: "POST", body: JSON.stringify(body) })
+    .then(() => { $("projDlg").close(); store.set("project", slug); return loadProjects(); })
+    .catch((e) => { $("pErr").textContent = e.message; });
 };
 loadProjects().catch(fail);
 setInterval(() => refresh().catch(fail), 5000);

@@ -4,12 +4,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from . import github_app
 from .db import Artifact, Database, HumanRequest, ItemEvent, Project, Run, WorkItem
 from .engine import Engine, EngineError
 from .scheduler import Scheduler
@@ -48,6 +50,7 @@ class ProjectIn(BaseModel):
     repo: str = Field(pattern=r"^[\w.-]+/[\w.-]+$")
     base_branch: str | None = None
     verify_command: str | None = None
+    installation_id: int | None = Field(default=None, description="GitHub App installation granting access to repo")
 
 
 class ProjectOut(Orm):
@@ -56,6 +59,7 @@ class ProjectOut(Orm):
     repo: str
     base_branch: str | None
     verify_command: str | None
+    installation_id: int | None
 
 
 class ItemIn(BaseModel):
@@ -166,6 +170,16 @@ def _engine_error(e: EngineError) -> HTTPException:
 
 @router.post("/projects", status_code=status.HTTP_201_CREATED)
 async def create_project(body: ProjectIn, db: Db) -> ProjectOut:
+    if body.installation_id:
+        # Only repos the installation was granted can be used; GitHub is the source of truth.
+        try:
+            repos = await github_app.list_repositories(body.installation_id)
+        except (github_app.AppNotConfigured, httpx.HTTPError) as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"installation unavailable: {e}") from None
+        if body.repo.lower() not in {r["full_name"].lower() for r in repos}:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, "repository is not granted to this installation"
+            )
     async with db.session() as s:
         project = Project(**body.model_dump())
         s.add(project)
@@ -174,6 +188,28 @@ async def create_project(body: ProjectIn, db: Db) -> ProjectOut:
         except IntegrityError:
             raise HTTPException(status.HTTP_409_CONFLICT, "project slug already exists") from None
         return ProjectOut.model_validate(project)
+
+
+@router.get("/github/app")
+async def github_app_status() -> dict:
+    """Whether the GitHub App is set up, and where it is installed."""
+    if not github_app.configured():
+        return {"configured": False, "install_url": None, "installations": []}
+    try:
+        installations = await github_app.list_installations()
+    except httpx.HTTPError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"GitHub: {e}") from None
+    return {"configured": True, "install_url": github_app.install_url(), "installations": installations}
+
+
+@router.get("/github/installations/{installation_id}/repositories")
+async def installation_repositories(installation_id: int) -> list[dict]:
+    try:
+        return await github_app.list_repositories(installation_id)
+    except github_app.AppNotConfigured as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
+    except httpx.HTTPError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"GitHub: {e}") from None
 
 
 @router.get("/projects")

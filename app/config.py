@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     # access; it is used only by the harness (clone/push/API), never exposed to the agent.
     github_token: str = ""
     github_api_url: str = "https://api.github.com"
+    # GitHub App: per-project access to selected repositories via short-lived installation
+    # tokens. The private key is a PEM (literal "\n" is accepted) or a path to one.
+    # Projects without an installation fall back to `github_token`.
+    github_app_id: str = ""
+    github_app_slug: str = ""
+    github_app_private_key: str = ""
+    github_app_private_key_file: Path | None = None
     git_author_name: str = "claude-agent"
     git_author_email: str = "claude-agent@users.noreply.github.com"
     # Repos polled by celery beat for issues carrying `issue_label`. Empty = polling off.

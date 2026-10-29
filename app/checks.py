@@ -99,7 +99,7 @@ async def _describe(gh: GitHub, repo: str, sha: str, failed: list[Result]) -> st
 CHECKS: dict[str, Check] = {"ci": ci}
 
 
-async def poll_checks(engine: Engine, github_factory: Callable[[], GitHub] = GitHub) -> list[tuple[str, str]]:
+async def poll_checks(engine: Engine, github_factory: Callable[[Project], GitHub] = GitHub.for_project) -> list[tuple[str, str]]:
     """Evaluate every item in a check state; returns (item_id, verdict) for those that moved."""
     check_states = {n for wf in engine.workflows.values() for n, st in wf.states.items() if st.check}
     if not check_states:
@@ -111,7 +111,7 @@ async def poll_checks(engine: Engine, github_factory: Callable[[], GitHub] = Git
         return []
 
     moved = []
-    gh = github_factory()
+    clients: dict[int | None, GitHub] = {}
     try:
         for item in items:
             wf = engine.workflows.get(item.workflow)
@@ -124,7 +124,10 @@ async def poll_checks(engine: Engine, github_factory: Callable[[], GitHub] = Git
                 verdict, details = ERROR, f"unknown check {st.check!r}"
             else:
                 try:
-                    verdict, details = await check(CheckContext(gh, projects[item.project_id], item, st, waited))
+                    project = projects[item.project_id]
+                    if project.installation_id not in clients:
+                        clients[project.installation_id] = github_factory(project)
+                    verdict, details = await check(CheckContext(clients[project.installation_id], project, item, st, waited))
                 except Exception:
                     # Transient (GitHub hiccup) until proven otherwise: try again next poll.
                     log.exception("check %s for item %s failed", st.check, item.id)
@@ -140,5 +143,6 @@ async def poll_checks(engine: Engine, github_factory: Callable[[], GitHub] = Git
             if await engine.advance(item.id, item.version, verdict, actor=f"check:{st.check}"):
                 moved.append((item.id, verdict))
     finally:
-        await gh.aclose()
+        for gh in clients.values():
+            await gh.aclose()
     return moved

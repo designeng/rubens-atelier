@@ -4,24 +4,55 @@ from typing import Any
 
 import httpx
 
+from . import github_app
 from .config import settings
 
 
+class _Auth(httpx.Auth):
+    """Resolves the token per request, so a GitHub App token is renewed mid-task."""
+
+    def __init__(self, gh: "GitHub"):
+        self.gh = gh
+
+    async def async_auth_flow(self, request: httpx.Request):
+        request.headers["Authorization"] = f"Bearer {await self.gh.git_token()}"
+        yield request
+
+
 class GitHub:
-    def __init__(self, token: str | None = None, base_url: str | None = None):
-        token = token or settings.github_token
-        if not token:
+    """Client for one repo's worth of work: a GitHub App installation or the server-wide token."""
+
+    def __init__(
+        self,
+        token: str | None = None,
+        base_url: str | None = None,
+        *,
+        installation_id: int | None = None,
+        repo: str | None = None,
+    ):
+        self._token = token or (None if installation_id else settings.github_token)
+        self.installation_id, self.repo = installation_id, repo
+        if installation_id:
+            if not github_app.configured():
+                raise RuntimeError("project uses a GitHub App installation but the app is not configured")
+        elif not self._token:
             raise RuntimeError("HARNESS_GITHUB_TOKEN is not set")
-        self.token = token
         self.http = httpx.AsyncClient(
             base_url=base_url or settings.github_api_url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+            headers={"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+            auth=_Auth(self),
             timeout=30,
         )
+
+    @classmethod
+    def for_project(cls, project) -> "GitHub":
+        return cls(installation_id=project.installation_id, repo=project.repo)
+
+    async def git_token(self) -> str:
+        """Current token for API calls and git; installation tokens are minted on demand."""
+        if self._token:
+            return self._token
+        return await github_app.installation_token(self.installation_id, self.repo)
 
     async def aclose(self) -> None:
         await self.http.aclose()

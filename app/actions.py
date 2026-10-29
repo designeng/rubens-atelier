@@ -28,7 +28,7 @@ async def open_pr(ctx: ActionContext) -> str:
     await gitops.commit_all_if_dirty(ctx.cwd, f"{item.title} (uncommitted agent changes)")
     if await gitops.commits_ahead(ctx.cwd, item.base_branch) == 0:
         raise RuntimeError("nothing to publish: the branch has no commits")
-    await gitops.push(ctx.cwd, item.branch, token=ctx.gh.token)
+    await gitops.push(ctx.cwd, item.branch, token=await ctx.gh.git_token())
     item.head_sha = await gitops.head_sha(ctx.cwd)
 
     pr = await ctx.gh.find_open_pr(repo, item.branch)

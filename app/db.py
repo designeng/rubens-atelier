@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -47,6 +47,8 @@ class Project(Base):
     repo: Mapped[str] = mapped_column(String(200))  # GitHub owner/name
     base_branch: Mapped[str | None] = mapped_column(String(200))  # default: the repo's default branch
     verify_command: Mapped[str | None] = mapped_column(Text)
+    # GitHub App installation that grants access to `repo`; None = the server-wide token.
+    installation_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
@@ -134,6 +136,13 @@ class ItemEvent(Base):
     at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
+def _add_missing_columns(conn) -> None:
+    """create_all skips existing tables; add the nullable columns introduced after them."""
+    existing = {c["name"] for c in inspect(conn).get_columns("projects")}
+    if "installation_id" not in existing:
+        conn.execute(text("ALTER TABLE projects ADD COLUMN installation_id BIGINT"))
+
+
 class Database:
     def __init__(self, url: str):
         self.engine = create_async_engine(url)
@@ -143,6 +152,7 @@ class Database:
         # Good enough until the schema needs its first migration; then switch to Alembic.
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(_add_missing_columns)
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:

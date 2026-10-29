@@ -50,14 +50,14 @@ class Factory:
     async def step(self, item_id, version):
         await run_step(
             item_id, version, engine=self.engine, store=self.store, worker_id="w1",
-            runner=self.runner, github_factory=lambda: self.gh,
+            runner=self.runner, github_factory=lambda _project: self.gh,
         )
 
     async def drain(self):
         while True:
             while self.queue:
                 await self.step(*self.queue.pop(0))
-            if not await poll_checks(self.engine, github_factory=lambda: self.gh) and not self.queue:
+            if not await poll_checks(self.engine, github_factory=lambda _project: self.gh) and not self.queue:
                 return
 
     async def item(self, item_id) -> WorkItem:
@@ -284,7 +284,7 @@ async def test_red_ci_sends_the_story_back_with_the_failing_log(make_factory, or
         if f.queue:
             await f.step(*f.queue.pop(0))
         else:
-            assert await poll_checks(f.engine, github_factory=lambda: f.gh)
+            assert await poll_checks(f.engine, github_factory=lambda _project: f.gh)
 
     assert await f.path(item_id) == ["plan", "implement", "review", "publish", "ci", "implement"]
     f.gh.checks[0]["conclusion"] = "success"  # the fix works

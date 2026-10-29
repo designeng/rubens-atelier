@@ -41,6 +41,9 @@ class FakeGitHub:
     async def aclose(self):
         pass
 
+    async def git_token(self):
+        return self.token
+
     async def get_repo(self, repo):
         return {"default_branch": "main"}
 

@@ -1,50 +1,49 @@
-# agent-harness
+# rubens-atelier
 
-HTTP-сервис для запуска Claude Code ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)) как долгих фоновых задач: FastAPI, Celery и Redis.
+**English** · [Русский](docs/readme.ru.md)
 
-Главный сценарий: агент берёт issue из GitHub, реализует его, прогоняет проверки, пушит ветку и открывает PR.
+A software factory in the spirit of Rubens' workshop. Claude Code agents work as apprentices: they plan, implement, pass CI and open the PR. You are the master who reviews it and signs off with a merge. It works on GitHub issues and on projects built from scratch.
 
-```
-POST /tasks ─► Redis (Celery broker) ─► worker ─► Claude Agent SDK (Claude Code)
-                  ▲                         │
-GET /tasks/{id} ──┤◄── task hash ◄──────────┤  status, session_id, result, cost
-GET …/stream ─────┘◄── Redis Stream ◄───────┘  события агента (SSE, с replay)
-```
+Under the hood it is an HTTP service that runs Claude Code ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)) as long-running background tasks on FastAPI, Celery and Redis.
 
-## Запуск
+The core flow: an agent picks up a GitHub issue, implements it, runs the checks, pushes a branch and opens a PR.
+
+<p align="center"><img src="docs/architecture.svg" alt="Task flow: client → Redis → Celery worker → Claude Agent SDK" width="100%"></p>
+
+## Running
 
 ```bash
 cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
 docker compose up -d --build  # redis, postgres, api :8000, worker, beat
 ```
 
-Доска: http://localhost:8000/board (токен из `HARNESS_API_TOKEN` вводится в поле на странице).
+Board: http://localhost:8000/board (enter the `HARNESS_API_TOKEN` token in the field on the page).
 
-Агенту в контейнере нужен `ANTHROPIC_API_KEY`. Вместо него можно указать `CLAUDE_CODE_OAUTH_TOKEN`, его выдаёт `claude setup-token`. Логин из keychain хоста в контейнер не попадает.
+The agent inside the container needs `ANTHROPIC_API_KEY`. You can set `CLAUDE_CODE_OAUTH_TOKEN` instead; `claude setup-token` issues one. The login from the host keychain does not reach the container.
 
-Локально без Docker, только с Redis:
+Locally without Docker, with only Redis:
 
 ```bash
 uv sync
 uv run uvicorn app.api:app --reload
-uv run celery -A app.celery_app worker -l info --pool threads   # на macOS prefork+spawn не работает
+uv run celery -A app.celery_app worker -l info --pool threads   # prefork+spawn does not work on macOS
 uv run celery -A app.celery_app beat -l info
 uv run pytest
 ```
 
 ## API
 
-| Метод | Путь | |
+| Method | Path | |
 |---|---|---|
-| `POST` | `/tasks` | Произвольная задача (`prompt`, опционально `repo_url`, `verify_command`, `model`, `effort`, `allowed_tools`, `max_budget_usd`, …) |
-| `POST` | `/issues/run` | `{repo, number, verify_command?, prompt?}`: работа над issue от начала до PR |
-| `GET` | `/tasks/{id}` | Статус, результат, стоимость, `session_id`, `pr_url` |
-| `GET` | `/tasks/{id}/stream` | SSE: история и живые события до завершения задачи, поддерживает `Last-Event-ID` |
-| `GET` | `/tasks/{id}/events?after=` | Те же события страницами |
-| `POST` | `/tasks/{id}/cancel` | Отмена: задача из очереди снимается сразу, работающая останавливается в течение примерно 2 секунд |
-| `GET` | `/tasks?status=` | Список задач |
+| `POST` | `/tasks` | Arbitrary task (`prompt`, optionally `repo_url`, `verify_command`, `model`, `effort`, `allowed_tools`, `max_budget_usd`, …) |
+| `POST` | `/issues/run` | `{repo, number, verify_command?, prompt?}`: work on an issue from start to PR |
+| `GET` | `/tasks/{id}` | Status, result, cost, `session_id`, `pr_url` |
+| `GET` | `/tasks/{id}/stream` | SSE: history and live events until the task finishes, supports `Last-Event-ID` |
+| `GET` | `/tasks/{id}/events?after=` | The same events, paginated |
+| `POST` | `/tasks/{id}/cancel` | Cancel: a queued task is removed at once, a running one stops within about 2 seconds |
+| `GET` | `/tasks?status=` | Task list |
 
-Follow-up: `POST /tasks {"prompt": "...", "parent_task_id": "<id>"}` продолжает ту же Claude-сессию в том же workspace. Для issue-задачи он пушит в ту же ветку, и PR обновляется.
+Follow-up: `POST /tasks {"prompt": "...", "parent_task_id": "<id>"}` continues the same Claude session in the same workspace. For an issue task it pushes to the same branch, and the PR updates.
 
 ```bash
 curl -X POST localhost:8000/issues/run -H "Authorization: Bearer $HARNESS_API_TOKEN" \
@@ -52,74 +51,84 @@ curl -X POST localhost:8000/issues/run -H "Authorization: Bearer $HARNESS_API_TO
   -d '{"repo": "acme/app", "number": 42, "verify_command": "make test"}'
 ```
 
-## Фабрика: проекты, доска, workflow
+## Factory: projects, board, workflows
 
-Поверх задач работает фабрика. **Проект** — это тенант: свой репозиторий и своя `verify_command`. В проекте есть **work items** (epic, story, task), и каждый item идёт по своему **workflow**.
+The factory runs on top of tasks. A **project** is a tenant with its own repository and its own `verify_command`. A project holds **work items** (epic, story, task), and each item moves through its own **workflow**.
 
-Workflow — это детерминированный конечный автомат в [workflows/](workflows/). Агент не выбирает следующий шаг. Он возвращает вердикт (enum через structured output), и следующее состояние по этому вердикту определяет `next`. Типы состояний:
+A workflow is a deterministic state machine in [workflows/](workflows/). The agent does not choose the next step. It returns a verdict (an enum via structured output), and `next` maps that verdict to the next state. State types:
 
 | | |
 |---|---|
-| `agent` | роль из [prompts/](prompts/)`<role>.md` работает в workspace item'а; есть опции `verify`, `resume` (продолжить свою прошлую сессию), `verdicts`, `disallowed_tools` |
-| `action` | встроенный шаг harness'а, например `open_pr` |
-| `check` | внешнее условие, которое опрашивает beat, не занимая воркер; сейчас это `ci` |
-| `human` | запрос во inbox с вариантами ответа; ответ продвигает item дальше |
-| `terminal` | `succeeded`, `failed` или `cancelled` |
+| `agent` | a role from [prompts/](prompts/)`<role>.md` works in the item's workspace; options `verify`, `resume` (continue its previous session), `verdicts`, `disallowed_tools` |
+| `action` | a built-in harness step, e.g. `open_pr` |
+| `check` | an external condition polled by beat without holding a worker; currently `ci` |
+| `human` | a request to the inbox with answer options; the answer moves the item on |
+| `terminal` | `succeeded`, `failed` or `cancelled` |
 
-`max_visits` и `on_exhausted` защищают от бесконечных циклов, например от пинг-понга implement ⇄ review. Если вердикта нет в `next`, item уходит в `next.error`, а если нет и его, то в `failed`.
+`max_visits` and `on_exhausted` guard against endless loops, such as implement ⇄ review ping-pong. If a verdict is missing from `next`, the item goes to `next.error`, and if that is missing too, to `failed`.
 
-[workflows/story.yaml](workflows/story.yaml): `plan` (только чтение) → `implement` (с verify) → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (человек). `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (human). `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
 
-Планировщик пишет артефакт `planner`: подход, файлы, тест-план, риски. Implementer следует этому плану, а ревьюер сверяет с ним результат. Если нужны решения человека (`needs_clarification`), item идёт в `clarify`. Ответ человека возвращает его в `plan`, и планировщик продолжает свою сессию уже с ответом. Если story не помещается в один PR (`too_big`), она уходит в `needs_human` с предложением, как её разбить; оттуда её можно отправить в `replan` с комментарием. План утверждается без человека, а если он нужен, можно сделать отдельный вариант workflow с состоянием `approve_plan`.
+The planner writes a `planner` artifact: approach, files, test plan, risks. The implementer follows the plan, and the reviewer checks the result against it. If human decisions are needed (`needs_clarification`), the item goes to `clarify`. The human's answer sends it back to `plan`, and the planner continues its session with the answer. If a story does not fit in one PR (`too_big`), it goes to `needs_human` with a proposed split; from there it can be sent to `replan` with a comment. The plan is approved without a human; if you want one, make a workflow variant with an `approve_plan` state.
 
-**CI-gate.** `check: ci` раз в `HARNESS_CHECKS_POLL_SECONDS` смотрит GitHub check runs и commit statuses на запушенном head-коммите PR. Если что-то упало, item возвращается в `implement`. Артефакт `ci` содержит имена упавших проверок, ссылки и хвост лога GitHub Actions. После фикса PR обновляется тем же push'ем. Если за `grace_seconds` не появилось ни одной проверки, это `no_checks`: в story такой item сразу идёт на merge. Если за `timeout_seconds` нет результата, item уходит к человеку.
+**CI gate.** `check: ci` looks at GitHub check runs and commit statuses on the PR's pushed head commit every `HARNESS_CHECKS_POLL_SECONDS`. If something fails, the item goes back to `implement`. The `ci` artifact contains the names of the failed checks, links and the tail of the GitHub Actions log. After the fix, the same push updates the PR. If no checks appear within `grace_seconds`, the result is `no_checks`: in a story, such an item goes straight to merge. If there is no result within `timeout_seconds`, the item goes to a human.
 
-Шаги передают друг другу **артефакты**: итог implementer'а, ревью, комментарии человека, ошибки. Каждый следующий промпт получает последнюю версию каждого артефакта. Workspace (clone и ветка `agent/<kind>-<id>`) общий для всех шагов item'а.
+Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps.
 
-| Метод | Путь | |
+| Method | Path | |
 |---|---|---|
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
 | `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
-| `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed |
-| `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
-| `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |
+| `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |
+| `GET` | `/projects/{slug}/inbox` | Open requests to a human |
+| `GET` | `/items/{id}` | Item, transition history, runs, artifacts, open request |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
-| `POST` | `/requests/{id}/answer` | `{option, comment?}`; комментарий становится артефактом для следующего агента |
-| `GET` | `/scheduler` | Занятые слоты, очередь, ёмкость и её причина, состояние окон подписки |
-| `POST` | `/scheduler/pause`, `/scheduler/resume` | Остановить или возобновить выдачу новых agent-шагов; уже работающие доработают |
+| `POST` | `/requests/{id}/answer` | `{option, comment?}`; the comment becomes an artifact for the next agent |
+| `GET` | `/scheduler` | Busy slots, queue, capacity and its reason, subscription window state |
+| `POST` | `/scheduler/pause`, `/scheduler/resume` | Stop or resume handing out new agent steps; running ones finish |
 
-**Scheduler.** Agent-шаги не уходят в Celery сразу, а ждут в очереди с приоритетом: сначала больший `priority` item'а, при равном — FIFO. Выдаются, только если есть слот: всего не больше `HARNESS_MAX_AGENTS`, на один проект не больше `HARNESS_MAX_AGENTS_PER_PROJECT`. Темп задают окна подписки, о которых Claude Code сообщает `rate_limit`-событиями (статус, загрузка, время сброса):
-- `rejected` или загрузка ≥ `HARNESS_QUOTA_PAUSE_AT` → новых шагов нет до сброса окна;
-- загрузка ≥ `HARNESS_QUOTA_THROTTLE_AT` или `allowed_warning` → один агент;
-- недельные окна не расходуются быстрее, чем идёт неделя: допустимо использовать прошедшую долю недели плюс `HARNESS_QUOTA_PACE_SLACK`.
+**Scheduler.** Agent steps do not go to Celery right away; they wait in a priority queue: higher item `priority` first, FIFO on ties. A step is handed out only when a slot is free: at most `HARNESS_MAX_AGENTS` in total and at most `HARNESS_MAX_AGENTS_PER_PROJECT` per project. The pace follows the subscription windows that Claude Code reports through `rate_limit` events (status, utilization, reset time):
+- `rejected` or utilization ≥ `HARNESS_QUOTA_PAUSE_AT` → no new steps until the window resets;
+- utilization ≥ `HARNESS_QUOTA_THROTTLE_AT` or `allowed_warning` → one agent;
+- weekly windows are not spent faster than the week goes by: allowed usage is the elapsed share of the week plus `HARNESS_QUOTA_PACE_SLACK`.
 
-Если запуск упёрся в лимит, это не ошибка работы. Шаг возвращается в очередь без эскалации и после сброса окна продолжает ту же сессию. Action- и check-шаги Claude не используют и идут мимо scheduler'а. Concurrency воркера Celery должна быть не меньше `HARNESS_MAX_AGENTS`; в compose она равна 6.
+A run that hits the limit is not a work failure. The step returns to the queue without escalation and continues the same session after the window resets. Action and check steps do not use Claude and bypass the scheduler. Celery worker concurrency must be at least `HARNESS_MAX_AGENTS`; in compose it is 6.
 
-Надёжность. Каждый переход — это compare-and-set по `work_items.version`. Шаг воркера (`harness.step`) и запрос к человеку привязаны к версии item'а, поэтому повторная доставка, двойной клик или устаревший ответ ничего не сдвигают. Agent-шаг выполняется как обычная harness-задача: с её событиями (`/tasks/{task_id}/stream`), отменой, lease и verify-циклом. `harness.reconcile` в beat заново ставит в очередь шаги, которые потеряли enqueue или воркер которых упал до того, как сообщил вердикт.
+Reliability. Every transition is a compare-and-set on `work_items.version`. A worker step (`harness.step`) and a human request are bound to the item's version, so a redelivery, a double click or a stale answer moves nothing. An agent step runs as a regular harness task, with its events (`/tasks/{task_id}/stream`), cancellation, lease and verify loop. `harness.reconcile` in beat re-enqueues steps that lost their enqueue or whose worker died before reporting a verdict.
 
-Состояние фабрики хранится в Postgres. Redis по-прежнему держит очередь, события агентов и lease. Схема создаётся при старте API (`create_all`); Alembic появится вместе с первой миграцией.
+Factory state lives in Postgres. Redis still holds the queue, agent events and leases. The schema is created at API startup (`create_all`); Alembic will arrive with the first migration.
 
-## Как работает issue-флоу
+## How the issue flow works
 
-1. **Триггер.** Задачу ставит `POST /issues/run` или beat, который раз в `HARNESS_ISSUE_POLL_SECONDS` опрашивает `HARNESS_ISSUE_REPOS` и забирает issues с меткой `agent`. Ставить метки могут только участники с правами triage, поэтому любой посторонний не сможет натравить агента на свой текст.
-2. **Подготовка.** Harness клонирует репозиторий и создаёт ветку `agent/issue-N`. Метка меняется на `agent:in-progress`.
-3. **Агент.** Получает текст issue, комментарии к нему и «definition of done»: тесты, линтеры, документация, коммиты. Делать push агенту запрещено.
-4. **Verify.** Harness сам запускает `verify_command`. Если команда упала, сессия возобновляется с её выводом, до `verify_attempts` раз.
-5. **Публикация.** Harness пушит ветку (`--force-with-lease`), открывает PR с `Closes #N`, оставляет комментарий в issue и ставит метку `agent:pr-open`. При ошибке ставится `agent:failed` и пишется комментарий с причиной.
+1. **Trigger.** A task is created by `POST /issues/run` or by beat, which polls `HARNESS_ISSUE_REPOS` every `HARNESS_ISSUE_POLL_SECONDS` and picks up issues labelled `agent`. Only collaborators with triage rights can set labels, so an outsider cannot point the agent at their own text.
+2. **Preparation.** The harness clones the repository and creates branch `agent/issue-N`. The label changes to `agent:in-progress`.
+3. **Agent.** Gets the issue text, its comments and a "definition of done": tests, linters, docs, commits. The agent is not allowed to push.
+4. **Verify.** The harness runs `verify_command` itself. If it fails, the session resumes with its output, up to `verify_attempts` times.
+5. **Publish.** The harness pushes the branch (`--force-with-lease`), opens a PR with `Closes #N`, comments on the issue and sets the `agent:pr-open` label. On error it sets `agent:failed` and comments with the reason.
 
-Push идёт в ветку с PR, а не в `main`: production-готовность подтверждают CI и ревью.
+The push goes to the PR branch, not to `main`: CI and review confirm production readiness.
 
-## Надёжность
+## Reliability
 
-- `acks_late` + `prefetch=1`: если воркер упал, сообщение доставляется повторно. Повторная доставка не перезапускает агента: атомарный claim (Lua) переводит такую задачу в `failed: worker lost`.
-- Lease с heartbeat и reaper в beat: задачи упавших воркеров помечаются failed примерно через 30 секунд, а не через `visibility_timeout`.
-- `session_id` сохраняется сразу при старте. Отменённую, упавшую или зависшую по таймауту задачу можно продолжить через `parent_task_id`.
-- Готовые задачи и их события хранятся в Redis `HARNESS_RESULT_TTL_SECONDS` (по умолчанию 7 дней).
+- `acks_late` + `prefetch=1`: if a worker dies, the message is redelivered. Redelivery does not restart the agent: an atomic claim (Lua) moves such a task to `failed: worker lost`.
+- Lease with heartbeat and a reaper in beat: tasks of dead workers are marked failed in about 30 seconds rather than after `visibility_timeout`.
+- `session_id` is saved right at startup. A cancelled, failed or timed-out task can be continued via `parent_task_id`.
+- Finished tasks and their events are kept in Redis for `HARNESS_RESULT_TTL_SECONDS` (7 days by default).
 
-## Безопасность
+## GitHub App
 
-У агента есть Bash, а текст issue может прийти от постороннего человека. Учитывайте следующее:
-- воркер работает в контейнере под непривилегированным пользователем;
-- GitHub-токен используется только harness'ом: он передаётся через `-c http.extraheader`, а не хранится в `.git/config`, и удаляется из env воркер-процессов;
-- `allowed_tools`, `max_turns`, `max_budget_usd` и timeout ограничивают каждую задачу;
-- для продакшена стоит изолировать каждую задачу отдельно: свой контейнер или microVM, egress-фильтр. Можно также включить `sandbox` в `ClaudeAgentOptions`.
+Instead of a single PAT, the project can work through a GitHub App: access only to the repositories selected at install time, and 1-hour tokens.
+
+1. Create an App at github.com/settings/apps/new: permissions Contents, Issues, Pull requests (read/write), Checks and Actions (read), access "Only on this account". Set Setup URL to `<host>/board` and enable "Redirect on update".
+2. Generate a private key and set `HARNESS_GITHUB_APP_ID`, `HARNESS_GITHUB_APP_SLUG`, `HARNESS_GITHUB_APP_PRIVATE_KEY` (or `_FILE`).
+3. On the board, click "+ project", then "Install the app / change repositories". After installing, click "refresh", pick the installation and the repository.
+
+A token is issued for one project repository and reissued 5 minutes before it expires. The lifetime (1 hour) is set by GitHub and cannot be changed. Projects without an installation use `HARNESS_GITHUB_TOKEN`. The issue poller (`HARNESS_ISSUE_REPOS`) and `/issues/run` work only with it for now.
+
+## Security
+
+The agent has Bash, and issue text can come from an outsider. Keep in mind:
+- the worker runs in a container as an unprivileged user;
+- the GitHub token (or the GitHub App private key) is used only by the harness: it is passed via `-c http.extraheader` rather than stored in `.git/config`, and is removed from the worker processes' env;
+- `allowed_tools`, `max_turns`, `max_budget_usd` and a timeout bound each task;
+- for production, isolate each task: its own container or microVM, an egress filter. You can also enable `sandbox` in `ClaudeAgentOptions`.

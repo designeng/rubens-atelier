@@ -54,7 +54,7 @@ async def run_step(
     store: TaskStore,
     worker_id: str,
     runner: AgentRunner = run_claude,
-    github_factory: Callable[[], GitHub] = GitHub,
+    github_factory: Callable[[Project], GitHub] = GitHub.for_project,
 ) -> None:
     db = engine.db
     scheduler = engine.scheduler
@@ -67,7 +67,7 @@ async def run_step(
             return
         project = await s.get(Project, item.project_id)
 
-    gh = github_factory()
+    gh = github_factory(project)
     try:
         cwd = await ensure_workspace(gh, project, item)
         async with db.session() as s:
@@ -107,7 +107,7 @@ async def ensure_workspace(gh: GitHub, project: Project, item: WorkItem) -> Path
     base = project.base_branch or (await gh.get_repo(project.repo))["default_branch"]
     branch = f"agent/{item.kind}-{item.id[:8]}"
     cwd.parent.mkdir(parents=True, exist_ok=True)
-    await gitops.clone(gh.clone_url(project.repo), cwd, ref=base, token=gh.token)
+    await gitops.clone(gh.clone_url(project.repo), cwd, ref=base, token=await gh.git_token())
     await gitops.configure_identity(cwd, settings.git_author_name, settings.git_author_email)
     await gitops.checkout_new_branch(cwd, branch)
     item.branch, item.base_branch = branch, base

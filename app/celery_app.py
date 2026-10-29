@@ -50,9 +50,10 @@ if settings.issue_repos:
 
 @worker_process_init.connect
 def _scrub_secrets(**_):
-    # Settings are already loaded; drop the GitHub token from the env the agent's
+    # Settings are already loaded; drop the GitHub credentials from the env the agent's
     # subprocesses (Claude Code, its Bash tool, verify commands) inherit.
-    os.environ.pop("HARNESS_GITHUB_TOKEN", None)
+    for name in ("HARNESS_GITHUB_TOKEN", "HARNESS_GITHUB_APP_PRIVATE_KEY"):
+        os.environ.pop(name, None)
 
 
 def _redis() -> Redis:
