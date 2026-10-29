@@ -2,6 +2,8 @@
 message stream into harness events."""
 
 import dataclasses
+import json
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,12 +23,17 @@ from claude_agent_sdk import (
     query,
 )
 
-from .config import settings
+from .config import ROOT, settings
 from .models import TaskCreate
 
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 MAX_EVENT_STR = 8_000
+
+# `uv run --env-file .env` exports the harness's config (GitHub token, App key) and its own
+# virtualenv into the worker, and Claude Code inherits the worker's environment.
+HIDDEN_ENV_PREFIXES = ("HARNESS_",)
+HIDDEN_ENV = ("GITHUB_TOKEN", "GH_TOKEN", "VIRTUAL_ENV")
 
 
 @dataclass
@@ -63,6 +70,33 @@ def effective_tools(allowed: list[str]) -> list[str]:
     return [t for t in allowed if t != "Bash"] + [f"Bash({c}:*)" for c in settings.bash_allowed_commands]
 
 
+def uv_cache_dir() -> Path:
+    """Shared by all workspaces, outside them so it is never committed."""
+    path = (settings.workspaces_root / ".cache" / "uv").resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def agent_env() -> dict[str, str]:
+    """The SDK merges `env` over the worker's environment and can't drop a variable, so the
+    hidden ones are blanked. The uv cache moves to a directory the sandbox lets the agent write."""
+    env = {k: "" for k in os.environ if k.startswith(HIDDEN_ENV_PREFIXES) or k in HIDDEN_ENV}
+    env["UV_CACHE_DIR"] = str(uv_cache_dir())
+    return env
+
+
+def secret_read_rules() -> list[str]:
+    """Deny rules for the harness's secret files. Workspaces may sit inside the harness checkout,
+    and the sandbox only confines writes, so without these `cat ../../../.env` would work.
+    Read deny rules cover the Read tool and, under the sandbox, Bash as well (only when they
+    come from settings: `--disallowedTools` rules don't reach the sandbox)."""
+    paths = [ROOT / ".env", Path(".env").resolve()]
+    if settings.github_app_private_key_file:
+        paths.append(settings.github_app_private_key_file.resolve())
+    # `//` marks an absolute path in a permission rule.
+    return [f"Read(/{p})" for p in dict.fromkeys(paths)]
+
+
 def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgentOptions:
     system_prompt: dict[str, Any] = {"type": "preset", "preset": "claude_code"}
     if spec.system_prompt:
@@ -70,6 +104,8 @@ def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgen
     return ClaudeAgentOptions(
         cwd=str(cwd),
         resume=resume,
+        env=agent_env(),
+        add_dirs=[uv_cache_dir()],
         system_prompt=system_prompt,
         # Load the repo's CLAUDE.md / .claude/settings.json, but not the host user's settings.
         setting_sources=["project"],
@@ -83,6 +119,7 @@ def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgen
         if settings.sandbox
         else None,
         disallowed_tools=spec.disallowed_tools or [],
+        settings=json.dumps({"permissions": {"deny": secret_read_rules()}}),
         max_turns=spec.max_turns or settings.default_max_turns,
         max_budget_usd=spec.max_budget_usd or settings.default_max_budget_usd,
         output_format={"type": "json_schema", "schema": spec.output_schema} if spec.output_schema else None,

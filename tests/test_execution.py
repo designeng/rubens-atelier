@@ -1,7 +1,8 @@
 import asyncio
+import json
 from pathlib import Path
 
-from app.config import settings
+from app.config import ROOT, settings
 from app.execution import WORKER_LOST, execute_task, reap_orphans
 from app.models import TaskCreate, TaskStatus
 from app.runner import AgentOutcome
@@ -9,23 +10,30 @@ from app.store import lease_key
 
 
 class FakeRunner:
-    """Stands in for run_claude; `script` receives (call_index, spec, cwd, resume)."""
+    """Stands in for run_claude; `script` receives (call_index, spec, cwd, resume).
 
-    def __init__(self, script=None, delay: float = 0):
+    Like the SDK, a resumed session keeps its id and reports its cost as a running total."""
+
+    def __init__(self, script=None, delay: float = 0, session_costs: dict[str, float] | None = None):
         self.calls: list[dict] = []
         self.script = script
         self.delay = delay
+        self.session_costs = session_costs if session_costs is not None else {}
 
     async def __call__(self, spec, *, cwd: Path, resume, emit):
         n = len(self.calls)
         self.calls.append({"prompt": spec.prompt, "cwd": cwd, "resume": resume})
-        await emit("session", {"session_id": f"sess-{n}"})
+        session = resume or f"sess-{n}"
+        self.session_costs[session] = self.session_costs.get(session, 0.0) + 0.5
+        await emit("session", {"session_id": session})
         await emit("text", {"text": f"working {n}"})
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.script:
             self.script(n, spec, cwd, resume)
-        return AgentOutcome(session_id=f"sess-{n}", result=f"done {n}", is_error=False, cost_usd=0.5, num_turns=3)
+        return AgentOutcome(
+            session_id=session, result=f"done {n}", is_error=False, cost_usd=self.session_costs[session], num_turns=3
+        )
 
 
 async def test_happy_path(store):
@@ -104,13 +112,16 @@ async def test_verify_gives_up(store):
 
 
 async def test_follow_up_reuses_workspace_and_session(store):
+    costs: dict[str, float] = {}
     first = await store.create(TaskCreate(prompt="step 1"))
-    await execute_task(first, store, "w1", runner=FakeRunner())
+    await execute_task(first, store, "w1", runner=FakeRunner(session_costs=costs))
     second = await store.create(TaskCreate(prompt="step 2", parent_task_id=first))
-    runner = FakeRunner()
+    runner = FakeRunner(session_costs=costs)
     await execute_task(second, store, "w1", runner=runner)
     assert runner.calls[0]["resume"] == "sess-0"
     assert runner.calls[0]["cwd"] == Path((await store.get(first)).workspace)
+    # The SDK reports $1.00 for the resumed session; the follow-up only spent the second half.
+    assert (await store.get(second)).cost_usd == 0.5
 
 
 async def test_redelivery_after_worker_death_fails_instead_of_rerunning(store, redis):
@@ -198,6 +209,21 @@ def test_bash_allowlist_and_sandbox(monkeypatch):
     assert "Bash" not in opts.allowed_tools
     assert {"Bash(pytest:*)", "Bash(git status:*)", "Read"} <= set(opts.allowed_tools)
     assert opts.sandbox["enabled"] and not opts.sandbox["allowUnsandboxedCommands"]
+    # Secrets are denied through settings, the only place the sandbox takes read rules from.
+    deny = json.loads(opts.settings)["permissions"]["deny"]
+    assert f"Read(/{ROOT / '.env'})" in deny
+
+
+def test_agent_env_hides_harness_config(monkeypatch):
+    from app.runner import agent_env, uv_cache_dir
+
+    monkeypatch.setenv("HARNESS_GITHUB_TOKEN", "secret")
+    monkeypatch.setenv("VIRTUAL_ENV", "/worker/.venv")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = agent_env()
+    assert env["HARNESS_GITHUB_TOKEN"] == "" and env["VIRTUAL_ENV"] == ""
+    assert "PATH" not in env  # inherited unchanged
+    assert env["UV_CACHE_DIR"] == str(uv_cache_dir()) and uv_cache_dir().is_dir()
 
 
 def test_error_names_the_last_failed_tool_call():
