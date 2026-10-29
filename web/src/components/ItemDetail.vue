@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { ArtifactOut, GitSnapshot } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
-import { todoMark } from "../format";
+import { rerunReasons, todoMark } from "../format";
 import ProgressBlock from "./ProgressBlock.vue";
 import SessionView from "./SessionView.vue";
 
@@ -114,6 +114,8 @@ watch(
   () => it.value?.id,
   () => (sessionTask.value = null),
 );
+// A step that ran again shows what sent the story back, e.g. "implement ← sync_base: conflict".
+const reruns = computed(() => rerunReasons(it.value?.runs ?? [], it.value?.events ?? []));
 const toggleSession = (taskId: string) => (sessionTask.value = sessionTask.value === taskId ? null : taskId);
 
 // The model picker saves right away; "" is the default (the step's model, else the harness's).
@@ -261,7 +263,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <p v-if="!artifacts.length" class="muted">none yet</p>
       <h4>Runs</h4>
       <div v-for="r in it.runs" :key="r.id">
-        {{ r.state }} · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> · result: {{ r.verdict }}</template>
+        {{ r.state }}<span v-if="reruns.get(r.id)" class="muted"> ← {{ reruns.get(r.id) }}</span> · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> · result: {{ r.verdict }}</template>
         <template v-if="r.cost_usd != null"> · ${{ r.cost_usd.toFixed(2) }}</template>
         <span class="muted">task {{ r.task_id.slice(0, 8) }}</span>
         <button class="link" @click="toggleSession(r.task_id)">

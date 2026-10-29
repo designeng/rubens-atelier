@@ -1,4 +1,4 @@
-import type { Attention, Progress, Todo } from "./api/types";
+import type { Attention, EventOut, Progress, RunOut, Todo } from "./api/types";
 
 export function elapsed(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return "";
@@ -59,4 +59,20 @@ export function turnPercent(p: Progress): number | null {
 
 export function todoMark(status: Todo["status"]): string {
   return status === "completed" ? "☑" : status === "in_progress" ? "▸" : "☐";
+}
+
+// Why a step ran again: for every run after the first of its step, the transition that sent the
+// story back into it ("sync_base: conflict", "review: changes_requested"), keyed by run id.
+export function rerunReasons(runs: RunOut[], events: EventOut[]): Map<string, string> {
+  const reasons = new Map<string, string>();
+  const seen = new Set<string>();
+  for (const r of runs) {
+    if (seen.has(r.state)) {
+      const started = Date.parse(r.created_at);
+      const entered = events.filter((e) => e.to_state === r.state && Date.parse(e.at) <= started).at(-1);
+      if (entered?.from_state) reasons.set(r.id, [entered.from_state, entered.verdict].filter(Boolean).join(": "));
+    }
+    seen.add(r.state);
+  }
+  return reasons;
 }

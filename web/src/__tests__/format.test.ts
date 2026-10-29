@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Progress } from "../api/types";
-import { attentionBadge, canRunNow, elapsed, isRunning, progressSummary, todoMark, turnPercent } from "../format";
+import type { EventOut, Progress, RunOut } from "../api/types";
+import { attentionBadge, canRunNow, elapsed, isRunning, progressSummary, rerunReasons, todoMark, turnPercent } from "../format";
 
 const now = Date.parse("2026-10-29T12:00:00Z");
 const ago = (s: number) => new Date(now - s * 1000).toISOString();
@@ -102,5 +102,32 @@ describe("turnPercent", () => {
 describe("todoMark", () => {
   it("marks each status", () => {
     expect([todoMark("completed"), todoMark("in_progress"), todoMark("pending")]).toEqual(["☑", "▸", "☐"]);
+  });
+});
+
+describe("rerunReasons", () => {
+  const run = (id: string, state: string, at: string): RunOut => ({
+    id, version: 1, state, role: state, task_id: id, status: "succeeded", verdict: "done", cost_usd: null, created_at: at, error: null,
+  });
+  const ev = (from_state: string | null, to_state: string, verdict: string | null, at: string): EventOut => ({
+    from_state, to_state, verdict, actor: "worker", at,
+  });
+
+  it("names the transition that sent a story back into a step it already ran", () => {
+    const runs = [
+      run("p", "plan", "2026-10-29T15:09:54Z"),
+      run("i1", "implement", "2026-10-29T21:18:35Z"),
+      run("i2", "implement", "2026-10-29T21:19:30.4Z"),
+      run("r", "review", "2026-10-29T21:20:18Z"),
+    ];
+    const events = [
+      ev(null, "plan", null, "2026-10-29T15:08:58Z"),
+      ev("plan", "implement", "ready", "2026-10-29T15:10:31Z"),
+      ev("implement", "sync_base", "done", "2026-10-29T21:19:15Z"),
+      ev("sync_base", "implement", "conflict", "2026-10-29T21:19:17.552Z"),
+      ev("implement", "sync_base", "done", "2026-10-29T21:19:50Z"),
+      ev("sync_base", "review", "done", "2026-10-29T21:19:51Z"),
+    ];
+    expect([...rerunReasons(runs, events)]).toEqual([["i2", "sync_base: conflict"]]);
   });
 });
