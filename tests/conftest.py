@@ -60,4 +60,10 @@ def client(redis):
             c.execs.append(exec_id)
 
         app.state.exec_enqueue = exec_enqueue
+        c.checks_enqueued = []
+
+        async def checks_enqueue(item_ids):
+            c.checks_enqueued.append(item_ids)
+
+        app.state.checks_enqueue = checks_enqueue
         yield c

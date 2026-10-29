@@ -1,15 +1,18 @@
 """Check states: external conditions the workflow waits for without holding a worker.
 
-`poll_checks` (celery beat) evaluates every item sitting in a check state, and in a human
-state that `watch`es a check (the person may answer first; whoever does wins). A check
+`poll_checks` evaluates items sitting in a check state, and in a human state that `watch`es
+a check (the person may answer first; whoever does wins). GitHub webhooks (app.webhooks)
+trigger it for just the items an event concerns; celery beat runs it over all of them as a
+fallback for lost deliveries and for time-based verdicts (no_checks, timeout). A check
 returns a verdict once it knows the outcome, or None to be asked again next poll;
 details (e.g. which CI jobs failed and their log tails) become an artifact that the
 next agent sees.
 """
 
+import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -114,13 +117,33 @@ async def merge(ctx: CheckContext) -> tuple[str | None, str]:
 CHECKS: dict[str, Check] = {"ci": ci, "merge": merge}
 
 
-async def poll_checks(engine: Engine, github_factory: Callable[[Project], GitHub] = GitHub.for_project) -> list[tuple[str, str]]:
-    """Evaluate every item in a check state; returns (item_id, verdict) for those that moved."""
-    check_states = {n for wf in engine.workflows.values() for n, st in wf.states.items() if st.check or st.watch}
-    if not check_states:
+async def celery_enqueue(item_ids: list[str]) -> None:
+    """Evaluate just these items on a worker (see app.webhooks)."""
+    from .celery_app import poll_checks as task
+
+    await asyncio.to_thread(task.apply_async, args=[item_ids])
+
+
+def watched_states(engine: Engine) -> set[str]:
+    """Names of the states whose items `poll_checks` evaluates."""
+    return {n for wf in engine.workflows.values() for n, st in wf.states.items() if st.check or st.watch}
+
+
+async def poll_checks(
+    engine: Engine,
+    github_factory: Callable[[Project], GitHub] = GitHub.for_project,
+    item_ids: Collection[str] | None = None,
+) -> list[tuple[str, str]]:
+    """Evaluate every item in a check state (only `item_ids`, if given); returns
+    (item_id, verdict) for those that moved."""
+    check_states = watched_states(engine)
+    if not check_states or item_ids is not None and not item_ids:
         return []
+    query = select(WorkItem).where(WorkItem.state.in_(check_states))
+    if item_ids is not None:
+        query = query.where(WorkItem.id.in_(item_ids))
     async with engine.db.session() as s:
-        items = (await s.scalars(select(WorkItem).where(WorkItem.state.in_(check_states)))).all()
+        items = (await s.scalars(query)).all()
         projects = {p.id: p for p in await s.scalars(select(Project).where(Project.id.in_({i.project_id for i in items})))}
     if not items:
         return []

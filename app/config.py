@@ -27,8 +27,13 @@ class Settings(BaseSettings):
     quota_pace_slack: float = 0.1
     # A dispatched step that hasn't started its agent within this time gives its slot back.
     dispatch_ttl_seconds: int = 1800
-    # How often check states (CI) are polled.
+    # How often check states (CI, merge) are polled when GitHub webhooks are off.
     checks_poll_seconds: int = 30
+    # Secret of the GitHub webhook (POST /github/webhook). Set = webhooks on: events trigger
+    # the checks and polling slows down to `checks_fallback_poll_seconds`. Empty = endpoint off.
+    github_webhook_secret: str = ""
+    # Polling with webhooks on: catches lost deliveries and time-based verdicts (no_checks, timeout).
+    checks_fallback_poll_seconds: int = 300
     # Optional bearer token for the HTTP API. Empty = auth disabled (local dev only).
     api_token: str = ""
 
