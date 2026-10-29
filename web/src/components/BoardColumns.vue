@@ -6,7 +6,7 @@ import ItemCard from "./ItemCard.vue";
 
 const COLS: [Column, string][] = [
   ["backlog", "Backlog"],
-  ["working", "Agents working"],
+  ["working", "In progress"],
   ["needs_human", "Needs you"],
   ["done", "Done"],
   ["failed", "Failed / cancelled"],
