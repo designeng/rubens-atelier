@@ -38,6 +38,10 @@
   dialog input, dialog select { width:100%; }
   #detail pre.error { border:1px solid var(--bad); color:var(--bad); }
   .run-error { color:var(--bad); font:12px ui-monospace, monospace; white-space:pre-wrap; margin:2px 0 6px 12px; }
+  .attn { font-size:12px; margin-top:6px; color:var(--warn); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .attn.error { color:var(--bad); }
+  .callout { border:1px solid var(--warn); border-radius:6px; padding:6px 10px; margin:8px 0; white-space:pre-wrap; max-height:200px; overflow:auto; }
+  .callout.error { border-color:var(--bad); }
   .muted { color:var(--muted); } #err { color:var(--bad); }
 </style>
 </head>
@@ -90,10 +94,14 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const COLS = { backlog: "Backlog", working: "Agents working", needs_human: "Needs you", done: "Done", failed: "Failed / cancelled" };
+// attention: the item's `attention` from the API (only set while it waits for a human).
+const attnTitle = (a) => a.kind === "error" ? "The last step failed" : `Open questions from the ${a.from} summary`;
+const attnLine = (a) => `${a.kind === "error" ? "⚠ failed: " : "? "}${a.text.split("\n").find((l) => l.trim()) || ""}`;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
 const store = { get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
                 set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 let openItem = null;
+let git = { id: null, diff: false, text: "" };  // the on-demand git view of the open item
 let projects = [];
 
 async function api(path, opts = {}) {
@@ -141,7 +149,8 @@ async function refresh() {
   $("board").innerHTML = Object.entries(COLS).map(([col, name]) => `
     <section class="col" data-col="${col}"><h2>${name} · ${board[col].length}</h2>
       ${board[col].map((i) => `<div class="card" data-id="${i.id}"><div>${esc(i.title)}</div>
-        <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div>${progressHtml(i.progress)}</div>`).join("")}
+        <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div>${progressHtml(i.progress)}
+        ${i.attention ? `<div class="attn ${esc(i.attention.kind)}" title="${esc(i.attention.text)}">${esc(attnLine(i.attention))}</div>` : ""}</div>`).join("")}
     </section>`).join("");
   if (openItem) await showItem(openItem);
   const sc = await api("/scheduler");
@@ -158,10 +167,13 @@ async function showItem(id) {
   const req = it.open_request;
   const keep = same && $("comment") && { value: $("comment").value, focus: document.activeElement === $("comment"),
     at: [$("comment").selectionStart, $("comment").selectionEnd], scroll: $("detail").scrollTop };
+  const canOpenPr = !!it.branch && (it.column === "working" || it.column === "needs_human") && it.state !== "publish";
   const latest = {}; it.artifacts.forEach((a) => { latest[a.name] = a; });
   $("detail").innerHTML = `
     <div class="row"><button id="close">✕</button>
       ${it.state === null ? '<button class="primary" id="start">Start</button>' : ""}
+      ${canOpenPr ? `<button id="openPr" title="Push the branch and ${it.pr_url ? "update" : "open"} the PR now, skipping review and CI">${it.pr_url ? "Update PR" : "Create PR"}</button>` : ""}
+      ${it.column === "failed" && it.state !== null ? '<button id="reopen" title="Back to the backlog: edit the story, then Start again">To backlog</button>' : ""}
       ${it.column === "working" || it.column === "needs_human" ? '<button id="cancel">Cancel</button>' : ""}</div>
     <h3>${esc(it.title)}</h3>
     <div class="row"><label for="itModel">Model</label>
@@ -171,10 +183,13 @@ async function showItem(id) {
       ${it.branch ? ` · ${esc(it.branch)}` : ""} ${it.pr_url ? ` · <a href="${esc(it.pr_url)}" target="_blank">PR</a>` : ""}</p>
     ${it.progress ? `<h4>Now</h4>${progressHtml(it.progress)}
       ${it.progress.todos ? `<ul class="todos">${it.progress.todos.map((t) => `<li>${t.status === "completed" ? "☑" : t.status === "in_progress" ? "▸" : "☐"} ${esc(t.content)}</li>`).join("")}</ul>` : ""}` : ""}
+    ${it.attention ? `<div class="callout ${esc(it.attention.kind)}"><b>${esc(attnTitle(it.attention))}</b>\n${esc(it.attention.text)}</div>` : ""}
     ${it.body ? `<pre>${esc(it.body)}</pre>` : ""}
     ${req ? `<h4>Decision needed</h4><p>${esc(req.question)}</p>
       <textarea id="comment" rows="3" style="width:100%" placeholder="Comment for the next agent (optional)"></textarea>
       <div class="row">${req.options.map((o) => `<button class="primary" data-answer="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
+    ${it.branch ? `<h4>Workspace</h4><div class="row"><button id="gitStatus">Git status</button><button id="gitDiff">Git status + diff</button></div>
+      ${git.id === id ? `<pre id="gitOut">${esc(git.text)}</pre>` : ""}` : ""}
     <h4>Artifacts</h4>${Object.values(latest).map((a) => `<p><b${a.name === "error" ? ' style="color:var(--bad)"' : ""}>${esc(a.name)}</b></p><pre${a.name === "error" ? ' class="error"' : ""}>${esc(a.content)}</pre>`).join("") || '<p class="muted">none yet</p>'}
     <h4>Runs</h4>${it.runs.map((r) => `<div>${esc(r.state)} · ${esc(r.role)} · ${esc(r.status)}${r.verdict ? ` → ${esc(r.verdict)}` : ""}
       ${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}` : ""} <span class="muted">task ${esc(r.task_id.slice(0, 8))}</span>
@@ -186,10 +201,21 @@ async function showItem(id) {
     $("detail").scrollTop = keep.scroll;
     if (keep.focus) { $("comment").focus(); $("comment").setSelectionRange(...keep.at); }
   }
-  $("close").onclick = () => { openItem = null; $("detail").classList.remove("open"); };
+  $("close").onclick = () => { openItem = null; git = { id: null, diff: false, text: "" }; $("detail").classList.remove("open"); };
   $("itModelSave").onclick = () => api(`/items/${id}`, { method: "PATCH", body: JSON.stringify({ model: $("itModel").value.trim() || null }) })
     .then(() => showItem(id)).catch(fail);
   if ($("start")) $("start").onclick = () => api(`/items/${id}/start`, { method: "POST" }).then(refresh).catch(fail);
+  if ($("openPr")) $("openPr").onclick = () => {
+    if (it.column === "working" && !confirm("An agent is working on this story. Stop it and open the PR from what is committed so far?")) return;
+    api(`/items/${id}/open-pr`, { method: "POST" }).then(refresh).catch(fail);
+  };
+  const loadGit = (diff) => api(`/items/${id}/git?diff=${diff}`).then((g) => {
+    git = { id, diff, text: [`## ${g.branch}${g.merge_in_progress ? "  (merge in progress)" : ""}`, g.status, `## HEAD\n${g.head}`,
+      `## commits on top of base\n${g.commits || "(none)"}`, `## changes against base\n${g.stat || "(none)"}`, g.diff != null ? `## diff\n${g.diff}` : ""].filter(Boolean).join("\n\n") };
+    return showItem(id);
+  }).catch(fail);
+  if ($("gitStatus")) { $("gitStatus").onclick = () => loadGit(false); $("gitDiff").onclick = () => loadGit(true); }
+  if ($("reopen")) $("reopen").onclick = () => api(`/items/${id}/reopen`, { method: "POST" }).then(() => showItem(id)).then(refresh).catch(fail);
   if ($("cancel")) $("cancel").onclick = () => api(`/items/${id}/cancel`, { method: "POST" }).then(refresh).catch(fail);
   document.querySelectorAll("[data-answer]").forEach((b) => b.onclick = () =>
     api(`/requests/${req.id}/answer`, { method: "POST", body: JSON.stringify({ option: b.dataset.answer, comment: $("comment").value }) }).then(refresh).catch(fail));

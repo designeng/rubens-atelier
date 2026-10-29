@@ -127,3 +127,83 @@ def test_working_items_report_progress(client):
     assert card["progress"] == {"step": "planner", "kind": "agent", "queued": False}
     assert client.get(f"/items/{item['id']}").json()["progress"]["step"] == "planner"
     assert client.post("/projects/app/items", json={"title": "Later"}).json()["progress"] is None
+
+
+def test_attention_and_manual_open_pr(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    item = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()
+    iid, engine = item["id"], app.state.engine
+    assert client.post(f"/items/{iid}/open-pr").status_code == 409  # no branch yet
+
+    async def seed():
+        from app.db import Artifact, WorkItem
+
+        async with app.state.db.session() as s:
+            (await s.get(WorkItem, iid)).branch = "agent/story-x"
+            s.add(Artifact(item_id=iid, name="implementer", content="Done.\n\n## Open questions\n- Should CI run?\n"))
+            await s.commit()
+
+    client.portal.call(seed)
+    for verdict in ("ready", "error"):
+        client.portal.call(engine.advance, iid, client.get(f"/items/{iid}").json()["version"], verdict)
+    detail = client.get(f"/items/{iid}").json()
+    assert detail["state"] == "needs_human" and detail["attention"]["kind"] == "questions"
+    assert "Should CI run?" in detail["attention"]["text"]
+
+    # a later failure outranks the older summary
+    async def fail():
+        from app.db import Artifact
+
+        async with app.state.db.session() as s:
+            s.add(Artifact(item_id=iid, name="error", content="implement: boom"))
+            await s.commit()
+
+    client.portal.call(fail)
+    board = client.get("/projects/app/board").json()
+    assert board["needs_human"][0]["attention"] == {"kind": "error", "text": "implement: boom"}
+
+    r = client.post(f"/items/{iid}/open-pr")
+    assert r.status_code == 202 and r.json()["state"] == "publish"
+    assert client.enqueued[-1] == (iid, r.json()["version"])
+    assert client.post(f"/items/{iid}/open-pr").status_code == 409  # already publishing
+
+
+def test_item_git_view(client):
+    import subprocess
+
+    from app.execution import item_workspace
+
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    item = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()
+    iid = item["id"]
+    assert client.get(f"/items/{iid}/git").status_code == 409  # no workspace yet
+
+    cwd = item_workspace(iid)
+    cwd.mkdir(parents=True)
+
+    def git(*a):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+
+    git("init", "-b", "main")
+    (cwd / "a.txt").write_text("one\n")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-b", "agent/story-x")
+    (cwd / "a.txt").write_text("two\n")
+    git("commit", "-am", "change")
+    (cwd / "b.txt").write_text("new\n")
+
+    async def seed():
+        from app.db import WorkItem
+
+        async with app.state.db.session() as s:
+            it = await s.get(WorkItem, iid)
+            it.branch, it.base_branch = "agent/story-x", "main"
+            await s.commit()
+
+    client.portal.call(seed)
+    g = client.get(f"/items/{iid}/git").json()
+    assert g["branch"] == "agent/story-x" and "change" in g["commits"] and "a.txt" in g["stat"]
+    assert "?? b.txt" in g["status"] and "diff" not in g
+    assert "+two" in client.get(f"/items/{iid}/git?diff=true").json()["diff"]

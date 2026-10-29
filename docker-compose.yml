@@ -25,6 +25,7 @@ services:
   api:
     <<: *app
     ports: ["8000:8000"]
+    volumes: [workspaces:/workspaces:ro]  # the board's read-only git view
 
   worker:
     <<: *app

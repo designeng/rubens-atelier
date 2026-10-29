@@ -1,5 +1,6 @@
 """HTTP API of the factory: projects (tenants), work items, the Kanban board and the inbox."""
 
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -11,7 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from . import github_app
+from . import github_app, gitops
+from .execution import item_workspace
 from .db import Artifact, Database, HumanRequest, ItemEvent, Project, Run, WorkItem
 from .engine import Engine, EngineError
 from .scheduler import Scheduler
@@ -113,6 +115,8 @@ class ItemOut(Orm):
     column: Column = "backlog"
     # Only for items in the working column: what is happening right now (see _progress).
     progress: dict[str, Any] | None = None
+    # Only for items waiting for a human: why they are stuck (see _attention).
+    attention: dict[str, str] | None = None
 
 
 class RunOut(Orm):
@@ -199,10 +203,44 @@ async def _progress(engine: Engine, s, item: WorkItem) -> dict[str, Any] | None:
     return {"step": st.agent, "kind": "agent", "task_id": run.task_id, **live}
 
 
+_OPEN_QUESTIONS = re.compile(r"^#{1,6}\s*open questions\s*:?\s*$", re.I | re.M)
+_NO_QUESTIONS = {"", "none", "none.", "n/a", "-", "no", "no open questions"}
+
+
+def _open_questions(text: str) -> str | None:
+    """The body of an 'Open questions' section of an agent summary, if it lists anything."""
+    m = _OPEN_QUESTIONS.search(text)
+    if m is None:
+        return None
+    body = re.split(r"^#{1,6}\s", text[m.end():], maxsplit=1, flags=re.M)[0].strip()
+    return body if body.lower().strip("*_ ") not in _NO_QUESTIONS else None
+
+
+async def _attention(s, item: WorkItem) -> dict[str, str] | None:
+    """Why an item waits for a human, from the newest thing the workflow produced: the error
+    of a step that failed (even if an earlier run of it succeeded), or questions an agent left
+    in its summary. None when the newest artifact is unremarkable."""
+    latest = await s.scalar(
+        select(Artifact)
+        .where(Artifact.item_id == item.id, ~Artifact.name.startswith("human:"))
+        .order_by(Artifact.created_at.desc())
+        .limit(1)
+    )
+    if latest is None:
+        return None
+    if latest.name == "error":
+        return {"kind": "error", "text": latest.content}
+    if questions := _open_questions(latest.content):
+        return {"kind": "questions", "text": questions, "from": latest.name}
+    return None
+
+
 async def _item_with_progress(engine: Engine, s, item: WorkItem) -> ItemOut:
     out = _item_out(engine, item)
     if out.column == "working":
         out.progress = await _progress(engine, s, item)
+    elif out.column == "needs_human":
+        out.attention = await _attention(s, item)
     return out
 
 
@@ -388,6 +426,20 @@ async def update_item(item_id: str, body: ItemPatch, db: Db, engine: Eng) -> Ite
         return _item_out(engine, item)
 
 
+@router.get("/items/{item_id}/git")
+async def item_git(item_id: str, db: Db, diff: bool = False) -> dict:
+    """What is in the story's workspace right now, read-only: `git status`, the commits and the
+    changes against the base branch (and with `diff=true` the full diff)."""
+    async with db.session() as s:
+        item = await s.get(WorkItem, item_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
+    cwd = item_workspace(item.id)
+    if not item.branch or not (cwd / ".git").exists():
+        raise HTTPException(status.HTTP_409_CONFLICT, "no workspace for this story (yet, or it is on another host)")
+    return await gitops.snapshot(cwd, item.base_branch, diff)
+
+
 @router.post("/items/{item_id}/start", status_code=status.HTTP_202_ACCEPTED)
 async def start_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
     try:
@@ -397,10 +449,31 @@ async def start_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
     return await _get_item_out(db, engine, item_id)
 
 
+@router.post("/items/{item_id}/open-pr", status_code=status.HTTP_202_ACCEPTED)
+async def open_pr(item_id: str, db: Db, engine: Eng) -> ItemOut:
+    """Push the branch and open the PR now (or update the open one), whatever the story is doing.
+    A running agent is cancelled; the review and CI steps are skipped."""
+    try:
+        await engine.run_action(item_id, "open_pr")
+    except EngineError as e:
+        raise _engine_error(e) from None
+    return await _get_item_out(db, engine, item_id)
+
+
 @router.post("/items/{item_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
     try:
         await engine.cancel(item_id)
+    except EngineError as e:
+        raise _engine_error(e) from None
+    return await _get_item_out(db, engine, item_id)
+
+
+@router.post("/items/{item_id}/reopen", status_code=status.HTTP_202_ACCEPTED)
+async def reopen_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
+    """Return a failed or cancelled story to the backlog, to edit it and start it again."""
+    try:
+        await engine.reopen(item_id)
     except EngineError as e:
         raise _engine_error(e) from None
     return await _get_item_out(db, engine, item_id)

@@ -98,6 +98,7 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `GET` | `/projects/{slug}/inbox` | Open requests to a human |
 | `GET` | `/items/{id}` | Item, transition history, runs, artifacts, open request |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
+| `POST` | `/items/{id}/open-pr` | Push the branch and open (or update) the PR now, skipping review and CI; a running agent is cancelled |
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; the comment becomes an artifact for the next agent |
 | `GET` | `/scheduler` | Busy slots, queue, capacity and its reason, subscription window state |
 | `POST` | `/scheduler/pause`, `/scheduler/resume` | Stop or resume handing out new agent steps; running ones finish |

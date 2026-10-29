@@ -26,6 +26,8 @@ from .workflow import Workflow
 
 log = logging.getLogger(__name__)
 
+BACKLOG = "backlog"  # to_state of the event that returns an item to the backlog
+
 Enqueue = Callable[[str, int], Awaitable[None]]
 
 
@@ -107,6 +109,52 @@ class Engine:
             await self.store.request_cancel(task_id)
         return ok
 
+    async def reopen(self, item_id: str, actor: str = "user") -> bool:
+        """Move a failed or cancelled item back to the backlog so it can be edited and started
+        again. The branch and workspace are kept; the visit limits of the steps start over."""
+        async with self.db.session() as s:
+            item = await _get(s, item_id)
+            wf = self.workflow(item.workflow)
+            if item.state is None:
+                raise EngineError("item is already in the backlog")
+            if wf.states[item.state].terminal not in ("failed", "cancelled"):
+                raise EngineError(f"only failed or cancelled items can go back to the backlog (state {item.state!r})")
+            res = await s.execute(
+                update(WorkItem)
+                .where(WorkItem.id == item.id, WorkItem.version == item.version)
+                .values(state=None, version=item.version + 1, updated_at=utcnow())
+                .execution_options(synchronize_session=False)
+            )
+            if res.rowcount != 1:
+                await s.rollback()
+                return False
+            s.add(ItemEvent(item_id=item.id, from_state=item.state, to_state=BACKLOG, verdict="reopen", actor=actor))
+            await s.commit()
+        return True
+
+    async def run_action(self, item_id: str, action: str, actor: str = "user") -> bool:
+        """Manually send a running item to the workflow's state that runs `action` (e.g. open_pr),
+        skipping the steps in between. Whatever agent is running is cancelled."""
+        async with self.db.session() as s:
+            item = await _get(s, item_id)
+            wf = self.workflow(item.workflow)
+            if item.state is None or wf.states[item.state].terminal:
+                raise EngineError(f"item is not in progress (state {item.state!r})")
+            target = next((n for n, st in wf.states.items() if st.action == action), None)
+            if target is None:
+                raise EngineError(f"workflow {wf.name!r} has no {action!r} step")
+            if item.state == target:
+                raise EngineError(f"item is already in {target!r}")
+            if not item.branch:
+                raise EngineError("nothing to publish yet: the story has no branch")
+            running = await s.scalars(select(Run.task_id).where(Run.item_id == item_id, Run.status == "running"))
+            task_ids = list(running)
+            ok = await self._enter(s, item, wf, target, "manual", actor)
+        if ok:
+            for task_id in task_ids:
+                await self.store.request_cancel(task_id)
+        return ok
+
     async def reconcile(self) -> list[str]:
         """Re-enqueue worker steps that made no progress: the enqueue was lost, or the worker
         died after its agent task finished but before it reported the verdict. Safe to
@@ -141,7 +189,10 @@ class Engine:
         if st.max_visits is not None:
             visits = await s.scalar(
                 select(func.count()).select_from(ItemEvent).where(
-                    ItemEvent.item_id == item.id, ItemEvent.to_state == target
+                    ItemEvent.item_id == item.id, ItemEvent.to_state == target,
+                    ItemEvent.id > select(func.coalesce(func.max(ItemEvent.id), 0)).where(
+                        ItemEvent.item_id == item.id, ItemEvent.to_state == BACKLOG
+                    ).scalar_subquery(),
                 )
             )
             if visits >= st.max_visits:

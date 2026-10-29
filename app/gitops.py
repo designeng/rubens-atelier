@@ -118,3 +118,25 @@ async def merge(cwd: Path, ref: str, message: str) -> list[str]:
     if conflicts := await unmerged_files(cwd):
         return conflicts
     raise GitError(f"git merge {ref} failed ({code}): {out[-2000:]}")
+
+
+async def snapshot(cwd: Path, base: str | None, diff: bool = False, limit: int = 60_000) -> dict[str, str | bool]:
+    """Read-only picture of a workspace for the board: branch, uncommitted changes, commits and
+    changes against the base branch, optionally the full diff. Takes no locks, writes nothing."""
+
+    async def git(*args: str) -> str:
+        _, out = await run("git", "--no-optional-locks", *args, cwd=cwd, check=False, timeout=30)
+        return out.strip()
+
+    ref = f"origin/{base}" if base else "HEAD"
+    snap: dict[str, str | bool] = {
+        "branch": await git("rev-parse", "--abbrev-ref", "HEAD"),
+        "head": await git("log", "-1", "--format=%h %s"),
+        "merge_in_progress": merge_in_progress(cwd),
+        "status": await git("status", "--short", "--branch"),
+        "commits": await git("log", "--format=%h %an %ar  %s", f"{ref}..HEAD"),
+        "stat": await git("diff", "--stat", ref),  # committed and uncommitted, against the base
+    }
+    if diff:
+        snap["diff"] = (await git("diff", ref))[:limit]
+    return snap
