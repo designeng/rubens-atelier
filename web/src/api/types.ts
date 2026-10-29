@@ -34,6 +34,7 @@ export interface ItemIn {
   parent_id?: string | null;
   issue?: number | null;
   priority?: number;
+  blocked_by?: string[];
   start?: boolean;
 }
 
@@ -43,6 +44,7 @@ export interface ItemPatch {
   body?: string;
   priority?: number;
   model?: string | null;
+  blocked_by?: string[];
 }
 
 export interface Todo {
@@ -78,11 +80,16 @@ export interface ItemOut {
   pr_url: string | null;
   priority: number;
   model: string | null;
+  blocked_by: string[];
   updated_at: string;
   column: Column;
   issue: number | null;
   progress: Progress | null;
   attention?: Attention | null;
+  // Backlog items only: the blockers that have not succeeded yet ("title (id)").
+  blocked: string[];
+  // Ids of the backlog items waiting for this one.
+  blocking: string[];
 }
 
 // `_attention` in board_api.py: why an item in the needs_human column waits. `kind` is pr, error,

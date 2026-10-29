@@ -80,6 +80,8 @@ class WorkItem(Base):
     priority: Mapped[int] = mapped_column(default=0)  # higher runs first
     # Model for every agent step of this item; None = the workflow state's or the default model.
     model: Mapped[str | None] = mapped_column(String(100))
+    # Ids of items that must succeed before this one can be started (NULL in old rows = none).
+    blocked_by: Mapped[list[str]] = mapped_column(default=list)
     # Claude session per role, so a role can resume its own context on the next visit.
     sessions: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # Where the item came from, e.g. {"issue": 42} for a GitHub issue.
@@ -164,6 +166,8 @@ def _add_missing_columns(conn) -> None:
     existing = {c["name"] for c in inspect(conn).get_columns("work_items")}
     if "model" not in existing:
         conn.execute(text("ALTER TABLE work_items ADD COLUMN model VARCHAR(100)"))
+    if "blocked_by" not in existing:
+        conn.execute(text("ALTER TABLE work_items ADD COLUMN blocked_by JSON"))
 
 
 class Database:

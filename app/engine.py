@@ -68,7 +68,20 @@ class Engine:
             if item.state is not None:
                 raise EngineError(f"item is already in state {item.state!r}")
             wf = self.workflow(item.workflow)
+            if waiting := await self.unfinished_blockers(s, item):
+                raise EngineError(f"blocked by: {', '.join(waiting)}")
             return await self._enter(s, item, wf, wf.initial, None, actor)
+
+    async def unfinished_blockers(self, s, item: WorkItem) -> list[str]:
+        """Titles (or ids, for blockers that no longer exist) of the blockers that have not succeeded."""
+        waiting = []
+        for blocker_id in item.blocked_by or []:
+            blocker = await s.get(WorkItem, blocker_id)
+            wf = self.workflows.get(blocker.workflow) if blocker else None
+            st = wf.states.get(blocker.state) if wf and blocker.state else None
+            if st is None or st.terminal != "succeeded":
+                waiting.append(f"{blocker.title} ({blocker_id})" if blocker else blocker_id)
+        return waiting
 
     async def advance(self, item_id: str, version: int, verdict: str, actor: str = "engine") -> bool:
         """Leave the item's current state with `verdict`. False if the item has moved on."""

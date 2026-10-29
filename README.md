@@ -95,12 +95,12 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 |---|---|---|
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
 | `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
-| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
+| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, blocked_by?, start?}`. `blocked_by` lists up to 20 items of the same project that must succeed before this one can start (`start` then answers 409 naming them; a failed or cancelled blocker keeps blocking until it is reopened and succeeds or removed from the list; a cycle is a 422). Dependents are not started automatically |
 | `POST` | `/projects/{slug}/import-issues` | Put the repo's open GitHub issues (PRs left out, up to 1000) into the backlog as stories linked to their issue, so the PR closes it; nothing starts. An issue that already has an item in any state is skipped. Returns `{imported, skipped}`; the board's "Import issues" button calls it |
 | `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Open requests to a human |
 | `GET` | `/items/{id}` | Item, transition history, runs, artifacts, open request |
-| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?}`, also on the board (**Edit**; the model through the **Model** picker, which saves right away). A step waiting for a slot starts with the changes, a running one picks them up from the next agent step; a new priority reorders the queue right away |
+| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?, blocked_by?}`, also on the board (**Edit**; the model through the **Model** picker, which saves right away). A step waiting for a slot starts with the changes, a running one picks them up from the next agent step; a new priority reorders the queue right away |
 | `GET` | `/models` | The models offered by the board's picker (`HARNESS_MODELS`) and `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Run a shell command in the story's workspace (board terminal). Off by default: needs `HARNESS_TERMINAL_ENABLED=true` and `HARNESS_API_TOKEN`; refused while an agent works there; runs on the worker, without `HARNESS_*` in its environment, killed after `HARNESS_TERMINAL_TIMEOUT_SECONDS` |

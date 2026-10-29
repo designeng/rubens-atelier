@@ -63,7 +63,12 @@ const githubChanges = computed(() => {
 // Edit the story in place. A step waiting for a slot picks the changes up when it starts,
 // a running one from the next agent step; a new priority reorders the queue right away.
 const editing = ref(false);
-const draft = ref({ title: "", body: "", priority: 0 });
+const draft = ref({ title: "", body: "", priority: 0, blocked_by: [] as string[] });
+// Items of the project that can be picked as blockers (the server rejects cycles).
+const blockerChoices = computed(() => {
+  const all = Object.values(b.board.value ?? {}).flat();
+  return all.filter((x) => x.id !== it.value?.id);
+});
 const editError = ref("");
 const editBusy = ref(false);
 const editable = computed(() => it.value?.column !== "done" && it.value?.column !== "failed");
@@ -74,7 +79,7 @@ watch(
 function startEdit(): void {
   const i = it.value;
   if (!i) return;
-  draft.value = { title: i.title, body: i.body, priority: i.priority };
+  draft.value = { title: i.title, body: i.body, priority: i.priority, blocked_by: [...i.blocked_by] };
   editError.value = "";
   editing.value = true;
 }
@@ -92,6 +97,7 @@ async function saveEdit(): Promise<void> {
       title: d.title.trim(),
       body: d.body,
       priority: d.priority,
+      blocked_by: d.blocked_by,
     });
     editing.value = false;
   } catch (e) {
@@ -137,7 +143,15 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
     <template v-if="it">
       <div class="row">
         <button @click="b.closeItem()">✕</button>
-        <button v-if="it.state === null" class="primary" @click="b.startItem(it.id)">Start</button>
+        <button
+          v-if="it.state === null"
+          class="primary"
+          :disabled="it.blocked.length > 0"
+          :title="it.blocked.length ? `Blocked by ${it.blocked.join(', ')}` : undefined"
+          @click="b.startItem(it.id)"
+        >
+          Start
+        </button>
         <button v-if="reopenable" @click="b.reopenItem(it.id)">Back to backlog</button>
         <button v-if="cancellable" @click="b.cancelItem(it.id)">Cancel</button>
         <button v-if="editable && !editing" @click="startEdit()">Edit</button>
@@ -153,6 +167,10 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
           <label for="ePriority">Priority (higher runs first)</label>
           <input id="ePriority" v-model.number="draft.priority" type="number" min="-100" max="100" class="num" />
         </div>
+        <label for="eBlockedBy">Blocked by (must succeed before this can start)</label>
+        <select id="eBlockedBy" v-model="draft.blocked_by" multiple size="5" style="width: 100%">
+          <option v-for="x in blockerChoices" :key="x.id" :value="x.id">{{ x.title }} · {{ x.state || "backlog" }}</option>
+        </select>
         <div class="row" style="margin-top: 8px">
           <button class="primary" :disabled="editBusy" @click="saveEdit()">Save</button>
           <button @click="editing = false">Cancel edit</button>
@@ -163,6 +181,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <p class="muted">
         {{ it.kind }} · {{ it.workflow }} · state <b>{{ it.state || "backlog" }}</b>
         <template v-if="it.priority"> · priority {{ it.priority }}</template>
+        <template v-if="it.blocked.length"> · blocked by {{ it.blocked.join(", ") }}</template>
         <template v-if="it.branch"> · {{ it.branch }}</template>
         <template v-if="it.pr_url"> · <a :href="it.pr_url" target="_blank" rel="noopener">PR</a></template>
       </p>
