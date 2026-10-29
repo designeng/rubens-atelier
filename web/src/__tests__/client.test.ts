@@ -65,6 +65,13 @@ describe("createClient", () => {
     expect([f.calls[0].url, f.calls[0].init.method]).toEqual(["/items/i1/reopen", "POST"]);
   });
 
+  it("deletes a story with a DELETE and accepts the empty 204 answer", async () => {
+    const f = fakeFetch(() => new Response(null, { status: 204 }));
+    await expect(createClient(() => "t", f.impl).deleteItem("i/1")).resolves.toBeUndefined();
+    expect([f.calls[0].url, f.calls[0].init.method]).toEqual(["/items/i%2F1", "DELETE"]);
+    expect((f.calls[0].init.headers as Record<string, string>).authorization).toBe("Bearer t");
+  });
+
   it("posts JSON bodies", async () => {
     const f = fakeFetch(() => json({ advanced: true }));
     const api = createClient(() => "t", f.impl);

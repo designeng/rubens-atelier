@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -579,6 +579,16 @@ async def reopen_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
     except EngineError as e:
         raise _engine_error(e) from None
     return await _get_item_out(db, engine, item_id)
+
+
+@router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_item(item_id: str, engine: Eng) -> Response:
+    """Delete a failed or cancelled story with its history. The confirmation is the client's."""
+    try:
+        await engine.delete(item_id)
+    except EngineError as e:
+        raise _engine_error(e) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/requests/{request_id}/answer")
