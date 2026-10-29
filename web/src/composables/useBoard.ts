@@ -5,6 +5,7 @@ import type {
   GithubApp,
   ItemDetail,
   ItemIn,
+  ItemPatch,
   ProjectIn,
   ProjectOut,
   ProjectPatch,
@@ -148,6 +149,11 @@ export function useBoard() {
     await loadProjects();
   }
 
+  async function updateItem(id: string, patch: ItemPatch): Promise<void> {
+    await api.updateItem(id, patch);
+    await refresh();
+  }
+
   async function updateProject(patch: ProjectPatch): Promise<void> {
     await api.updateProject(slug.value, patch);
     await loadProjects();
@@ -205,6 +211,7 @@ export function useBoard() {
     setLimits,
     createItem,
     createProject,
+    updateItem,
     updateProject,
   };
 }

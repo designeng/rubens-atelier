@@ -79,6 +79,16 @@ async def test_dispatch_by_priority_with_a_per_project_cap(scheduler, dispatched
     assert (await scheduler.status())["ready"] == []
 
 
+async def test_waiting_step_moves_when_its_priority_changes(scheduler, dispatched):
+    await scheduler.pause("filling the queue")
+    for name in ("first", "second", "third"):
+        await scheduler.submit(name, 1, name)
+    await scheduler.reprioritize("third", 1, 0, 5)
+    await scheduler.reprioritize("first", 1, 0, -1)
+    await scheduler.reprioritize("gone", 1, 0, 9)  # not waiting: nothing to move
+    assert (await scheduler.status())["ready"] == ["third:1", "second:1", "first:1"]
+
+
 async def test_global_cap_and_forget(scheduler, dispatched, monkeypatch):
     monkeypatch.setattr(settings, "max_agents", 1)
     await scheduler.submit("x", 1, "A")

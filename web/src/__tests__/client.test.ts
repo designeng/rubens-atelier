@@ -37,6 +37,17 @@ describe("createClient", () => {
     expect(f.calls.map((c) => c.url)).toEqual(["/items/a%2Fb/git", "/items/a%2Fb/git?diff=true"]);
   });
 
+  it("patches an item", async () => {
+    const f = fakeFetch(() => json({}));
+    const api = createClient(() => "t", f.impl);
+    await api.updateItem("a/b", { priority: 3, model: null });
+    expect([f.calls[0].url, f.calls[0].init.method, JSON.parse(f.calls[0].init.body as string)]).toEqual([
+      "/items/a%2Fb",
+      "PATCH",
+      { priority: 3, model: null },
+    ]);
+  });
+
   it("patches scheduler limits", async () => {
     const f = fakeFetch(() => json({}));
     const api = createClient(() => "t", f.impl);

@@ -95,6 +95,7 @@ Workflow — это детерминированный конечный авто
 | `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
 | `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |
+| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?}`, также в борде (**Edit**). Шаг, ждущий слот, стартует уже с изменениями, работающий подхватит их со следующего agent-шага; новый priority сразу переставляет его в очереди |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Выполнить shell-команду в рабочей копии задачи (терминал доски). По умолчанию выключено: нужны `HARNESS_TERMINAL_ENABLED=true` и `HARNESS_API_TOKEN`; отказ, пока там работает агент; выполняется на воркере без `HARNESS_*` в окружении, убивается через `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
 | `POST` | `/items/{id}/open-pr` | Запушить ветку и открыть (или обновить) PR сразу, минуя review и CI; работающий агент отменяется |

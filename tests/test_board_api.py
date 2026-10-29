@@ -44,6 +44,10 @@ def test_projects_items_board_and_inbox(client):
     r = client.patch(f"/items/{backlog['id']}", json={"title": "Renamed", "body": "new text"})
     assert (r.json()["title"], client.get(f"/items/{backlog['id']}").json()["body"]) == ("Renamed", "new text")
     assert client.patch(f"/items/{backlog['id']}", json={"title": ""}).status_code == 422
+    assert client.patch(f"/items/{backlog['id']}", json={"title": None}).status_code == 422
+    r = client.patch(f"/items/{backlog['id']}", json={"priority": 7, "model": "claude-sonnet-5-5"})
+    assert (r.json()["priority"], r.json()["model"]) == (7, "claude-sonnet-5-5")
+    assert client.patch(f"/items/{backlog['id']}", json={"priority": 101}).status_code == 422
 
     # A cancelled story can go back to the backlog and be started again; a finished one cannot.
     r = client.post(f"/items/{backlog['id']}/reopen")

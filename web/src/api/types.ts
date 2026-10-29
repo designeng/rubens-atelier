@@ -37,6 +37,14 @@ export interface ItemIn {
   start?: boolean;
 }
 
+// PATCH /items/{id}: fields left out stay as they are; model null goes back to the default.
+export interface ItemPatch {
+  title?: string;
+  body?: string;
+  priority?: number;
+  model?: string | null;
+}
+
 export interface Todo {
   content: string;
   status: "pending" | "in_progress" | "completed" | string;
@@ -69,6 +77,7 @@ export interface ItemOut {
   branch: string | null;
   pr_url: string | null;
   priority: number;
+  model: string | null;
   updated_at: string;
   column: Column;
   progress: Progress | null;

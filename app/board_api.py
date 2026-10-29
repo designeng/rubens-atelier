@@ -92,11 +92,14 @@ class ItemIn(BaseModel):
 
 
 class ItemPatch(BaseModel):
-    """Editable item settings; applies from the next agent step, null goes back to the default."""
+    """Editable item settings; applies from the next agent step, null goes back to the default.
+    A step still waiting for a slot picks everything up when it starts; a new priority moves it
+    in the queue right away."""
 
     model_config = ConfigDict(extra="forbid")
 
     model: ModelName | None = None
+    priority: int = Field(default=None, ge=-100, le=100)
     title: str = Field(default=None, min_length=1, max_length=300)
     body: str = Field(default=None)
 
@@ -423,9 +426,14 @@ async def update_item(item_id: str, body: ItemPatch, db: Db, engine: Eng) -> Ite
         item = await s.get(WorkItem, item_id)
         if item is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
+        old_priority = item.priority
         for field, value in body.model_dump(exclude_unset=True).items():
+            if value is None and field in ("title", "body", "priority"):
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} cannot be null")
             setattr(item, field, value)
         await s.commit()
+        if engine.scheduler and item.priority != old_priority:
+            await engine.scheduler.reprioritize(item.id, item.version, old_priority, item.priority)
         return _item_out(engine, item)
 
 
