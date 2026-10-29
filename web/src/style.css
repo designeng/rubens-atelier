@@ -3,6 +3,12 @@
   :root { --bg:#14161b; --card:#1d2027; --ink:#e6e8ec; --muted:#9aa1ad; --line:#2c3039; --accent:#748ffc; --warn:#fb923c; --ok:#4ade80; --bad:#f87171; }
 }
 * { box-sizing: border-box; }
+/* Portrait in the top-left corner; its right and bottom edges fade out so no border shows. */
+body::before { content:""; position:fixed; top:0; left:0; width:min(560px, 60vw); aspect-ratio:1036 / 1518; z-index:-1; pointer-events:none;
+  background:url(./assets/portrait.png) top left / 100% 100% no-repeat; opacity:.3;
+  -webkit-mask-image:linear-gradient(to right, #000 45%, transparent), linear-gradient(to bottom, #000 45%, transparent);
+  -webkit-mask-composite:source-in; mask-image:linear-gradient(to right, #000 45%, transparent), linear-gradient(to bottom, #000 45%, transparent);
+  mask-composite:intersect; }
 body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
 header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
 header h1 { font-size:16px; margin:0 12px 0 0; }
