@@ -21,6 +21,7 @@ states:
 
   implement:
     agent: implementer
+    effort: medium
     verify: true
     resume: true
     max_visits: 4
