@@ -170,6 +170,23 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     ]
 
 
+async def test_verify_command_changed_mid_story_is_used_by_the_next_step(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    async with f.db.session() as s:
+        await s.execute(update(Project).values(verify_command=None))
+        await s.commit()
+    assert await f.engine.start(item_id)
+    await f.step(*f.queue.pop(0))  # plan
+
+    # What PATCH /projects/{slug} does: the implement step reads the project afresh.
+    async with f.db.session() as s:
+        await s.execute(update(Project).values(verify_command="test -f hello.txt"))
+        await s.commit()
+    await f.drain()
+    assert f.runner.of("implement")[0]["spec"].verify_command == "test -f hello.txt"
+
+
 async def test_review_feedback_loops_back_to_the_same_implementer_session(make_factory):
     f = make_factory(ScriptedRunner(reviews=["changes_requested", "approved"]))
     item_id = await f.new_item()

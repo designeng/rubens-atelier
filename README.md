@@ -80,6 +80,7 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | Method | Path | |
 |---|---|---|
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
+| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
 | `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
 | `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Open requests to a human |
@@ -88,6 +89,8 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; the comment becomes an artifact for the next agent |
 | `GET` | `/scheduler` | Busy slots, queue, capacity and its reason, subscription window state |
 | `POST` | `/scheduler/pause`, `/scheduler/resume` | Stop or resume handing out new agent steps; running ones finish |
+
+Project settings can also be edited on the board (**Settings**). A changed `verify_command` applies from the next agent step of every story, including running ones. A changed `base_branch` applies only to stories that have not created their workspace yet; started ones keep their base.
 
 **Scheduler.** Agent steps do not go to Celery right away; they wait in a priority queue: higher item `priority` first, FIFO on ties. A step is handed out only when a slot is free: at most `HARNESS_MAX_AGENTS` in total and at most `HARNESS_MAX_AGENTS_PER_PROJECT` per project. The pace follows the subscription windows that Claude Code reports through `rate_limit` events (status, utilization, reset time):
 - `rejected` or utilization ≥ `HARNESS_QUOTA_PAUSE_AT` → no new steps until the window resets;

@@ -60,3 +60,38 @@ def test_scheduler_pause_and_resume(client):
     paused = client.post("/scheduler/pause", json={"reason": "release freeze"}).json()
     assert paused["capacity"] == 0 and paused["reason"] == "paused: release freeze"
     assert client.post("/scheduler/resume").json()["reason"] == "ok"
+
+
+def test_update_project_settings(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app", "verify_command": "make test"})
+
+    r = client.patch("/projects/app", json={"base_branch": "develop"})
+    assert r.status_code == 200
+    assert r.json()["base_branch"] == "develop" and r.json()["verify_command"] == "make test"
+
+    r = client.patch("/projects/app", json={"verify_command": None})
+    assert r.status_code == 200
+    assert r.json()["verify_command"] is None and r.json()["base_branch"] == "develop"
+
+    r = client.patch("/projects/app", json={"base_branch": None, "verify_command": "uv run pytest -q"})
+    assert (r.json()["base_branch"], r.json()["verify_command"]) == (None, "uv run pytest -q")
+    (project,) = client.get("/projects").json()
+    assert project["slug"] == "app" and project["repo"] == "acme/app"
+    assert (project["base_branch"], project["verify_command"]) == (None, "uv run pytest -q")
+
+
+def test_update_project_validation(client):
+    assert client.patch("/projects/missing", json={"verify_command": "make test"}).status_code == 404
+    before = client.post("/projects", json={"slug": "app", "repo": "acme/app", "base_branch": "main"}).json()
+    for body in (
+        {"slug": "x"},
+        {"repo": "a/b"},
+        {"installation_id": 1},
+        {"base_branch": ""},
+        {"base_branch": "-x"},
+        {"base_branch": "a b"},
+        {"base_branch": "b" * 201},
+        {"verify_command": ""},
+    ):
+        assert client.patch("/projects/app", json=body).status_code == 422, body
+    assert client.get("/projects").json() == [before]
