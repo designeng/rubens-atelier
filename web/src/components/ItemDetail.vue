@@ -48,6 +48,17 @@ async function loadGit(diff = false): Promise<void> {
     gitBusy.value = false;
   }
 }
+
+// The same changes on github.com: the PR's files once there is one, else a compare view
+// (without a base GitHub compares against the default branch). Needs the branch to be pushed.
+const githubChanges = computed(() => {
+  const i = it.value;
+  const project = b.projects.value.find((p) => p.id === i?.project_id);
+  if (!i?.branch || !project) return null;
+  if (i.pr_url) return `${i.pr_url}/files`;
+  const base = project.base_branch ? `${encodeURIComponent(project.base_branch)}...` : "";
+  return `https://github.com/${project.repo}/compare/${base}${i.branch.split("/").map(encodeURIComponent).join("/")}`;
+});
 const cancellable = computed(() => it.value?.column === "working" || it.value?.column === "needs_human");
 </script>
 
@@ -96,7 +107,10 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
           <pre>{{ git.commits || "no commits on top of the base branch" }}</pre>
           <p><b>Status</b></p>
           <pre>{{ git.status }}</pre>
-          <p><b>Changes vs base</b></p>
+          <p>
+            <b>Changes vs base</b>
+            <template v-if="githubChanges"> · <a :href="githubChanges" target="_blank" rel="noopener">on GitHub</a></template>
+          </p>
           <pre>{{ git.stat || "no changes" }}</pre>
           <template v-if="git.diff != null">
             <p><b>Diff</b></p>
