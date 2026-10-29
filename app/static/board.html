@@ -50,6 +50,8 @@
   <button id="ghBtn" title="GitHub App connection">GitHub</button>
   <button id="newProject">+ project</button>
   <input id="title" placeholder="New story title" size="28">
+  <input id="model" list="models" placeholder="model (default)" size="16" title="Model for this story's agents">
+  <datalist id="models"><option value="claude-fable-5-1"><option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"></datalist>
   <button class="primary" id="add">Add &amp; start</button>
   <span id="sched" class="muted"></span>
   <button id="pause"></button>
@@ -162,6 +164,9 @@ async function showItem(id) {
       ${it.state === null ? '<button class="primary" id="start">Start</button>' : ""}
       ${it.column === "working" || it.column === "needs_human" ? '<button id="cancel">Cancel</button>' : ""}</div>
     <h3>${esc(it.title)}</h3>
+    <div class="row"><label for="itModel">Model</label>
+      <input id="itModel" list="models" size="20" placeholder="default" value="${esc(it.model || "")}">
+      <button id="itModelSave">Save</button></div>
     <p class="muted">${esc(it.kind)} · ${esc(it.workflow)} · state <b>${esc(it.state || "backlog")}</b>
       ${it.branch ? ` · ${esc(it.branch)}` : ""} ${it.pr_url ? ` · <a href="${esc(it.pr_url)}" target="_blank">PR</a>` : ""}</p>
     ${it.progress ? `<h4>Now</h4>${progressHtml(it.progress)}
@@ -182,6 +187,8 @@ async function showItem(id) {
     if (keep.focus) { $("comment").focus(); $("comment").setSelectionRange(...keep.at); }
   }
   $("close").onclick = () => { openItem = null; $("detail").classList.remove("open"); };
+  $("itModelSave").onclick = () => api(`/items/${id}`, { method: "PATCH", body: JSON.stringify({ model: $("itModel").value.trim() || null }) })
+    .then(() => showItem(id)).catch(fail);
   if ($("start")) $("start").onclick = () => api(`/items/${id}/start`, { method: "POST" }).then(refresh).catch(fail);
   if ($("cancel")) $("cancel").onclick = () => api(`/items/${id}/cancel`, { method: "POST" }).then(refresh).catch(fail);
   document.querySelectorAll("[data-answer]").forEach((b) => b.onclick = () =>
@@ -195,7 +202,7 @@ $("project").onchange = () => { store.set("project", $("project").value); openIt
 $("add").onclick = () => {
   const title = $("title").value.trim(); if (!title) return;
   const body = prompt("Description (what to build, acceptance criteria):") || "";
-  api(`/projects/${$("project").value}/items`, { method: "POST", body: JSON.stringify({ title, body, start: true }) })
+  api(`/projects/${$("project").value}/items`, { method: "POST", body: JSON.stringify({ title, body, model: $("model").value.trim() || null, start: true }) })
     .then(() => { $("title").value = ""; return refresh(); }).catch(fail);
 };
 let ghApp = { configured: false, installations: [] };
