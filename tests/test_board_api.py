@@ -1,6 +1,9 @@
+import httpx
+
 from app import board_api
 from app.api import app
 from app.config import settings
+from app.github import GitHub
 
 
 def test_projects_items_board_and_inbox(client):
@@ -55,6 +58,59 @@ def test_projects_items_board_and_inbox(client):
     assert client.post(f"/items/{backlog['id']}/reopen").status_code == 409
     assert client.post(f"/items/{backlog['id']}/start").json()["column"] == "working"
     assert client.post(f"/items/{started['id']}/reopen").status_code == 409
+
+
+def test_import_issues(client, monkeypatch):
+    issues = [
+        {"number": 1, "title": "Crash on start", "body": "Steps:\n1. run", "html_url": "https://github.com/acme/app/issues/1"},
+        {"number": 2, "title": "x" * 400, "body": None, "html_url": "https://github.com/acme/app/issues/2"},
+    ]
+    seen = []
+
+    async def fake_list(self, repo, state="open"):
+        seen.append(repo)
+        return list(issues)
+
+    monkeypatch.setattr(GitHub, "list_issues", fake_list)
+    assert client.post("/projects/missing/import-issues").status_code == 404
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    client.post("/projects/app/items", json={"title": "Manual", "issue": 9})
+
+    r = client.post("/projects/app/import-issues")
+    assert r.status_code == 200 and seen == ["acme/app"]
+    res = r.json()
+    assert res["skipped"] == 0 and [i["issue"] for i in res["imported"]] == [1, 2]
+    assert all(i["state"] is None and i["column"] == "backlog" for i in res["imported"])
+    assert len(res["imported"][1]["title"]) == 300
+    assert {i["issue"] for i in client.get("/projects/app/board").json()["backlog"]} == {1, 2, 9}
+    assert client.enqueued == []  # nothing starts on its own
+    first, second = (client.get(f"/items/{i['id']}").json() for i in res["imported"])
+    assert first["body"] == "Steps:\n1. run\n\nImported from https://github.com/acme/app/issues/1"
+    assert second["body"] == "Imported from https://github.com/acme/app/issues/2"
+
+    assert client.post("/projects/app/import-issues").json() == {"imported": [], "skipped": 2}
+
+    # A cancelled story still holds its issue, and so does an item linked to an issue by hand.
+    client.post(f"/items/{first['id']}/cancel")
+    issues.append({"number": 3, "title": "New", "body": "", "html_url": "https://github.com/acme/app/issues/3"})
+    issues.append({"number": 9, "title": "Linked", "body": "", "html_url": "https://github.com/acme/app/issues/9"})
+    res = client.post("/projects/app/import-issues").json()
+    assert [i["issue"] for i in res["imported"]] == [3] and res["skipped"] == 3
+
+
+def test_import_issues_errors(client, monkeypatch):
+    async def failing(self, repo, state="open"):
+        raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr(GitHub, "list_issues", failing)
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    r = client.post("/projects/app/import-issues")
+    assert r.status_code == 502 and r.json()["detail"] == "GitHub: boom"
+
+    monkeypatch.setattr(settings, "github_token", "")
+    r = client.post("/projects/app/import-issues")
+    assert r.status_code == 422 and "HARNESS_GITHUB_TOKEN" in r.json()["detail"]
+    assert client.get("/projects/app/board").json()["backlog"] == []
 
 
 def test_validation_and_scoping(client):

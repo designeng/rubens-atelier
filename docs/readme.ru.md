@@ -92,6 +92,7 @@ Workflow — это детерминированный конечный авто
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
 | `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` очищает значение; `slug`, `repo` и `installation_id` менять нельзя |
 | `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
+| `POST` | `/projects/{slug}/import-issues` | Кладёт открытые GitHub issues репозитория (без PR, до 1000) в backlog историями, привязанными к своему issue, так что PR его закроет; ничего не запускается. Issue, у которого уже есть элемент в любом состоянии, пропускается. Возвращает `{imported, skipped}`; его вызывает кнопка «Import issues» на доске |
 | `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
 | `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |

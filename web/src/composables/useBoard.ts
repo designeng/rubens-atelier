@@ -3,6 +3,7 @@ import { createClient, storage } from "../api/client";
 import type {
   Board,
   GithubApp,
+  ImportResult,
   ItemDetail,
   ItemIn,
   ItemPatch,
@@ -144,6 +145,12 @@ export function useBoard() {
     await refresh();
   }
 
+  async function importIssues(): Promise<ImportResult> {
+    const res = await api.importIssues(slug.value);
+    await refresh();
+    return res;
+  }
+
   async function createProject(project: ProjectIn): Promise<void> {
     await api.createProject(project);
     storage.set("project", project.slug);
@@ -212,6 +219,7 @@ export function useBoard() {
     isPaused,
     setLimits,
     createItem,
+    importIssues,
     createProject,
     updateItem,
     updateProject,

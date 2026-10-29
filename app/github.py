@@ -81,6 +81,18 @@ class GitHub:
         )
         return [i for i in items if "pull_request" not in i]  # the endpoint also returns PRs
 
+    async def list_issues(self, repo: str, state: str = "open", max_pages: int = 10) -> list[dict[str, Any]]:
+        """All issues of the repo (PRs left out), up to max_pages pages of 100."""
+        issues: list[dict[str, Any]] = []
+        for p in range(1, max_pages + 1):
+            items = await self._req(
+                "GET", f"/repos/{repo}/issues", params={"state": state, "per_page": 100, "page": p}
+            )
+            issues += [i for i in items if "pull_request" not in i]
+            if len(items) < 100:
+                break
+        return issues
+
     async def comment(self, repo: str, number: int, body: str) -> None:
         await self._req("POST", f"/repos/{repo}/issues/{number}/comments", json={"body": body})
 
