@@ -13,6 +13,7 @@ body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); col
 header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
 header h1 { font-size:16px; margin:0 12px 0 0; }
 input, select, textarea, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+input.num { width:4.5em; }
 button { cursor:pointer; } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
 #board { display:grid; grid-template-columns:repeat(5, minmax(200px, 1fr)); gap:12px; padding:16px; overflow-x:auto; }
 .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; }

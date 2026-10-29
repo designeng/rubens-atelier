@@ -94,6 +94,14 @@ def test_scheduler_pause_and_resume(client):
     assert client.post("/scheduler/resume").json()["reason"] == "ok"
 
 
+def test_scheduler_limits(client):
+    changed = client.patch("/scheduler/limits", json={"max_agents": 1}).json()
+    assert changed["capacity"] == 1
+    assert changed["limits"] == {"max_agents": 1, "max_agents_per_project": settings.max_agents_per_project}
+    assert client.patch("/scheduler/limits", json={"max_agents": 0}).status_code == 422
+    assert client.delete("/scheduler/limits").json()["limits"]["max_agents"] == settings.max_agents
+
+
 def test_update_project_settings(client):
     client.post("/projects", json={"slug": "app", "repo": "acme/app", "verify_command": "make test"})
 

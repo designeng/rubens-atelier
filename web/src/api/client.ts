@@ -9,6 +9,7 @@ import type {
   ProjectOut,
   ProjectPatch,
   Repository,
+  SchedulerLimits,
   SchedulerStatus,
 } from "./types";
 
@@ -61,6 +62,8 @@ export function createClient(
     getScheduler: () => api<SchedulerStatus>("/scheduler"),
     pauseScheduler: (reason = "") => api<SchedulerStatus>("/scheduler/pause", "POST", { reason }),
     resumeScheduler: () => api<SchedulerStatus>("/scheduler/resume", "POST", {}),
+    setSchedulerLimits: (limits: Partial<SchedulerLimits>) =>
+      api<SchedulerStatus>("/scheduler/limits", "PATCH", limits),
     githubApp: () => api<GithubApp>("/github/app"),
     installationRepositories: (id: number) => api<Repository[]>(`/github/installations/${seg(id)}/repositories`),
   };

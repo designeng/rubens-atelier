@@ -132,9 +132,15 @@ export interface GitSnapshot {
 
 export type Board = Record<Column, ItemOut[]>;
 
+export interface SchedulerLimits {
+  max_agents: number;
+  max_agents_per_project: number;
+}
+
 export interface SchedulerStatus {
   capacity: number;
   reason: string;
+  limits: SchedulerLimits;
   active: string[];
   ready: string[];
   quota: Record<string, unknown>;

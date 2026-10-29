@@ -1,6 +1,16 @@
 import { inject, onMounted, onUnmounted, provide, ref, type InjectionKey } from "vue";
 import { createClient, storage } from "../api/client";
-import type { Board, GithubApp, ItemDetail, ItemIn, ProjectIn, ProjectOut, ProjectPatch, SchedulerStatus } from "../api/types";
+import type {
+  Board,
+  GithubApp,
+  ItemDetail,
+  ItemIn,
+  ProjectIn,
+  ProjectOut,
+  ProjectPatch,
+  SchedulerLimits,
+  SchedulerStatus,
+} from "../api/types";
 
 export const POLL_MS = 5000;
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
@@ -124,6 +134,7 @@ export function useBoard() {
     act(api.answerRequest(requestId, option, comment));
   const togglePause = () => act(isPaused() ? api.resumeScheduler() : api.pauseScheduler());
   const isPaused = () => !!scheduler.value?.reason.startsWith("paused");
+  const setLimits = (limits: Partial<SchedulerLimits>) => act(api.setSchedulerLimits(limits));
 
   // Dialog actions throw, so the dialog can show the error next to its fields.
   async function createItem(item: ItemIn): Promise<void> {
@@ -191,6 +202,7 @@ export function useBoard() {
     answer,
     togglePause,
     isPaused,
+    setLimits,
     createItem,
     createProject,
     updateProject,

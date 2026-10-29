@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import type { SchedulerLimits } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
 
 const emit = defineEmits<{ settings: []; github: []; "new-project": []; "new-item": [title: string] }>();
@@ -20,6 +21,12 @@ const schedulerText = computed(() => {
   return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${sc.reason}` : "");
 });
 
+function onLimit(key: keyof SchedulerLimits, e: Event) {
+  const input = e.target as HTMLInputElement;
+  const n = input.valueAsNumber;
+  if (Number.isInteger(n) && n >= 1) b.setLimits({ [key]: n });
+  else input.value = String(b.scheduler.value?.limits[key] ?? "");
+}
 function onToken(e: Event) {
   b.setToken((e.target as HTMLInputElement).value);
 }
@@ -52,6 +59,30 @@ defineExpose({ clearTitle: () => (title.value = "") });
     <input v-model="title" placeholder="New story title" size="28" @keydown.enter="addItem" />
     <button class="primary" :disabled="!b.slug.value" @click="addItem">Add &amp; start</button>
     <span class="muted">{{ schedulerText }}</span>
+    <template v-if="b.scheduler.value">
+      <label class="muted" title="Agents at once (applies right away; running agents above a lowered limit finish)">
+        slots
+        <input
+          type="number"
+          min="1"
+          max="64"
+          class="num"
+          :value="b.scheduler.value.limits.max_agents"
+          @change="onLimit('max_agents', $event)"
+        />
+      </label>
+      <label class="muted" title="Agents at once per project">
+        per project
+        <input
+          type="number"
+          min="1"
+          max="64"
+          class="num"
+          :value="b.scheduler.value.limits.max_agents_per_project"
+          @change="onLimit('max_agents_per_project', $event)"
+        />
+      </label>
+    </template>
     <button v-if="b.scheduler.value" @click="b.togglePause()">{{ b.isPaused() ? "Resume" : "Pause" }}</button>
     <span id="err">{{ b.error.value }}</span>
   </header>

@@ -89,6 +89,24 @@ async def test_global_cap_and_forget(scheduler, dispatched, monkeypatch):
     assert dispatched == ["x"]
 
 
+async def test_limits_change_on_the_fly(scheduler, dispatched):
+    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2}
+    await scheduler.set_limits(max_agents=1)
+    for name in ("a1", "a2", "b1"):
+        await scheduler.submit(name, 1, name[0].upper())
+    assert dispatched == ["a1"] and await scheduler.capacity() == (1, "ok")
+
+    # Raising the limit hands the waiting steps out right away, within the per-project cap.
+    await scheduler.set_limits(max_agents=3, max_agents_per_project=1)
+    assert dispatched == ["a1", "b1"]
+    await scheduler.set_limits(max_agents_per_project=2)
+    assert dispatched == ["a1", "b1", "a2"]
+    assert (await scheduler.status())["limits"] == {"max_agents": 3, "max_agents_per_project": 2}
+
+    await scheduler.reset_limits()
+    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2}
+
+
 async def test_slots_of_dead_or_finished_steps_are_reclaimed(scheduler, dispatched, store, redis):
     for name in ("finished", "crashed", "never-started"):
         await scheduler.submit(name, 1, name)
