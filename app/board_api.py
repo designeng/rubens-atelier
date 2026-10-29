@@ -317,6 +317,12 @@ async def installation_repositories(installation_id: int) -> list[dict]:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"GitHub: {e}") from None
 
 
+@router.get("/models")
+async def list_models() -> dict:
+    """Models the board offers for a story, and the one used when a story and its step set none."""
+    return {"default": settings.default_model, "models": settings.models}
+
+
 @router.get("/projects")
 async def list_projects(db: Db) -> list[ProjectOut]:
     async with db.session() as s:

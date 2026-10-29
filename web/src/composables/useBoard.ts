@@ -7,6 +7,7 @@ import type {
   ItemDetail,
   ItemIn,
   ItemPatch,
+  Models,
   ProjectIn,
   ProjectOut,
   ProjectPatch,
@@ -27,6 +28,7 @@ export function useBoard() {
   const openItemId = ref<string | null>(null);
   const item = ref<ItemDetail | null>(null);
   const github = ref<GithubApp>(NO_GITHUB);
+  const models = ref<Models | null>(null);
   const error = ref("");
 
   const api = createClient(
@@ -79,6 +81,7 @@ export function useBoard() {
 
   async function loadProjects(): Promise<void> {
     projects.value = await api.listProjects();
+    models.value = await api.listModels();
     const want = storage.get("project");
     slug.value = projects.value.find((p) => p.slug === want)?.slug ?? projects.value[0]?.slug ?? "";
     await refresh();
@@ -203,6 +206,7 @@ export function useBoard() {
     openItemId,
     item,
     github,
+    models,
     error,
     fail,
     refresh,

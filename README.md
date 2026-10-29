@@ -52,6 +52,8 @@ The Docker image builds the board itself in a Node stage.
 | `GET` | `/tasks/{id}` | Status, result, cost, `session_id`, `pr_url` |
 | `GET` | `/tasks/{id}/stream` | SSE: history and live events until the task finishes, supports `Last-Event-ID` |
 | `GET` | `/tasks/{id}/events?after=` | The same events, paginated |
+
+On the board, **Session** (in a story's "Now" block and next to each run) shows an agent run's full session: prompt, text, thinking, tool calls with their results, verify output and the result. It reads `/tasks/{id}/stream` and updates live until the run ends, reconnecting from the last event if the connection drops. Event strings are clipped at 8000 characters. Factory runs stay viewable after Redis expires them, from the Postgres archive (see below).
 | `POST` | `/tasks/{id}/cancel` | Cancel: a queued task is removed at once, a running one stops within about 2 seconds |
 | `GET` | `/tasks?status=` | Task list |
 
@@ -98,7 +100,8 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Open requests to a human |
 | `GET` | `/items/{id}` | Item, transition history, runs, artifacts, open request |
-| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?}`, also on the board (**Edit**). A step waiting for a slot starts with the changes, a running one picks them up from the next agent step; a new priority reorders the queue right away |
+| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?}`, also on the board (**Edit**; the model through the **Model** picker, which saves right away). A step waiting for a slot starts with the changes, a running one picks them up from the next agent step; a new priority reorders the queue right away |
+| `GET` | `/models` | The models offered by the board's picker (`HARNESS_MODELS`) and `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Run a shell command in the story's workspace (board terminal). Off by default: needs `HARNESS_TERMINAL_ENABLED=true` and `HARNESS_API_TOKEN`; refused while an agent works there; runs on the worker, without `HARNESS_*` in its environment, killed after `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
 | `POST` | `/items/{id}/open-pr` | Push the branch and open (or update) the PR now, skipping review and CI; a running agent is cancelled |

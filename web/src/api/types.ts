@@ -135,6 +135,11 @@ export interface ItemDetail extends ItemOut {
   open_request: RequestOut | null;
 }
 
+export interface Models {
+  default: string;
+  models: string[];
+}
+
 export interface GitSnapshot {
   branch: string;
   head: string;
@@ -181,4 +186,27 @@ export interface Repository {
   full_name: string;
   default_branch: string;
   private: boolean;
+}
+
+// The harness task behind an agent run (app/models.py TaskInfo), as far as the board uses it.
+export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface TaskInfo {
+  id: string;
+  status: TaskStatus;
+  prompt: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  session_id: string | null;
+  error: string | null;
+  cost_usd: number | null;
+  num_turns: number | null;
+}
+
+// One entry of a task's event log (app/runner.py, app/execution.py, app/store.py).
+export interface TaskEvent {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
 }
