@@ -136,6 +136,12 @@ export function useBoard() {
   const startItem = (id: string) => act(api.startItem(id));
   const cancelItem = (id: string) => act(api.cancelItem(id));
   const reopenItem = (id: string) => act(api.reopenItem(id));
+  const deleteItem = (id: string) =>
+    act(
+      api.deleteItem(id).then(() => {
+        if (openItemId.value === id) closeItem();
+      }),
+    );
   const runItemNow = (id: string) => act(api.runItemNow(id));
   const answer = (requestId: string, option: string, comment: string) =>
     act(api.answerRequest(requestId, option, comment));
@@ -219,6 +225,7 @@ export function useBoard() {
     startItem,
     cancelItem,
     reopenItem,
+    deleteItem,
     runItemNow,
     answer,
     togglePause,

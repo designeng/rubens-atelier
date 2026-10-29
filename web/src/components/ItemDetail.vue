@@ -134,6 +134,10 @@ async function setModel(value: string): Promise<void> {
   }
 }
 
+function confirmDelete(id: string, title: string): void {
+  if (window.confirm(`Delete “${title}”? This can't be undone.`)) void b.deleteItem(id);
+}
+
 const reopenable = computed(() => it.value?.column === "failed");
 const cancellable = computed(() => it.value?.column === "working" || it.value?.column === "needs_human");
 </script>
@@ -153,6 +157,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
           Start
         </button>
         <button v-if="reopenable" @click="b.reopenItem(it.id)">Back to backlog</button>
+        <button v-if="reopenable" @click="confirmDelete(it.id, it.title)">Delete</button>
         <button v-if="cancellable" @click="b.cancelItem(it.id)">Cancel</button>
         <button v-if="editable && !editing" @click="startEdit()">Edit</button>
       </div>

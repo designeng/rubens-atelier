@@ -96,9 +96,11 @@ class Factory:
 
     async def new_item(self, auto_merge=False, **kw) -> str:
         async with self.db.session() as s:
-            project = Project(slug="app", repo="acme/app", verify_command="test -f hello.txt", auto_merge=auto_merge)
-            s.add(project)
-            await s.flush()
+            project = await s.scalar(select(Project).where(Project.slug == "app"))
+            if project is None:
+                project = Project(slug="app", repo="acme/app", verify_command="test -f hello.txt", auto_merge=auto_merge)
+                s.add(project)
+                await s.flush()
             item = WorkItem(project_id=project.id, kind="story", title="Add greeting",
                             body="Create hello.txt saying hi.", workflow="story", **kw)
             s.add(item)
@@ -316,6 +318,36 @@ async def test_cancel_supersedes_the_open_request(make_factory):
     with pytest.raises(EngineError, match="already answered"):
         await f.engine.answer(req.id, "merged")
     assert not await f.engine.cancel(item_id)
+
+
+async def test_delete_removes_a_cancelled_item_with_its_history(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    child_id = await f.new_item()
+    async with f.db.session() as s:
+        await s.execute(update(WorkItem).where(WorkItem.id == child_id).values(parent_id=item_id))
+        await s.commit()
+    await f.engine.start(item_id)
+    await f.drain()
+    await f.open_request(item_id)
+    with pytest.raises(EngineError, match="only failed or cancelled"):
+        await f.engine.delete(item_id)
+    async with f.db.session() as s:
+        run = (await s.scalars(select(Run).where(Run.item_id == item_id))).first()
+        s.add(TaskTranscript(task_id="t1", run_id=run.id, task={}, events=[]))
+        await s.commit()
+
+    assert await f.engine.cancel(item_id)
+    await f.engine.delete(item_id)
+
+    async with f.db.session() as s:
+        assert await s.get(WorkItem, item_id) is None
+        for model in (Run, Artifact, HumanRequest, ItemEvent):
+            assert (await s.scalars(select(model).where(model.item_id == item_id))).all() == []
+        assert (await s.scalars(select(TaskTranscript))).all() == []
+        assert (await s.get(WorkItem, child_id)).parent_id is None
+    with pytest.raises(EngineError, match="not found"):
+        await f.engine.delete(item_id)
 
 
 async def test_start_twice_and_bad_answers(make_factory):
