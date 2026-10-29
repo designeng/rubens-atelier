@@ -113,7 +113,7 @@ Project settings can also be edited on the board (**Settings**). A changed `veri
 - utilization ≥ `HARNESS_QUOTA_THROTTLE_AT` or `allowed_warning` → one agent;
 - weekly windows are not spent faster than the week goes by: allowed usage is the elapsed share of the week plus `HARNESS_QUOTA_PACE_SLACK`.
 
-**force** (board header, or `force: true` in `PATCH /scheduler/limits`) keeps the slot limit through the drop to one agent. It does not get past a `rejected` window or `HARNESS_QUOTA_PAUSE_AT`: runs would only hit the limit and go back to the queue.
+**force** (board header, or `force: true` in `PATCH /scheduler/limits`) keeps the slot limit through the drop to one agent and past `HARNESS_QUOTA_PAUSE_AT`. Only a window Claude Code reports as `rejected` still stops dispatch: runs would only hit the limit and go back to the queue.
 
 A run that hits the limit is not a work failure. The step returns to the queue without escalation and continues the same session after the window resets. Action and check steps do not use Claude and bypass the scheduler. Celery worker concurrency must be at least `HARNESS_MAX_AGENTS` (and any limit set on the fly); in compose it is 6.
 

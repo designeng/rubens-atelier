@@ -83,7 +83,7 @@ defineExpose({ clearTitle: () => (title.value = "") });
       </label>
       <label
         class="muted"
-        title="Keep the slot limit while a subscription window is close to full (otherwise it drops to one agent). A rejected or nearly exhausted window still stops dispatch."
+        title="Keep the slot limit while a subscription window is close to full (otherwise it drops to one agent). Only a window Claude reports as rejected still stops dispatch."
       >
         <input
           type="checkbox"

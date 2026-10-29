@@ -563,7 +563,7 @@ class Limits(BaseModel):
     max_agents: int | None = Field(default=None, ge=1, le=64)
     max_agents_per_project: int | None = Field(default=None, ge=1, le=64)
     force: bool | None = Field(
-        default=None, description="Keep max_agents while a subscription window throttles to one agent"
+        default=None, description="Keep max_agents while subscription windows throttle or stop dispatch, unless one is rejected"
     )
 
 

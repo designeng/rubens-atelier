@@ -117,7 +117,7 @@ async def test_limits_change_on_the_fly(scheduler, dispatched):
     assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2, "force": False}
 
 
-async def test_force_keeps_the_limit_through_throttling_but_not_a_full_window(scheduler, redis):
+async def test_force_keeps_the_limit_until_a_window_is_rejected(scheduler, redis):
     now = time.time()
     await quota(redis, "five_hour", status="allowed", utilization=0.85, resets_at=now + 3600)
     assert await scheduler.capacity() == (1, "five_hour at 85%")
@@ -125,6 +125,12 @@ async def test_force_keeps_the_limit_through_throttling_but_not_a_full_window(sc
     assert await scheduler.capacity() == (4, "forced: five_hour at 85%")
     await scheduler.set_limits(max_agents=2)
     assert await scheduler.capacity() == (2, "forced: five_hour at 85%")
+
+    await quota(redis, "seven_day", status="allowed_warning", utilization=0.96, resets_at=now + 600)
+    assert await scheduler.capacity() == (2, "forced: seven_day at 96%")
+    await scheduler.set_limits(force=False)
+    assert (await scheduler.capacity())[0] == 0
+    await scheduler.set_limits(force=True)
 
     await quota(redis, "five_hour", status="rejected", resets_at=now + 600)
     assert (await scheduler.capacity())[0] == 0

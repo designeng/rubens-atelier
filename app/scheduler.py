@@ -8,8 +8,8 @@ dispatched to Celery only when a slot is free:
   - fewer, or none, as subscription windows fill up. Claude Code reports each window's
     status and utilization (rate_limit events); a rejected window pauses dispatch until
     it resets, a nearly full one drops to a single agent, and weekly windows may not be
-    used faster than the week elapses. `force` keeps the operator's limit through that
-    throttling (not through a rejected or nearly full window, where runs would just bounce).
+    used faster than the week elapses. `force` keeps the operator's limit through all of that
+    except a window Claude Code reports as rejected, where runs would just bounce.
 Action and check steps don't use Claude and bypass the scheduler.
 
 Layout (members are "<item_id>:<version>"):
@@ -154,7 +154,9 @@ class Scheduler:
             resets_at, util = q.get("resets_at"), q.get("utilization")
             if resets_at and resets_at <= now:
                 continue  # the window has reset since we heard about it
-            if q.get("status") == "rejected" or (util is not None and util >= settings.quota_pause_at):
+            if q.get("status") == "rejected" or (
+                util is not None and util >= settings.quota_pause_at and not limits["force"]
+            ):
                 return 0, f"{window} limit reached" + (f", resets at {int(resets_at)}" if resets_at else "")
             if q.get("status") == "allowed_warning" and util is None:
                 limit, why = 1, f"{window} limit is close"
