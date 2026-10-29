@@ -39,9 +39,11 @@ sync:
 infra:
 	docker compose up -d --wait redis postgres
 
+# Reload watches app/ only: agents edit .py files under ./workspaces, which would restart the API
+# (and cut every board stream) on each save.
 # The filter repeats the board address after every (re)start; --use-colors because stdout is a pipe.
 api:
-	$(RUN) uvicorn app.api:app --reload --port $(PORT) --use-colors 2>&1 | awk '{ print; if ($$0 ~ /Application startup complete/) print "INFO:     Board: http://localhost:$(PORT)/board"; fflush() }'
+	$(RUN) uvicorn app.api:app --reload --reload-dir app --port $(PORT) --use-colors 2>&1 | awk '{ print; if ($$0 ~ /Application startup complete/) print "INFO:     Board: http://localhost:$(PORT)/board"; fflush() }'
 
 # Concurrency must be at least HARNESS_MAX_AGENTS, plus room for actions (push, PR).
 worker:
