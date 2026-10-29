@@ -44,6 +44,10 @@ def test_projects_items_board_and_inbox(client):
     r = client.patch(f"/items/{backlog['id']}", json={"title": "Renamed", "body": "new text"})
     assert (r.json()["title"], client.get(f"/items/{backlog['id']}").json()["body"]) == ("Renamed", "new text")
     assert client.patch(f"/items/{backlog['id']}", json={"title": ""}).status_code == 422
+    assert client.patch(f"/items/{backlog['id']}", json={"title": None}).status_code == 422
+    r = client.patch(f"/items/{backlog['id']}", json={"priority": 7, "model": "claude-sonnet-5-5"})
+    assert (r.json()["priority"], r.json()["model"]) == (7, "claude-sonnet-5-5")
+    assert client.patch(f"/items/{backlog['id']}", json={"priority": 101}).status_code == 422
 
     # A cancelled story can go back to the backlog and be started again; a finished one cannot.
     r = client.post(f"/items/{backlog['id']}/reopen")
@@ -92,6 +96,15 @@ def test_scheduler_pause_and_resume(client):
     paused = client.post("/scheduler/pause", json={"reason": "release freeze"}).json()
     assert paused["capacity"] == 0 and paused["reason"] == "paused: release freeze"
     assert client.post("/scheduler/resume").json()["reason"] == "ok"
+
+
+def test_scheduler_limits(client):
+    changed = client.patch("/scheduler/limits", json={"max_agents": 1}).json()
+    assert changed["capacity"] == 1
+    assert changed["limits"] == {"max_agents": 1, "max_agents_per_project": settings.max_agents_per_project, "force": False}
+    assert client.patch("/scheduler/limits", json={"force": True}).json()["limits"]["force"] is True
+    assert client.patch("/scheduler/limits", json={"max_agents": 0}).status_code == 422
+    assert client.delete("/scheduler/limits").json()["limits"]["max_agents"] == settings.max_agents
 
 
 def test_update_project_settings(client):

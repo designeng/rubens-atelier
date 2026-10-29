@@ -4,10 +4,12 @@ under its Claude subscription limits instead of running into them.
 Agent steps wait in a priority queue (higher item priority first, then FIFO) and are
 dispatched to Celery only when a slot is free:
   - at most `max_agents` at once and `max_agents_per_project` per project (fairness);
+    both default to the settings and can be changed on the fly (`set_limits`);
   - fewer, or none, as subscription windows fill up. Claude Code reports each window's
     status and utilization (rate_limit events); a rejected window pauses dispatch until
     it resets, a nearly full one drops to a single agent, and weekly windows may not be
-    used faster than the week elapses.
+    used faster than the week elapses. `force` keeps the operator's limit through all of that
+    except a window Claude Code reports as rejected, where runs would just bounce.
 Action and check steps don't use Claude and bypass the scheduler.
 
 Layout (members are "<item_id>:<version>"):
@@ -18,6 +20,7 @@ Layout (members are "<item_id>:<version>"):
   harness:sched:active:task      hash   member → harness task id, once the step started it
   harness:sched:quota            hash   window type → latest rate-limit info (json)
   harness:sched:paused           string operator pause reason
+  harness:sched:limits           hash   max_agents / max_agents_per_project / force set by the operator
 """
 
 import json
@@ -39,6 +42,7 @@ ACTIVE_PROJECT = "harness:sched:active:project"
 ACTIVE_TASK = "harness:sched:active:task"
 QUOTA = "harness:sched:quota"
 PAUSED = "harness:sched:paused"
+LIMITS = "harness:sched:limits"
 LOCK = "harness:sched:lock"
 
 WEEK = 7 * 24 * 3600
@@ -80,6 +84,12 @@ class Scheduler:
             p.hdel(READY_PROJECT, m)
             await p.execute()
 
+    async def reprioritize(self, item_id: str, version: int, old: int, new: int) -> None:
+        """Move a waiting step to its new place in the queue, keeping its enqueue time."""
+        m = member(item_id, version)
+        if (score := await self.r.zscore(READY, m)) is not None:
+            await self.r.zadd(READY, {m: score + (old - new) * PRIORITY_WEIGHT}, xx=True)
+
     async def is_pending(self, item_id: str, version: int) -> bool:
         m = member(item_id, version)
         return await self.r.zscore(READY, m) is not None or await self.r.zscore(ACTIVE, m) is not None
@@ -105,12 +115,13 @@ class Scheduler:
         try:
             await self._cleanup()
             capacity, _ = await self.capacity()
+            per_project_cap = (await self.limits())["max_agents_per_project"]
             active = await self.r.zrange(ACTIVE, 0, -1)
             free = capacity - len(active)
             per_project = Counter(await self.r.hmget(ACTIVE_PROJECT, active)) if active else Counter()
             for m in await self.r.zrange(READY, 0, -1) if free > 0 else []:
                 project = await self.r.hget(READY_PROJECT, m)
-                if per_project[project] >= settings.max_agents_per_project:
+                if per_project[project] >= per_project_cap:
                     continue
                 async with self.r.pipeline(transaction=True) as p:
                     p.zrem(READY, m)
@@ -135,13 +146,17 @@ class Scheduler:
         if reason := await self.r.get(PAUSED):
             return 0, f"paused: {reason}"
         now = time.time()
-        limit, why = settings.max_agents, "ok"
+        limits = await self.limits()
+        max_agents = limits["max_agents"]
+        limit, why = max_agents, "ok"
         for window, raw in (await self.r.hgetall(QUOTA)).items():
             q = json.loads(raw)
             resets_at, util = q.get("resets_at"), q.get("utilization")
             if resets_at and resets_at <= now:
                 continue  # the window has reset since we heard about it
-            if q.get("status") == "rejected" or (util is not None and util >= settings.quota_pause_at):
+            if q.get("status") == "rejected" or (
+                util is not None and util >= settings.quota_pause_at and not limits["force"]
+            ):
                 return 0, f"{window} limit reached" + (f", resets at {int(resets_at)}" if resets_at else "")
             if q.get("status") == "allowed_warning" and util is None:
                 limit, why = 1, f"{window} limit is close"
@@ -151,7 +166,39 @@ class Scheduler:
                 elapsed = 1 - (resets_at - now) / WEEK
                 if util > elapsed + settings.quota_pace_slack:
                     limit, why = 1, f"{window} at {util:.0%}, ahead of the weekly pace ({elapsed:.0%} elapsed)"
-        return min(limit, settings.max_agents), why
+        if limits["force"] and limit < max_agents:
+            return max_agents, f"forced: {why}"
+        return min(limit, max_agents), why
+
+    async def limits(self) -> dict[str, Any]:
+        """Slot limits in force: the operator's overrides on top of the settings."""
+        overrides = await self.r.hgetall(LIMITS)
+        return {
+            k: int(overrides.get(k, getattr(settings, k))) for k in ("max_agents", "max_agents_per_project")
+        } | {"force": overrides.get("force") == "1"}
+
+    async def set_limits(
+        self, max_agents: int | None = None, max_agents_per_project: int | None = None, force: bool | None = None
+    ) -> None:
+        """Change the slot limits for every dispatcher at once. Running agents above a lowered
+        limit finish; new ones start only once the count is under it."""
+        changes = {
+            k: v
+            for k, v in (
+                ("max_agents", max_agents),
+                ("max_agents_per_project", max_agents_per_project),
+                ("force", None if force is None else int(force)),
+            )
+            if v is not None
+        }
+        if changes:
+            await self.r.hset(LIMITS, mapping=changes)
+        await self.dispatch()
+
+    async def reset_limits(self) -> None:
+        """Back to the settings (HARNESS_MAX_AGENTS, HARNESS_MAX_AGENTS_PER_PROJECT)."""
+        await self.r.delete(LIMITS)
+        await self.dispatch()
 
     async def pause(self, reason: str) -> None:
         await self.r.set(PAUSED, reason or "by operator")
@@ -165,6 +212,7 @@ class Scheduler:
         return {
             "capacity": capacity,
             "reason": reason,
+            "limits": await self.limits(),
             "active": await self.r.zrange(ACTIVE, 0, -1),
             "ready": await self.r.zrange(READY, 0, -1),
             "quota": {w: json.loads(v) for w, v in (await self.r.hgetall(QUOTA)).items()},
