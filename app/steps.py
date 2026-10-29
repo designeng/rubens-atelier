@@ -125,7 +125,7 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 resume_session=item.sessions.get(st.agent) if st.resume else None,
                 verify_command=project.verify_command if st.verify else None,
                 output_schema=verdict_schema(st.verdicts) if st.verdicts else None,
-                model=st.model,
+                model=item.model or st.model,
                 effort=st.effort,
                 disallowed_tools=st.disallowed_tools or None,
                 metadata={"project": project.slug, "item_id": item.id, "state": item.state},

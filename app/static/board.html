@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory board</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e3e6eb; --accent:#3b5bdb; --warn:#c2410c; --ok:#15803d; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161b; --card:#1d2027; --ink:#e6e8ec; --muted:#9aa1ad; --line:#2c3039; --accent:#748ffc; --warn:#fb923c; --ok:#4ade80; --bad:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  input, select, textarea, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+  button { cursor:pointer; } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #board { display:grid; grid-template-columns:repeat(5, minmax(200px, 1fr)); gap:12px; padding:16px; overflow-x:auto; }
+  .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:8px; cursor:pointer; }
+  .card .meta { color:var(--muted); font-size:12px; margin-top:4px; }
+  .prog { font-size:12px; margin-top:6px; }
+  .activity { font:12px ui-monospace, monospace; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+  .bar { height:3px; background:var(--line); border-radius:2px; margin-top:6px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--accent); }
+  .spin { display:inline-block; width:9px; height:9px; margin-right:6px; vertical-align:-1px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
+  .todos { list-style:none; padding:0; margin:6px 0; } .todos li { font-size:13px; }
+  .col[data-col=needs_human] h2 { color:var(--warn); } .col[data-col=done] h2 { color:var(--ok); } .col[data-col=failed] h2 { color:var(--bad); }
+  #detail { position:fixed; inset:0 0 0 auto; width:min(560px, 100%); background:var(--card); border-left:1px solid var(--line); padding:16px; overflow:auto; display:none; }
+  #detail.open { display:block; }
+  #detail pre { white-space:pre-wrap; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+  dialog { background:var(--card); color:var(--ink); border:1px solid var(--line); border-radius:10px; padding:16px; width:min(420px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  dialog label { display:block; margin:10px 0 4px; font-size:12px; color:var(--muted); }
+  dialog input, dialog select { width:100%; }
+  #detail pre.error { border:1px solid var(--bad); color:var(--bad); }
+  .run-error { color:var(--bad); font:12px ui-monospace, monospace; white-space:pre-wrap; margin:2px 0 6px 12px; }
+  .muted { color:var(--muted); } #err { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Factory</h1>
+  <input id="token" type="password" placeholder="API token" size="14">
+  <select id="project"></select>
+  <button id="projSettings" title="Project settings">Settings</button>
+  <button id="ghBtn" title="GitHub App connection">GitHub</button>
+  <button id="newProject">+ project</button>
+  <input id="title" placeholder="New story title" size="28">
+  <input id="model" list="models" placeholder="model (default)" size="16" title="Model for this story's agents">
+  <datalist id="models"><option value="claude-fable-5-1"><option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"></datalist>
+  <button class="primary" id="add">Add &amp; start</button>
+  <span id="sched" class="muted"></span>
+  <button id="pause"></button>
+  <span id="err"></span>
+</header>
+<main id="board"></main>
+<aside id="detail"></aside>
+<dialog id="ghDlg">
+  <h3 style="margin-top:0">GitHub</h3>
+  <div id="ghBody"></div>
+  <div class="row" style="margin-top:14px"><button id="ghRefresh">Refresh</button><button id="ghClose">Close</button></div>
+</dialog>
+<dialog id="projDlg">
+  <h3 style="margin-top:0">New project</h3>
+  <label for="pSlug">Slug (a-z, 0-9, -)</label><input id="pSlug">
+  <label for="pInst">GitHub access</label><select id="pInst"></select>
+  <div class="muted" id="pInstHint" style="font-size:12px; margin-top:4px"></div>
+  <label for="pRepo">Repository (owner/name)</label>
+  <input id="pRepo" list="pRepos" autocomplete="off"><datalist id="pRepos"></datalist>
+  <label for="pVerify">Verify command (optional, e.g. make test)</label><input id="pVerify">
+  <div class="row" style="margin-top:14px">
+    <button class="primary" id="pCreate">Create</button><button id="pCancel">Cancel</button>
+    <span id="pErr" style="color:var(--bad)"></span>
+  </div>
+</dialog>
+<dialog id="setDlg">
+  <h3 style="margin-top:0">Project settings</h3>
+  <div class="muted" id="sRepo"></div>
+  <label for="sBase">Base branch (empty: the repository's default branch; applies to new stories only)</label><input id="sBase">
+  <label for="sVerify">Verify command (empty: no harness checks)</label><input id="sVerify">
+  <div class="row" style="margin-top:14px">
+    <button class="primary" id="sSave">Save</button><button id="sCancel">Cancel</button>
+    <span id="sErr" style="color:var(--bad)"></span>
+  </div>
+</dialog>
+<script>
+const $ = (id) => document.getElementById(id);
+const COLS = { backlog: "Backlog", working: "Agents working", needs_human: "Needs you", done: "Done", failed: "Failed / cancelled" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
+const store = { get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+let openItem = null;
+let projects = [];
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "content-type": "application/json", authorization: `Bearer ${$("token").value}` } });
+  if (!res.ok) { const msg = (await res.json().catch(() => ({}))).detail || res.statusText; throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg)); }
+  $("err").textContent = "";
+  return res.json();
+}
+const fail = (e) => { $("err").textContent = e.message; };
+
+async function loadProjects() {
+  projects = await api("/projects");
+  const want = store.get("project");
+  $("project").innerHTML = projects.map((p) => `<option ${p.slug === want ? "selected" : ""}>${esc(p.slug)}</option>`).join("");
+  await refresh();
+}
+
+function elapsed(iso) {
+  if (!iso) return "";
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+}
+
+// p: the item's `progress` from the API (only set while the item is in the working column).
+function progressSummary(p) {
+  if (p.kind === "check") return `waiting for ${p.step}`;
+  if (p.kind === "action") return `running ${p.step}`;
+  if (!p.task_id) return p.queued ? `${p.step} · waiting for a free agent slot` : `${p.step} · starting`;
+  const todos = p.todos ? `todos ${p.todos.filter((t) => t.status === "completed").length}/${p.todos.length}` : null;
+  return [p.step, p.turn != null ? `turn ${p.turn}/${p.max_turns}` : null, todos, elapsed(p.started_at)].filter(Boolean).join(" · ");
+}
+
+function progressHtml(p) {
+  if (!p) return "";
+  const pct = p.turn != null ? Math.min(100, Math.round(100 * p.turn / p.max_turns)) : null;
+  return `<div class="prog"><span class="spin"></span>${esc(progressSummary(p))}</div>
+    ${p.activity ? `<div class="activity" title="${esc(p.activity)}">${esc(p.activity)}</div>` : ""}
+    ${pct != null ? `<div class="bar" title="turns used"><i style="width:${pct}%"></i></div>` : ""}`;
+}
+
+async function refresh() {
+  const slug = $("project").value;
+  if (!slug) { $("board").innerHTML = '<p class="muted">Create a project to start.</p>'; return; }
+  const board = await api(`/projects/${slug}/board`);
+  $("board").innerHTML = Object.entries(COLS).map(([col, name]) => `
+    <section class="col" data-col="${col}"><h2>${name} · ${board[col].length}</h2>
+      ${board[col].map((i) => `<div class="card" data-id="${i.id}"><div>${esc(i.title)}</div>
+        <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div>${progressHtml(i.progress)}</div>`).join("")}
+    </section>`).join("");
+  if (openItem) await showItem(openItem);
+  const sc = await api("/scheduler");
+  const paused = sc.reason.startsWith("paused");
+  $("sched").textContent = `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${sc.reason}` : "");
+  $("pause").textContent = paused ? "Resume" : "Pause";
+  $("pause").onclick = () => api(`/scheduler/${paused ? "resume" : "pause"}`, { method: "POST", body: "{}" }).then(refresh).catch(fail);
+}
+
+async function showItem(id) {
+  const same = openItem === id;
+  openItem = id;
+  const it = await api(`/items/${id}`);
+  const req = it.open_request;
+  const keep = same && $("comment") && { value: $("comment").value, focus: document.activeElement === $("comment"),
+    at: [$("comment").selectionStart, $("comment").selectionEnd], scroll: $("detail").scrollTop };
+  const latest = {}; it.artifacts.forEach((a) => { latest[a.name] = a; });
+  $("detail").innerHTML = `
+    <div class="row"><button id="close">✕</button>
+      ${it.state === null ? '<button class="primary" id="start">Start</button>' : ""}
+      ${it.column === "working" || it.column === "needs_human" ? '<button id="cancel">Cancel</button>' : ""}</div>
+    <h3>${esc(it.title)}</h3>
+    <div class="row"><label for="itModel">Model</label>
+      <input id="itModel" list="models" size="20" placeholder="default" value="${esc(it.model || "")}">
+      <button id="itModelSave">Save</button></div>
+    <p class="muted">${esc(it.kind)} · ${esc(it.workflow)} · state <b>${esc(it.state || "backlog")}</b>
+      ${it.branch ? ` · ${esc(it.branch)}` : ""} ${it.pr_url ? ` · <a href="${esc(it.pr_url)}" target="_blank">PR</a>` : ""}</p>
+    ${it.progress ? `<h4>Now</h4>${progressHtml(it.progress)}
+      ${it.progress.todos ? `<ul class="todos">${it.progress.todos.map((t) => `<li>${t.status === "completed" ? "☑" : t.status === "in_progress" ? "▸" : "☐"} ${esc(t.content)}</li>`).join("")}</ul>` : ""}` : ""}
+    ${it.body ? `<pre>${esc(it.body)}</pre>` : ""}
+    ${req ? `<h4>Decision needed</h4><p>${esc(req.question)}</p>
+      <textarea id="comment" rows="3" style="width:100%" placeholder="Comment for the next agent (optional)"></textarea>
+      <div class="row">${req.options.map((o) => `<button class="primary" data-answer="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
+    <h4>Artifacts</h4>${Object.values(latest).map((a) => `<p><b${a.name === "error" ? ' style="color:var(--bad)"' : ""}>${esc(a.name)}</b></p><pre${a.name === "error" ? ' class="error"' : ""}>${esc(a.content)}</pre>`).join("") || '<p class="muted">none yet</p>'}
+    <h4>Runs</h4>${it.runs.map((r) => `<div>${esc(r.state)} · ${esc(r.role)} · ${esc(r.status)}${r.verdict ? ` → ${esc(r.verdict)}` : ""}
+      ${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}` : ""} <span class="muted">task ${esc(r.task_id.slice(0, 8))}</span>
+      ${r.error ? `<div class="run-error">${esc(r.error)}</div>` : ""}</div>`).join("") || '<p class="muted">none</p>'}
+    <h4>History</h4>${it.events.map((e) => `<div class="muted">${new Date(e.at).toLocaleString()} · ${esc(e.from_state || "∅")} -[${esc(e.verdict || "start")}]→ <b>${esc(e.to_state)}</b> · ${esc(e.actor)}</div>`).join("")}`;
+  $("detail").classList.add("open");
+  if (keep && $("comment")) {
+    $("comment").value = keep.value;
+    $("detail").scrollTop = keep.scroll;
+    if (keep.focus) { $("comment").focus(); $("comment").setSelectionRange(...keep.at); }
+  }
+  $("close").onclick = () => { openItem = null; $("detail").classList.remove("open"); };
+  $("itModelSave").onclick = () => api(`/items/${id}`, { method: "PATCH", body: JSON.stringify({ model: $("itModel").value.trim() || null }) })
+    .then(() => showItem(id)).catch(fail);
+  if ($("start")) $("start").onclick = () => api(`/items/${id}/start`, { method: "POST" }).then(refresh).catch(fail);
+  if ($("cancel")) $("cancel").onclick = () => api(`/items/${id}/cancel`, { method: "POST" }).then(refresh).catch(fail);
+  document.querySelectorAll("[data-answer]").forEach((b) => b.onclick = () =>
+    api(`/requests/${req.id}/answer`, { method: "POST", body: JSON.stringify({ option: b.dataset.answer, comment: $("comment").value }) }).then(refresh).catch(fail));
+}
+
+$("board").onclick = (e) => { const card = e.target.closest(".card"); if (card) showItem(card.dataset.id).catch(fail); };
+$("token").value = store.get("token");
+$("token").onchange = () => { store.set("token", $("token").value); loadProjects().catch(fail); refreshGithub().catch(() => {}); };
+$("project").onchange = () => { store.set("project", $("project").value); openItem = null; $("detail").classList.remove("open"); refresh().catch(fail); };
+$("add").onclick = () => {
+  const title = $("title").value.trim(); if (!title) return;
+  const body = prompt("Description (what to build, acceptance criteria):") || "";
+  api(`/projects/${$("project").value}/items`, { method: "POST", body: JSON.stringify({ title, body, model: $("model").value.trim() || null, start: true }) })
+    .then(() => { $("title").value = ""; return refresh(); }).catch(fail);
+};
+let ghApp = { configured: false, installations: [] };
+
+function renderGhButton() {
+  const live = ghApp.installations.filter((i) => !i.suspended);
+  $("ghBtn").textContent = !ghApp.configured ? "GitHub: not configured"
+    : live.length ? `GitHub ✓ ${live.map((i) => i.account).join(", ")}` : "Connect GitHub";
+  $("ghBtn").classList.toggle("primary", ghApp.configured && !live.length);
+}
+
+function renderGhDialog() {
+  if (!ghApp.configured) {
+    $("ghBody").innerHTML = `<p>The GitHub App is not configured on the server. Set <code>HARNESS_GITHUB_APP_ID</code>,
+      <code>HARNESS_GITHUB_APP_SLUG</code> and <code>HARNESS_GITHUB_APP_PRIVATE_KEY_FILE</code> and restart.
+      Until then projects use <code>HARNESS_GITHUB_TOKEN</code>.</p>`;
+    return;
+  }
+  const rows = ghApp.installations.map((i) => `<div class="row" style="justify-content:space-between">
+    <span><b>${esc(i.account)}</b> <span class="muted">· ${i.repository_selection === "all" ? "all repositories" : "selected repositories"}${i.suspended ? " · suspended" : ""}</span></span>
+    ${i.manage_url ? `<a href="${esc(i.manage_url)}" target="_blank" rel="noopener">manage ↗</a>` : ""}</div>`).join("");
+  $("ghBody").innerHTML = (rows || '<p class="muted">The app is not installed yet.</p>') +
+    (ghApp.install_url ? `<p><a href="${esc(ghApp.install_url)}" target="_blank" rel="noopener">${rows ? "Add account / change repositories" : "Install the app"} ↗</a><br>
+      <span class="muted">Pick the repositories on GitHub, come back and press Refresh.</span></p>` : "");
+}
+
+async function refreshGithub() {
+  ghApp = await api("/github/app").catch(() => ({ configured: false, installations: [] }));
+  renderGhButton();
+  if ($("ghDlg").open) renderGhDialog();
+}
+
+$("ghBtn").onclick = async () => { await refreshGithub(); renderGhDialog(); $("ghDlg").showModal(); };
+$("ghRefresh").onclick = () => refreshGithub().catch(fail);
+$("ghClose").onclick = () => $("ghDlg").close();
+window.addEventListener("focus", () => refreshGithub().catch(() => {}));  // back from github.com
+
+async function loadInstallations() {
+  await refreshGithub();
+  const opts = ghApp.installations.filter((i) => !i.suspended).map((i) =>
+    `<option value="${i.id}">${esc(i.account)} · ${i.repository_selection === "all" ? "all repos" : "selected repos"}</option>`);
+  opts.push('<option value="">Server token (HARNESS_GITHUB_TOKEN)</option>');
+  $("pInst").innerHTML = opts.join("");
+  const link = ghApp.install_url
+    ? `<a href="${esc(ghApp.install_url)}" target="_blank" rel="noopener">Install the app / change repositories ↗</a> · <a href="#" id="pReload">refresh</a>`
+    : ghApp.configured ? "" : "GitHub App is not configured on the server.";
+  $("pInstHint").innerHTML = link;
+  if ($("pReload")) $("pReload").onclick = (e) => { e.preventDefault(); loadInstallations().then(loadRepos).catch(fail); };
+}
+
+async function loadRepos() {
+  const id = $("pInst").value;
+  $("pRepos").innerHTML = "";
+  if (!id) return;
+  const repos = await api(`/github/installations/${id}/repositories`);
+  $("pRepos").innerHTML = repos.map((r) => `<option value="${esc(r.full_name)}">`).join("");
+  if (repos.length === 1) $("pRepo").value = repos[0].full_name;
+}
+
+$("newProject").onclick = async () => {
+  $("pErr").textContent = "";
+  await loadInstallations();
+  await loadRepos().catch(fail);
+  $("projDlg").showModal();
+};
+$("pInst").onchange = () => loadRepos().catch(fail);
+$("pCancel").onclick = () => $("projDlg").close();
+$("pCreate").onclick = () => {
+  const slug = $("pSlug").value.trim(), repo = $("pRepo").value.trim();
+  if (!slug || !repo) { $("pErr").textContent = "slug and repository are required"; return; }
+  const body = { slug, repo, verify_command: $("pVerify").value.trim() || null, installation_id: Number($("pInst").value) || null };
+  api("/projects", { method: "POST", body: JSON.stringify(body) })
+    .then(() => { $("projDlg").close(); store.set("project", slug); return loadProjects(); })
+    .catch((e) => { $("pErr").textContent = e.message; });
+};
+$("projSettings").onclick = () => {
+  const p = projects.find((x) => x.slug === $("project").value);
+  if (!p) { fail(new Error("no project")); return; }
+  $("sRepo").textContent = `${p.slug} · ${p.repo}`;
+  $("sBase").value = p.base_branch || "";
+  $("sVerify").value = p.verify_command || "";
+  $("sErr").textContent = "";
+  $("setDlg").showModal();
+};
+$("sCancel").onclick = () => $("setDlg").close();
+$("sSave").onclick = () => {
+  const body = { base_branch: $("sBase").value.trim() || null, verify_command: $("sVerify").value.trim() || null };
+  api(`/projects/${encodeURIComponent($("project").value)}`, { method: "PATCH", body: JSON.stringify(body) })
+    .then(() => { $("setDlg").close(); return loadProjects(); })
+    .catch((e) => { $("sErr").textContent = e.message; });
+};
+loadProjects().catch(fail);
+refreshGithub().catch(() => {});
+setInterval(() => refresh().catch(fail), 5000);
+</script>
+</body>
+</html>

@@ -89,12 +89,31 @@ def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgen
     )
 
 
+def describe_error(result: ResultMessage, last_failure: str | None) -> str:
+    """The SDK's own text is often only a diagnostic; add the last failed tool call, which is
+    usually the real cause (e.g. a command the permission rules denied)."""
+    base = ", ".join(map(str, result.errors or [])) or result.subtype
+    parts = [base]
+    if last_failure:
+        parts.append(f"last failed tool call: {last_failure}")
+    parts.append(f"after {result.num_turns} turns")
+    return "; ".join(parts)
+
+
+def _failure(call: dict[str, Any] | None, content: Any) -> str:
+    text = content if isinstance(content, str) else str(content)
+    what = call["name"] + " " + str(call["input"].get("command") or call["input"]) if call else "tool call"
+    return f"{what[:300]} -> {text[:300]}"
+
+
 async def run_claude(
     spec: TaskCreate, *, cwd: Path, resume: str | None, emit: Emit
 ) -> AgentOutcome:
     session_id: str | None = resume
     result: ResultMessage | None = None
     turns = 0
+    calls: dict[str, dict[str, Any]] = {}
+    last_failure: str | None = None
 
     async for msg in query(prompt=spec.prompt, options=build_options(spec, cwd, resume)):
         match msg:
@@ -111,10 +130,15 @@ async def run_claude(
                         case ThinkingBlock(thinking=thinking) if thinking:
                             await emit("thinking", {"text": _clip(thinking)})
                         case ToolUseBlock(id=id_, name=name, input=input_):
+                            calls[id_] = {"name": name, "input": input_}
                             await emit("tool_use", {"id": id_, "name": name, "input": _clip(input_)})
             case UserMessage(content=list() as blocks):
                 for block in blocks:
                     if isinstance(block, ToolResultBlock):
+                        if block.is_error:
+                            last_failure = _failure(calls.get(block.tool_use_id), block.content)
+                        else:
+                            last_failure = None
                         await emit(
                             "tool_result",
                             {
@@ -138,7 +162,7 @@ async def run_claude(
         session_id=session_id,
         result=result.result,
         is_error=result.is_error,
-        error=(", ".join(map(str, result.errors or [])) or result.subtype) if result.is_error else None,
+        error=describe_error(result, last_failure) if result.is_error else None,
         cost_usd=result.total_cost_usd,
         num_turns=result.num_turns,
         structured_output=result.structured_output,

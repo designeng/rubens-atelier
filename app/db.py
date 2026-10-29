@@ -72,6 +72,8 @@ class WorkItem(Base):
     pr_url: Mapped[str | None] = mapped_column(String(500))
     head_sha: Mapped[str | None] = mapped_column(String(40))  # last pushed commit, for CI checks
     priority: Mapped[int] = mapped_column(default=0)  # higher runs first
+    # Model for every agent step of this item; None = the workflow state's or the default model.
+    model: Mapped[str | None] = mapped_column(String(100))
     # Claude session per role, so a role can resume its own context on the next visit.
     sessions: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # Where the item came from, e.g. {"issue": 42} for a GitHub issue.
@@ -141,6 +143,9 @@ def _add_missing_columns(conn) -> None:
     existing = {c["name"] for c in inspect(conn).get_columns("projects")}
     if "installation_id" not in existing:
         conn.execute(text("ALTER TABLE projects ADD COLUMN installation_id BIGINT"))
+    existing = {c["name"] for c in inspect(conn).get_columns("work_items")}
+    if "model" not in existing:
+        conn.execute(text("ALTER TABLE work_items ADD COLUMN model VARCHAR(100)"))
 
 
 class Database:

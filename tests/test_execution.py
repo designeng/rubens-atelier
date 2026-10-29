@@ -187,6 +187,8 @@ def test_bash_allowlist_and_sandbox(monkeypatch):
     from app.runner import build_options
 
     spec = TaskCreate(prompt="x")
+    monkeypatch.setattr(settings, "bash_allowed_commands", [])
+    monkeypatch.setattr(settings, "sandbox", False)
     opts = build_options(spec, Path("."), None)
     assert "Bash" in opts.allowed_tools and not opts.sandbox
 
@@ -196,3 +198,18 @@ def test_bash_allowlist_and_sandbox(monkeypatch):
     assert "Bash" not in opts.allowed_tools
     assert {"Bash(pytest:*)", "Bash(git status:*)", "Read"} <= set(opts.allowed_tools)
     assert opts.sandbox["enabled"] and not opts.sandbox["allowUnsandboxedCommands"]
+
+
+def test_error_names_the_last_failed_tool_call():
+    from claude_agent_sdk import ResultMessage
+
+    from app.runner import _failure, describe_error
+
+    result = ResultMessage(
+        subtype="error_during_execution", duration_ms=1, duration_api_ms=1, is_error=True,
+        num_turns=28, session_id="s", errors=["[ede_diagnostic] stop_reason=tool_use"],
+    )
+    call = {"name": "Bash", "input": {"command": "until ! pgrep x; do sleep 2; done"}}
+    msg = describe_error(result, _failure(call, "The user doesn't want to proceed"))
+    assert "Bash until ! pgrep x" in msg and "doesn't want to proceed" in msg and "28 turns" in msg
+    assert "last failed" not in describe_error(result, None)

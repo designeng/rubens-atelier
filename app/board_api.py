@@ -45,6 +45,9 @@ class Orm(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+ModelName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+
 class ProjectIn(BaseModel):
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
     repo: str = Field(pattern=r"^[\w.-]+/[\w.-]+$")
@@ -81,7 +84,16 @@ class ItemIn(BaseModel):
     parent_id: str | None = None
     issue: int | None = Field(default=None, ge=1, description="GitHub issue the PR should close")
     priority: int = Field(default=0, ge=-100, le=100, description="Higher is scheduled first")
+    model: ModelName | None = None
     start: bool = False
+
+
+class ItemPatch(BaseModel):
+    """Editable item settings; applies from the next agent step, null goes back to the default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: ModelName | None = None
 
 
 class ItemOut(Orm):
@@ -96,6 +108,7 @@ class ItemOut(Orm):
     branch: str | None
     pr_url: str | None
     priority: int
+    model: str | None
     updated_at: datetime
     column: Column = "backlog"
     # Only for items in the working column: what is happening right now (see _progress).
@@ -293,6 +306,7 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
             body=body.body,
             workflow=body.workflow,
             priority=body.priority,
+            model=body.model,
             source={"issue": body.issue} if body.issue else {},
         )
         s.add(item)
@@ -360,6 +374,18 @@ async def get_item(item_id: str, db: Db, engine: Eng) -> ItemDetail:
             events=[EventOut.model_validate(e) for e in events],
             open_request=RequestOut.model_validate(request) if request else None,
         )
+
+
+@router.patch("/items/{item_id}")
+async def update_item(item_id: str, body: ItemPatch, db: Db, engine: Eng) -> ItemOut:
+    async with db.session() as s:
+        item = await s.get(WorkItem, item_id)
+        if item is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
+        for field, value in body.model_dump(exclude_unset=True).items():
+            setattr(item, field, value)
+        await s.commit()
+        return _item_out(engine, item)
 
 
 @router.post("/items/{item_id}/start", status_code=status.HTTP_202_ACCEPTED)
