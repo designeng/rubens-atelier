@@ -1,6 +1,7 @@
 import type {
   Board,
   GithubApp,
+  GitSnapshot,
   ItemDetail,
   ItemIn,
   ItemOut,
@@ -52,6 +53,7 @@ export function createClient(
     getBoard: (slug: string) => api<Board>(`/projects/${seg(slug)}/board`),
     createItem: (slug: string, item: ItemIn) => api<ItemOut>(`/projects/${seg(slug)}/items`, "POST", item),
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),
+    getItemGit: (id: string, diff = false) => api<GitSnapshot>(`/items/${seg(id)}/git${diff ? "?diff=true" : ""}`),
     startItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/start`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
     answerRequest: (id: string, option: string, comment: string) =>

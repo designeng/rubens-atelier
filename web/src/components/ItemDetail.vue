@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import type { ArtifactOut } from "../api/types";
+import type { ArtifactOut, GitSnapshot } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
 import { todoMark } from "../format";
 import ProgressBlock from "./ProgressBlock.vue";
@@ -22,6 +22,32 @@ const artifacts = computed(() => {
   for (const a of it.value?.artifacts ?? []) latest.set(a.name, a);
   return [...latest.values()];
 });
+
+// Read-only look into the story's workspace: what the agent has committed (and left uncommitted).
+const git = ref<GitSnapshot | null>(null);
+const gitError = ref("");
+const gitBusy = ref(false);
+watch(
+  () => it.value?.id,
+  () => {
+    git.value = null;
+    gitError.value = "";
+  },
+);
+async function loadGit(diff = false): Promise<void> {
+  if (!it.value) return;
+  const id = it.value.id;
+  gitBusy.value = true;
+  gitError.value = "";
+  try {
+    const snap = await b.api.getItemGit(id, diff);
+    if (it.value?.id === id) git.value = snap;
+  } catch (e) {
+    gitError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    gitBusy.value = false;
+  }
+}
 const cancellable = computed(() => it.value?.column === "working" || it.value?.column === "needs_human");
 </script>
 
@@ -54,6 +80,29 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
         <div class="row">
           <button v-for="o in req.options" :key="o" class="primary" @click="b.answer(req.id, o, comment)">{{ o }}</button>
         </div>
+      </template>
+      <template v-if="it.branch">
+        <h4>Git</h4>
+        <div class="row">
+          <button :disabled="gitBusy" @click="loadGit()">{{ git ? "Refresh" : "Load report" }}</button>
+          <button :disabled="gitBusy" @click="loadGit(true)">Show diff</button>
+        </div>
+        <p v-if="gitError" class="err">{{ gitError }}</p>
+        <template v-if="git">
+          <p class="muted">
+            {{ git.branch }} @ {{ git.head }}<template v-if="git.merge_in_progress"> · merge in progress</template>
+          </p>
+          <p><b>Commits</b></p>
+          <pre>{{ git.commits || "no commits on top of the base branch" }}</pre>
+          <p><b>Status</b></p>
+          <pre>{{ git.status }}</pre>
+          <p><b>Changes vs base</b></p>
+          <pre>{{ git.stat || "no changes" }}</pre>
+          <template v-if="git.diff != null">
+            <p><b>Diff</b></p>
+            <pre>{{ git.diff }}</pre>
+          </template>
+        </template>
       </template>
       <h4>Artifacts</h4>
       <template v-for="a in artifacts" :key="a.id">

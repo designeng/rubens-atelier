@@ -29,6 +29,14 @@ describe("createClient", () => {
     expect(f.calls[0].init.body).toBeUndefined();
   });
 
+  it("asks for the git report, with the diff on request", async () => {
+    const f = fakeFetch(() => json({}));
+    const api = createClient(() => "t", f.impl);
+    await api.getItemGit("a/b");
+    await api.getItemGit("a/b", true);
+    expect(f.calls.map((c) => c.url)).toEqual(["/items/a%2Fb/git", "/items/a%2Fb/git?diff=true"]);
+  });
+
   it("posts JSON bodies", async () => {
     const f = fakeFetch(() => json({ advanced: true }));
     const api = createClient(() => "t", f.impl);

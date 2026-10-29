@@ -120,6 +120,16 @@ export interface ItemDetail extends ItemOut {
   open_request: RequestOut | null;
 }
 
+export interface GitSnapshot {
+  branch: string;
+  head: string;
+  merge_in_progress: boolean;
+  status: string;
+  commits: string;
+  stat: string;
+  diff?: string;
+}
+
 export type Board = Record<Column, ItemOut[]>;
 
 export interface SchedulerStatus {
