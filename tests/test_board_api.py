@@ -156,6 +156,23 @@ def test_scheduler_pause_and_resume(client):
     assert client.post("/scheduler/resume").json()["reason"] == "ok"
 
 
+def test_run_now_starts_one_waiting_step_while_paused(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    item = client.post("/projects/app/items", json={"title": "Stopped", "start": True}).json()
+    sched = app.state.scheduler
+    client.post("/scheduler/pause", json={"reason": "debugging"})
+    client.portal.call(sched.submit, item["id"], item["version"], item["project_id"])
+    client.enqueued.clear()
+
+    assert client.post(f"/items/{item['id']}/run-now").status_code == 202
+    assert client.enqueued == [(item["id"], item["version"])]
+    assert client.get("/scheduler").json()["reason"] == "paused: debugging"  # the others stay put
+
+    r = client.post(f"/items/{item['id']}/run-now")  # already started
+    assert r.status_code == 409 and "not waiting" in r.json()["detail"]
+    assert client.post("/items/missing/run-now").status_code == 404
+
+
 def test_scheduler_limits(client):
     changed = client.patch("/scheduler/limits", json={"max_agents": 1}).json()
     assert changed["capacity"] == 1
@@ -248,6 +265,27 @@ def test_attention_and_manual_open_pr(client):
     assert r.status_code == 202 and r.json()["state"] == "publish"
     assert client.enqueued[-1] == (iid, r.json()["version"])
     assert client.post(f"/items/{iid}/open-pr").status_code == 409  # already publishing
+
+
+def test_attention_says_how_the_item_got_stuck(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    engine = app.state.engine
+
+    def walk(iid, *verdicts):
+        for verdict in verdicts:
+            client.portal.call(engine.advance, iid, client.get(f"/items/{iid}").json()["version"], verdict)
+        return client.get(f"/items/{iid}").json()
+
+    def story():
+        return client.post("/projects/app/items", json={"title": "S", "start": True}).json()["id"]
+
+    assert walk(story(), "too_big")["attention"] == {"kind": "too_big", "text": "", "from": "plan"}
+    assert walk(story(), "needs_clarification")["attention"]["kind"] == "needs_clarification"
+    # plan allows 3 visits: the fourth sends the story to needs_human
+    stuck = walk(story(), *["needs_clarification", "answered"] * 3)
+    assert stuck["state"] == "needs_human" and stuck["attention"]["kind"] == "exhausted"
+    merge = walk(story(), "ready", "done", "done", "approved", "done", "passed")
+    assert merge["state"] == "awaiting_merge" and merge["attention"]["kind"] == "pr"
 
 
 def test_item_git_view(client):
