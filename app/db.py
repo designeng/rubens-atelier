@@ -3,12 +3,13 @@
 Redis keeps what is short-lived (queue, agent event streams, leases); this keeps
 what the factory is about: projects, the work graph, and the history of every step.
 
-  projects        tenants: one repo each, with its own verify command
-  work_items      epics / stories / tasks; `state` + `version` drive the workflow engine
-  runs            one agent step of an item: which state, which harness task, which verdict
-  artifacts       what steps hand to each other (implementation summary, review, human notes)
-  human_requests  the inbox: decisions the workflow is waiting for
-  item_events     every state change, for the board and for loop guards
+  projects          tenants: one repo each, with its own verify command
+  work_items        epics / stories / tasks; `state` + `version` drive the workflow engine
+  runs              one agent step of an item: which state, which harness task, which verdict
+  artifacts         what steps hand to each other (implementation summary, review, human notes)
+  human_requests    the inbox: decisions the workflow is waiting for
+  item_events       every state change, for the board and for loop guards
+  task_transcripts  a finished run's harness task and event stream, kept after Redis expires them
 """
 
 import uuid
@@ -36,7 +37,12 @@ def aware(dt: datetime) -> datetime:
 
 
 class Base(DeclarativeBase):
-    type_annotation_map = {dict[str, Any]: JSON, list[str]: JSON, datetime: DateTime(timezone=True)}
+    type_annotation_map = {
+        dict[str, Any]: JSON,
+        list[str]: JSON,
+        list[dict[str, Any]]: JSON,
+        datetime: DateTime(timezone=True),
+    }
 
 
 class Project(Base):
@@ -136,6 +142,18 @@ class ItemEvent(Base):
     verdict: Mapped[str | None] = mapped_column(String(64))
     actor: Mapped[str] = mapped_column(String(100))
     at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class TaskTranscript(Base):
+    """Archive of a harness task: Redis drops it after `result_ttl_seconds`, `Run.task_id` does not."""
+
+    __tablename__ = "task_transcripts"
+
+    task_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), index=True)
+    task: Mapped[dict[str, Any]]  # TaskInfo as JSON
+    events: Mapped[list[dict[str, Any]]]  # [{"id", "type", "data"}] in stream order
+    archived_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 def _add_missing_columns(conn) -> None:

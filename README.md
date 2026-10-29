@@ -115,7 +115,7 @@ A run that hits the limit is not a work failure. The step returns to the queue w
 
 Reliability. Every transition is a compare-and-set on `work_items.version`. A worker step (`harness.step`) and a human request are bound to the item's version, so a redelivery, a double click or a stale answer moves nothing. An agent step runs as a regular harness task, with its events (`/tasks/{task_id}/stream`), cancellation, lease and verify loop. `harness.reconcile` in beat re-enqueues steps that lost their enqueue or whose worker died before reporting a verdict.
 
-Factory state lives in Postgres. Redis still holds the queue, agent events and leases. The schema is created at API startup (`create_all`); Alembic will arrive with the first migration.
+Factory state lives in Postgres. Redis still holds the queue, agent events and leases. When an agent step finishes, its task and full event stream are archived to Postgres (`task_transcripts`, keyed by `runs.task_id`), so `/tasks/{id}`, `/tasks/{id}/events` and `/tasks/{id}/stream` keep serving a run's transcript after Redis has expired it. Ad-hoc `/tasks` runs are not archived. The schema is created at API startup (`create_all`); Alembic will arrive with the first migration.
 
 ## How the issue flow works
 
@@ -132,7 +132,7 @@ The push goes to the PR branch, not to `main`: CI and review confirm production 
 - `acks_late` + `prefetch=1`: if a worker dies, the message is redelivered. Redelivery does not restart the agent: an atomic claim (Lua) moves such a task to `failed: worker lost`.
 - Lease with heartbeat and a reaper in beat: tasks of dead workers are marked failed in about 30 seconds rather than after `visibility_timeout`.
 - `session_id` is saved right at startup. A cancelled, failed or timed-out task can be continued via `parent_task_id`.
-- Finished tasks and their events are kept in Redis for `HARNESS_RESULT_TTL_SECONDS` (7 days by default).
+- Finished tasks and their events are kept in Redis for `HARNESS_RESULT_TTL_SECONDS` (7 days by default); factory runs are archived to Postgres before that.
 
 ## GitHub App
 
