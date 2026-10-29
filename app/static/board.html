@@ -36,6 +36,8 @@
   dialog::backdrop { background:rgba(0,0,0,.4); }
   dialog label { display:block; margin:10px 0 4px; font-size:12px; color:var(--muted); }
   dialog input, dialog select { width:100%; }
+  #detail pre.error { border:1px solid var(--bad); color:var(--bad); }
+  .run-error { color:var(--bad); font:12px ui-monospace, monospace; white-space:pre-wrap; margin:2px 0 6px 12px; }
   .muted { color:var(--muted); } #err { color:var(--bad); }
 </style>
 </head>
@@ -148,9 +150,12 @@ async function refresh() {
 }
 
 async function showItem(id) {
+  const same = openItem === id;
   openItem = id;
   const it = await api(`/items/${id}`);
   const req = it.open_request;
+  const keep = same && $("comment") && { value: $("comment").value, focus: document.activeElement === $("comment"),
+    at: [$("comment").selectionStart, $("comment").selectionEnd], scroll: $("detail").scrollTop };
   const latest = {}; it.artifacts.forEach((a) => { latest[a.name] = a; });
   $("detail").innerHTML = `
     <div class="row"><button id="close">✕</button>
@@ -165,11 +170,17 @@ async function showItem(id) {
     ${req ? `<h4>Decision needed</h4><p>${esc(req.question)}</p>
       <textarea id="comment" rows="3" style="width:100%" placeholder="Comment for the next agent (optional)"></textarea>
       <div class="row">${req.options.map((o) => `<button class="primary" data-answer="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
-    <h4>Artifacts</h4>${Object.values(latest).map((a) => `<p><b>${esc(a.name)}</b></p><pre>${esc(a.content)}</pre>`).join("") || '<p class="muted">none yet</p>'}
+    <h4>Artifacts</h4>${Object.values(latest).map((a) => `<p><b${a.name === "error" ? ' style="color:var(--bad)"' : ""}>${esc(a.name)}</b></p><pre${a.name === "error" ? ' class="error"' : ""}>${esc(a.content)}</pre>`).join("") || '<p class="muted">none yet</p>'}
     <h4>Runs</h4>${it.runs.map((r) => `<div>${esc(r.state)} · ${esc(r.role)} · ${esc(r.status)}${r.verdict ? ` → ${esc(r.verdict)}` : ""}
-      ${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}` : ""} <span class="muted">task ${esc(r.task_id.slice(0, 8))}</span></div>`).join("") || '<p class="muted">none</p>'}
+      ${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}` : ""} <span class="muted">task ${esc(r.task_id.slice(0, 8))}</span>
+      ${r.error ? `<div class="run-error">${esc(r.error)}</div>` : ""}</div>`).join("") || '<p class="muted">none</p>'}
     <h4>History</h4>${it.events.map((e) => `<div class="muted">${new Date(e.at).toLocaleString()} · ${esc(e.from_state || "∅")} -[${esc(e.verdict || "start")}]→ <b>${esc(e.to_state)}</b> · ${esc(e.actor)}</div>`).join("")}`;
   $("detail").classList.add("open");
+  if (keep && $("comment")) {
+    $("comment").value = keep.value;
+    $("detail").scrollTop = keep.scroll;
+    if (keep.focus) { $("comment").focus(); $("comment").setSelectionRange(...keep.at); }
+  }
   $("close").onclick = () => { openItem = null; $("detail").classList.remove("open"); };
   if ($("start")) $("start").onclick = () => api(`/items/${id}/start`, { method: "POST" }).then(refresh).catch(fail);
   if ($("cancel")) $("cancel").onclick = () => api(`/items/${id}/cancel`, { method: "POST" }).then(refresh).catch(fail);

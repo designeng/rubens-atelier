@@ -112,6 +112,7 @@ class RunOut(Orm):
     verdict: str | None
     cost_usd: float | None
     created_at: datetime
+    error: str | None = None  # the `error` artifact of a run that ended in the error verdict
 
 
 class ArtifactOut(Orm):
@@ -343,15 +344,18 @@ async def get_item(item_id: str, db: Db, engine: Eng) -> ItemDetail:
         if item is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
         runs = await s.scalars(select(Run).where(Run.item_id == item_id).order_by(Run.created_at))
-        artifacts = await s.scalars(select(Artifact).where(Artifact.item_id == item_id).order_by(Artifact.created_at))
+        artifacts = list(
+            await s.scalars(select(Artifact).where(Artifact.item_id == item_id).order_by(Artifact.created_at))
+        )
         events = await s.scalars(select(ItemEvent).where(ItemEvent.item_id == item_id).order_by(ItemEvent.id))
         request = await s.scalar(
             select(HumanRequest).where(HumanRequest.item_id == item_id, HumanRequest.answer.is_(None))
         )
+        errors = {a.run_id: a.content for a in artifacts if a.name == "error" and a.run_id}
         return ItemDetail(
             **(await _item_with_progress(engine, s, item)).model_dump(),
             body=item.body,
-            runs=[RunOut.model_validate(r) for r in runs],
+            runs=[RunOut.model_validate(r).model_copy(update={"error": errors.get(r.id)}) for r in runs],
             artifacts=[ArtifactOut.model_validate(a) for a in artifacts],
             events=[EventOut.model_validate(e) for e in events],
             open_request=RequestOut.model_validate(request) if request else None,
