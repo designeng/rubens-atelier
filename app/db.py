@@ -55,6 +55,8 @@ class Project(Base):
     verify_command: Mapped[str | None] = mapped_column(Text)
     # GitHub App installation that grants access to `repo`; None = the server-wide token.
     installation_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Merge a story's PR once it is reviewed and CI passed, instead of waiting for a human.
+    auto_merge: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
@@ -159,10 +161,12 @@ class TaskTranscript(Base):
 
 
 def _add_missing_columns(conn) -> None:
-    """create_all skips existing tables; add the nullable columns introduced after them."""
+    """create_all skips existing tables; add the columns introduced after them."""
     existing = {c["name"] for c in inspect(conn).get_columns("projects")}
     if "installation_id" not in existing:
         conn.execute(text("ALTER TABLE projects ADD COLUMN installation_id BIGINT"))
+    if "auto_merge" not in existing:
+        conn.execute(text("ALTER TABLE projects ADD COLUMN auto_merge BOOLEAN NOT NULL DEFAULT false"))
     existing = {c["name"] for c in inspect(conn).get_columns("work_items")}
     if "model" not in existing:
         conn.execute(text("ALTER TABLE work_items ADD COLUMN model VARCHAR(100)"))

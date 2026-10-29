@@ -9,12 +9,14 @@ export interface ProjectIn {
   base_branch?: string | null;
   verify_command?: string | null;
   installation_id?: number | null;
+  auto_merge?: boolean;
 }
 
 // PATCH /projects/{slug}: fields left out stay as they are, null clears them.
 export interface ProjectPatch {
   base_branch?: string | null;
   verify_command?: string | null;
+  auto_merge?: boolean;
 }
 
 export interface ProjectOut {
@@ -24,6 +26,7 @@ export interface ProjectOut {
   base_branch: string | null;
   verify_command: string | null;
   installation_id: number | null;
+  auto_merge: boolean;
 }
 
 export interface ItemIn {

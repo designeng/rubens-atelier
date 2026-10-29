@@ -1,6 +1,7 @@
 import subprocess
 from datetime import timedelta
 
+import httpx
 import pytest
 from sqlalchemy import select, update
 
@@ -25,6 +26,8 @@ class CIGitHub(FakeGitHub):
         self.statuses: list[dict] = []
         self.pr_state: dict = {"state": "open", "merged_at": None}
         self.logs = {1: "collected 3 items\nFAILED test_hello.py::test_says_hi - AssertionError\n"}
+        self.merges: list[dict] = []
+        self.merge_refusal: int | None = None  # HTTP status GitHub answers the merge with
 
     async def check_runs(self, repo, ref):
         return self.checks
@@ -37,6 +40,15 @@ class CIGitHub(FakeGitHub):
 
     async def get_pr(self, repo, number):
         return {"number": number, **self.pr_state}
+
+    async def merge_pr(self, repo, number, *, method, sha=None):
+        self.merges.append({"number": number, "method": method, "sha": sha})
+        if self.merge_refusal:
+            request = httpx.Request("PUT", f"https://api.github.com/repos/{repo}/pulls/{number}/merge")
+            response = httpx.Response(self.merge_refusal, json={"message": "Pull Request is not mergeable"}, request=request)
+            raise httpx.HTTPStatusError("refused", request=request, response=response)
+        self.pr_state = {"state": "closed", "merged_at": "2026-10-30T00:00:00Z"}
+        return {"merged": True}
 
 
 class Factory:
@@ -82,9 +94,9 @@ class Factory:
             rows = await s.scalars(select(ItemEvent).where(ItemEvent.item_id == item_id).order_by(ItemEvent.id))
             return [e.to_state for e in rows]
 
-    async def new_item(self, **kw) -> str:
+    async def new_item(self, auto_merge=False, **kw) -> str:
         async with self.db.session() as s:
-            project = Project(slug="app", repo="acme/app", verify_command="test -f hello.txt")
+            project = Project(slug="app", repo="acme/app", verify_command="test -f hello.txt", auto_merge=auto_merge)
             s.add(project)
             await s.flush()
             item = WorkItem(project_id=project.id, kind="story", title="Add greeting",
@@ -142,7 +154,7 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     assert await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
     item = await f.item(item_id)
     assert item.head_sha == git(origin, "rev-parse", item.branch).strip()
     assert item.branch == f"agent/story-{item_id[:8]}"
@@ -200,7 +212,7 @@ async def test_review_feedback_loops_back_to_the_same_implementer_session(make_f
     await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
     second_impl = f.runner.of("implement")[1]
     assert second_impl["resume"] == "implement-0"
     assert "Review 0: changes_requested" in second_impl["prompt"]
@@ -459,7 +471,7 @@ async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, 
     await f.drain()
 
     assert await f.path(item_id) == [
-        "plan", "implement", "sync_base", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge",
+        "plan", "implement", "sync_base", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge",
     ]
     resolve = f.runner.of("implement")[1]
     assert resolve["resume"] == "implement-0"
@@ -484,7 +496,7 @@ async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_pat
     await f.engine.answer(req.id, "update")
     await f.drain()
 
-    assert (await f.path(item_id))[-6:] == ["awaiting_merge", "sync_base", "review", "publish", "ci", "awaiting_merge"]
+    assert (await f.path(item_id))[-7:] == ["awaiting_merge", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
     assert len(f.runner.of("implement")) == 1  # a clean merge needs no agent to fix anything
     branch = (await f.item(item_id)).branch
     assert git(origin, "show", f"{branch}:docs.md") == "# docs\n"
@@ -563,3 +575,45 @@ async def test_start_waits_for_blockers_to_succeed(make_factory):
         (await s.get(WorkItem, dependent_id)).blocked_by = [blocker_id]
         await s.commit()
     assert await f.engine.start(dependent_id)
+
+
+async def test_automerge_merges_the_reviewed_green_pr(make_factory, origin):  # noqa: F811
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item(auto_merge=True)
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "done"]
+    item = await f.item(item_id)
+    assert f.gh.merges == [{"number": 1, "method": "squash", "sha": item.head_sha}]
+    assert await f.open_request(item_id) is None
+    async with f.db.session() as s:
+        report = await s.scalar(select(Artifact.content).where(Artifact.name == "merge"))
+    assert report == "Automerge: merged PR #1 (squash)."
+
+
+async def test_refused_automerge_leaves_the_pr_to_a_human(make_factory, origin):  # noqa: F811
+    f = make_factory(ScriptedRunner())
+    f.gh.merge_refusal = 405
+    item_id = await f.new_item(auto_merge=True)
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.path(item_id))[-2:] == ["merge", "awaiting_merge"]
+    assert (await f.open_request(item_id)).options == ["merged", "update", "rework", "abandon"]
+    async with f.db.session() as s:
+        report = await s.scalar(select(Artifact.content).where(Artifact.name == "merge"))
+    assert report == "Automerge: GitHub refused to merge PR #1 (405): Pull Request is not mergeable"
+
+
+async def test_without_automerge_the_pr_is_not_merged(make_factory, origin):  # noqa: F811
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.path(item_id))[-2:] == ["merge", "awaiting_merge"]
+    assert f.gh.merges == []

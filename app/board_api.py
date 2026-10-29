@@ -60,6 +60,7 @@ class ProjectIn(BaseModel):
     base_branch: str | None = None
     verify_command: str | None = None
     installation_id: int | None = Field(default=None, description="GitHub App installation granting access to repo")
+    auto_merge: bool = False
 
 
 class ProjectPatch(BaseModel):
@@ -71,6 +72,7 @@ class ProjectPatch(BaseModel):
     base_branch: str | None = Field(default=None, max_length=200, pattern=r"^[\w.][\w./-]*$")
     # Blank is rejected rather than stored: send null to clear.
     verify_command: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
+    auto_merge: bool = False  # left out = unchanged; null is rejected
 
 
 class ProjectOut(Orm):
@@ -80,6 +82,7 @@ class ProjectOut(Orm):
     base_branch: str | None
     verify_command: str | None
     installation_id: int | None
+    auto_merge: bool
 
 
 class ItemIn(BaseModel):
@@ -405,9 +408,10 @@ async def list_projects(db: Db) -> list[ProjectOut]:
 
 @router.patch("/projects/{slug}")
 async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
-    """Change base_branch / verify_command. slug, repo and installation_id are immutable.
+    """Change base_branch / verify_command / auto_merge. slug, repo and installation_id are immutable.
 
     verify_command applies from the next agent step of every story, running ones included.
+    auto_merge applies to every story that reaches its merge step from now on.
     base_branch only affects stories that have no workspace yet: started ones keep their base.
     """
     async with db.session() as s:
