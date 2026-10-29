@@ -37,6 +37,34 @@ describe("createClient", () => {
     expect(f.calls.map((c) => c.url)).toEqual(["/items/a%2Fb/git", "/items/a%2Fb/git?diff=true"]);
   });
 
+  it("patches an item", async () => {
+    const f = fakeFetch(() => json({}));
+    const api = createClient(() => "t", f.impl);
+    await api.updateItem("a/b", { priority: 3, model: null });
+    expect([f.calls[0].url, f.calls[0].init.method, JSON.parse(f.calls[0].init.body as string)]).toEqual([
+      "/items/a%2Fb",
+      "PATCH",
+      { priority: 3, model: null },
+    ]);
+  });
+
+  it("patches scheduler limits", async () => {
+    const f = fakeFetch(() => json({}));
+    const api = createClient(() => "t", f.impl);
+    await api.setSchedulerLimits({ max_agents: 2 });
+    expect([f.calls[0].url, f.calls[0].init.method, JSON.parse(f.calls[0].init.body as string)]).toEqual([
+      "/scheduler/limits",
+      "PATCH",
+      { max_agents: 2 },
+    ]);
+  });
+
+  it("reopens a story with a POST", async () => {
+    const f = fakeFetch(() => json({}));
+    await createClient(() => "t", f.impl).reopenItem("i1");
+    expect([f.calls[0].url, f.calls[0].init.method]).toEqual(["/items/i1/reopen", "POST"]);
+  });
+
   it("posts JSON bodies", async () => {
     const f = fakeFetch(() => json({ advanced: true }));
     const api = createClient(() => "t", f.impl);

@@ -93,11 +93,14 @@ class ItemIn(BaseModel):
 
 
 class ItemPatch(BaseModel):
-    """Editable item settings; applies from the next agent step, null goes back to the default."""
+    """Editable item settings; applies from the next agent step, null goes back to the default.
+    A step still waiting for a slot picks everything up when it starts; a new priority moves it
+    in the queue right away."""
 
     model_config = ConfigDict(extra="forbid")
 
     model: ModelName | None = None
+    priority: int = Field(default=None, ge=-100, le=100)
     title: str = Field(default=None, min_length=1, max_length=300)
     body: str = Field(default=None)
 
@@ -471,9 +474,14 @@ async def update_item(item_id: str, body: ItemPatch, db: Db, engine: Eng) -> Ite
         item = await s.get(WorkItem, item_id)
         if item is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
+        old_priority = item.priority
         for field, value in body.model_dump(exclude_unset=True).items():
+            if value is None and field in ("title", "body", "priority"):
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} cannot be null")
             setattr(item, field, value)
         await s.commit()
+        if engine.scheduler and item.priority != old_priority:
+            await engine.scheduler.reprioritize(item.id, item.version, old_priority, item.priority)
         return _item_out(engine, item)
 
 
@@ -596,6 +604,28 @@ async def pause_scheduler(body: Pause, scheduler: Sched) -> dict:
 @router.post("/scheduler/resume")
 async def resume_scheduler(scheduler: Sched) -> dict:
     await scheduler.resume()
+    return await scheduler.status()
+
+
+class Limits(BaseModel):
+    max_agents: int | None = Field(default=None, ge=1, le=64)
+    max_agents_per_project: int | None = Field(default=None, ge=1, le=64)
+    force: bool | None = Field(
+        default=None, description="Keep max_agents while subscription windows throttle or stop dispatch, unless one is rejected"
+    )
+
+
+@router.patch("/scheduler/limits")
+async def set_scheduler_limits(body: Limits, scheduler: Sched) -> dict:
+    """Change how many agents run at once, without a restart. Omitted fields keep their value."""
+    await scheduler.set_limits(body.max_agents, body.max_agents_per_project, body.force)
+    return await scheduler.status()
+
+
+@router.delete("/scheduler/limits")
+async def reset_scheduler_limits(scheduler: Sched) -> dict:
+    """Drop the overrides: back to HARNESS_MAX_AGENTS and HARNESS_MAX_AGENTS_PER_PROJECT."""
+    await scheduler.reset_limits()
     return await scheduler.status()
 
 

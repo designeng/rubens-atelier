@@ -1,6 +1,18 @@
 import { inject, onMounted, onUnmounted, provide, ref, type InjectionKey } from "vue";
 import { createClient, storage } from "../api/client";
-import type { Board, GithubApp, ImportResult, ItemDetail, ItemIn,ProjectIn, ProjectOut, ProjectPatch, SchedulerStatus } from "../api/types";
+import type {
+  Board,
+  GithubApp,
+  ImportResult,
+  ItemDetail,
+  ItemIn,
+  ItemPatch,
+  ProjectIn,
+  ProjectOut,
+  ProjectPatch,
+  SchedulerLimits,
+  SchedulerStatus,
+} from "../api/types";
 
 export const POLL_MS = 5000;
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
@@ -120,10 +132,12 @@ export function useBoard() {
 
   const startItem = (id: string) => act(api.startItem(id));
   const cancelItem = (id: string) => act(api.cancelItem(id));
+  const reopenItem = (id: string) => act(api.reopenItem(id));
   const answer = (requestId: string, option: string, comment: string) =>
     act(api.answerRequest(requestId, option, comment));
   const togglePause = () => act(isPaused() ? api.resumeScheduler() : api.pauseScheduler());
   const isPaused = () => !!scheduler.value?.reason.startsWith("paused");
+  const setLimits = (limits: Partial<SchedulerLimits>) => act(api.setSchedulerLimits(limits));
 
   // Dialog actions throw, so the dialog can show the error next to its fields.
   async function createItem(item: ItemIn): Promise<void> {
@@ -141,6 +155,11 @@ export function useBoard() {
     await api.createProject(project);
     storage.set("project", project.slug);
     await loadProjects();
+  }
+
+  async function updateItem(id: string, patch: ItemPatch): Promise<void> {
+    await api.updateItem(id, patch);
+    await refresh();
   }
 
   async function updateProject(patch: ProjectPatch): Promise<void> {
@@ -194,12 +213,15 @@ export function useBoard() {
     closeItem,
     startItem,
     cancelItem,
+    reopenItem,
     answer,
     togglePause,
     isPaused,
+    setLimits,
     createItem,
     importIssues,
     createProject,
+    updateItem,
     updateProject,
   };
 }

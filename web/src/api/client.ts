@@ -8,8 +8,10 @@ import type {
   ItemOut,
   ProjectIn,
   ProjectOut,
+  ItemPatch,
   ProjectPatch,
   Repository,
+  SchedulerLimits,
   SchedulerStatus,
 } from "./types";
 
@@ -55,14 +57,18 @@ export function createClient(
     createItem: (slug: string, item: ItemIn) => api<ItemOut>(`/projects/${seg(slug)}/items`, "POST", item),
     importIssues: (slug: string) => api<ImportResult>(`/projects/${seg(slug)}/import-issues`, "POST"),
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),
+    updateItem: (id: string, patch: ItemPatch) => api<ItemOut>(`/items/${seg(id)}`, "PATCH", patch),
     getItemGit: (id: string, diff = false) => api<GitSnapshot>(`/items/${seg(id)}/git${diff ? "?diff=true" : ""}`),
     startItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/start`, "POST"),
+    reopenItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/reopen`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
     answerRequest: (id: string, option: string, comment: string) =>
       api<{ advanced: boolean }>(`/requests/${seg(id)}/answer`, "POST", { option, comment }),
     getScheduler: () => api<SchedulerStatus>("/scheduler"),
     pauseScheduler: (reason = "") => api<SchedulerStatus>("/scheduler/pause", "POST", { reason }),
     resumeScheduler: () => api<SchedulerStatus>("/scheduler/resume", "POST", {}),
+    setSchedulerLimits: (limits: Partial<SchedulerLimits>) =>
+      api<SchedulerStatus>("/scheduler/limits", "PATCH", limits),
     githubApp: () => api<GithubApp>("/github/app"),
     installationRepositories: (id: number) => api<Repository[]>(`/github/installations/${seg(id)}/repositories`),
   };

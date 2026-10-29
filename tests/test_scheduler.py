@@ -79,6 +79,16 @@ async def test_dispatch_by_priority_with_a_per_project_cap(scheduler, dispatched
     assert (await scheduler.status())["ready"] == []
 
 
+async def test_waiting_step_moves_when_its_priority_changes(scheduler, dispatched):
+    await scheduler.pause("filling the queue")
+    for name in ("first", "second", "third"):
+        await scheduler.submit(name, 1, name)
+    await scheduler.reprioritize("third", 1, 0, 5)
+    await scheduler.reprioritize("first", 1, 0, -1)
+    await scheduler.reprioritize("gone", 1, 0, 9)  # not waiting: nothing to move
+    assert (await scheduler.status())["ready"] == ["third:1", "second:1", "first:1"]
+
+
 async def test_global_cap_and_forget(scheduler, dispatched, monkeypatch):
     monkeypatch.setattr(settings, "max_agents", 1)
     await scheduler.submit("x", 1, "A")
@@ -87,6 +97,45 @@ async def test_global_cap_and_forget(scheduler, dispatched, monkeypatch):
     await scheduler.forget("y", 1)  # its item moved on while it waited
     await scheduler.release("x", 1)
     assert dispatched == ["x"]
+
+
+async def test_limits_change_on_the_fly(scheduler, dispatched):
+    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2, "force": False}
+    await scheduler.set_limits(max_agents=1)
+    for name in ("a1", "a2", "b1"):
+        await scheduler.submit(name, 1, name[0].upper())
+    assert dispatched == ["a1"] and await scheduler.capacity() == (1, "ok")
+
+    # Raising the limit hands the waiting steps out right away, within the per-project cap.
+    await scheduler.set_limits(max_agents=3, max_agents_per_project=1)
+    assert dispatched == ["a1", "b1"]
+    await scheduler.set_limits(max_agents_per_project=2)
+    assert dispatched == ["a1", "b1", "a2"]
+    assert (await scheduler.status())["limits"] == {"max_agents": 3, "max_agents_per_project": 2, "force": False}
+
+    await scheduler.reset_limits()
+    assert await scheduler.limits() == {"max_agents": 4, "max_agents_per_project": 2, "force": False}
+
+
+async def test_force_keeps_the_limit_until_a_window_is_rejected(scheduler, redis):
+    now = time.time()
+    await quota(redis, "five_hour", status="allowed", utilization=0.85, resets_at=now + 3600)
+    assert await scheduler.capacity() == (1, "five_hour at 85%")
+    await scheduler.set_limits(force=True)
+    assert await scheduler.capacity() == (4, "forced: five_hour at 85%")
+    await scheduler.set_limits(max_agents=2)
+    assert await scheduler.capacity() == (2, "forced: five_hour at 85%")
+
+    await quota(redis, "seven_day", status="allowed_warning", utilization=0.96, resets_at=now + 600)
+    assert await scheduler.capacity() == (2, "forced: seven_day at 96%")
+    await scheduler.set_limits(force=False)
+    assert (await scheduler.capacity())[0] == 0
+    await scheduler.set_limits(force=True)
+
+    await quota(redis, "five_hour", status="rejected", resets_at=now + 600)
+    assert (await scheduler.capacity())[0] == 0
+    await scheduler.pause("deploy")
+    assert await scheduler.capacity() == (0, "paused: deploy")
 
 
 async def test_slots_of_dead_or_finished_steps_are_reclaimed(scheduler, dispatched, store, redis):
