@@ -59,6 +59,12 @@ describe("createClient", () => {
     ]);
   });
 
+  it("reopens a story with a POST", async () => {
+    const f = fakeFetch(() => json({}));
+    await createClient(() => "t", f.impl).reopenItem("i1");
+    expect([f.calls[0].url, f.calls[0].init.method]).toEqual(["/items/i1/reopen", "POST"]);
+  });
+
   it("posts JSON bodies", async () => {
     const f = fakeFetch(() => json({ advanced: true }));
     const api = createClient(() => "t", f.impl);

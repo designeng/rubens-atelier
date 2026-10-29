@@ -131,6 +131,7 @@ export function useBoard() {
 
   const startItem = (id: string) => act(api.startItem(id));
   const cancelItem = (id: string) => act(api.cancelItem(id));
+  const reopenItem = (id: string) => act(api.reopenItem(id));
   const answer = (requestId: string, option: string, comment: string) =>
     act(api.answerRequest(requestId, option, comment));
   const togglePause = () => act(isPaused() ? api.resumeScheduler() : api.pauseScheduler());
@@ -205,6 +206,7 @@ export function useBoard() {
     closeItem,
     startItem,
     cancelItem,
+    reopenItem,
     answer,
     togglePause,
     isPaused,

@@ -101,6 +101,7 @@ async function saveEdit(): Promise<void> {
   }
 }
 
+const reopenable = computed(() => it.value?.column === "failed");
 const cancellable = computed(() => it.value?.column === "working" || it.value?.column === "needs_human");
 </script>
 
@@ -110,6 +111,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <div class="row">
         <button @click="b.closeItem()">✕</button>
         <button v-if="it.state === null" class="primary" @click="b.startItem(it.id)">Start</button>
+        <button v-if="reopenable" @click="b.reopenItem(it.id)">Back to backlog</button>
         <button v-if="cancellable" @click="b.cancelItem(it.id)">Cancel</button>
         <button v-if="editable && !editing" @click="startEdit()">Edit</button>
       </div>

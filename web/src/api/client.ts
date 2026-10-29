@@ -58,6 +58,7 @@ export function createClient(
     updateItem: (id: string, patch: ItemPatch) => api<ItemOut>(`/items/${seg(id)}`, "PATCH", patch),
     getItemGit: (id: string, diff = false) => api<GitSnapshot>(`/items/${seg(id)}/git${diff ? "?diff=true" : ""}`),
     startItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/start`, "POST"),
+    reopenItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/reopen`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
     answerRequest: (id: string, option: string, comment: string) =>
       api<{ advanced: boolean }>(`/requests/${seg(id)}/answer`, "POST", { option, comment }),
