@@ -89,3 +89,32 @@ async def commits_ahead(cwd: Path, base: str) -> int:
 async def head_sha(cwd: Path) -> str:
     _, out = await run("git", "rev-parse", "HEAD", cwd=cwd)
     return out.strip()
+
+
+async def fetch(cwd: Path, ref: str, token: str | None = None) -> None:
+    await run("git", *_auth_args(token), "fetch", "origin", ref, cwd=cwd)
+
+
+def merge_in_progress(cwd: Path) -> bool:
+    return (cwd / ".git" / "MERGE_HEAD").exists()
+
+
+async def unmerged_files(cwd: Path) -> list[str]:
+    _, out = await run("git", "diff", "--name-only", "--diff-filter=U", cwd=cwd)
+    return out.split()
+
+
+async def is_ancestor(cwd: Path, ancestor: str, ref: str = "HEAD") -> bool:
+    code, _ = await run("git", "merge-base", "--is-ancestor", ancestor, ref, cwd=cwd, check=False)
+    return code == 0
+
+
+async def merge(cwd: Path, ref: str, message: str) -> list[str]:
+    """Merge `ref` into the current branch. Returns the conflicted files ([] = merged cleanly);
+    on conflict the merge is left in progress for someone to resolve."""
+    code, out = await run("git", "merge", "--no-ff", "-m", message, ref, cwd=cwd, check=False)
+    if code == 0:
+        return []
+    if conflicts := await unmerged_files(cwd):
+        return conflicts
+    raise GitError(f"git merge {ref} failed ({code}): {out[-2000:]}")

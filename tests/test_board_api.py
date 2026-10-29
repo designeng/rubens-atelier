@@ -20,7 +20,7 @@ def test_projects_items_board_and_inbox(client):
 
     # Simulate the worker getting the story to the merge gate.
     engine = app.state.engine
-    for verdict in ("ready", "done", "approved", "done", "passed"):
+    for verdict in ("ready", "done", "done", "approved", "done", "passed"):
         item = client.get(f"/items/{started['id']}").json()
         client.portal.call(engine.advance, started["id"], item["version"], verdict)
 
@@ -28,7 +28,7 @@ def test_projects_items_board_and_inbox(client):
     assert req["state"] == "awaiting_merge"
     detail = client.get(f"/items/{started['id']}").json()
     assert detail["column"] == "needs_human" and detail["open_request"]["id"] == req["id"]
-    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "review", "publish", "ci", "awaiting_merge"]
+    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
 
     assert client.post(f"/requests/{req['id']}/answer", json={"option": "nope"}).status_code == 409
     r = client.post(f"/requests/{req['id']}/answer", json={"option": "merged", "comment": "thanks"})

@@ -69,7 +69,9 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 `max_visits` and `on_exhausted` guard against endless loops, such as implement ⇄ review ping-pong. If a verdict is missing from `next`, the item goes to `next.error`, and if that is missing too, to `failed`.
 
-[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (human). `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
+[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (human). `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
+
+**sync_base** merges the latest base branch into the story's branch, so stories running in parallel build on each other's merged work and their PRs don't conflict. It merges rather than rebases, so reviewed history stays intact. On a conflict the merge is left in progress and the story goes back to `implement`; the `sync_base` artifact lists the conflicted files. The implementer resolves them and commits, and then the story goes through `sync_base` and review again. In `awaiting_merge`, the `update` option runs `sync_base` for an open PR when the base branch has moved on or GitHub reports conflicts.
 
 The planner writes a `planner` artifact: approach, files, test plan, risks. The implementer follows the plan, and the reviewer checks the result against it. If human decisions are needed (`needs_clarification`), the item goes to `clarify`. The human's answer sends it back to `plan`, and the planner continues its session with the answer. If a story does not fit in one PR (`too_big`), it goes to `needs_human` with a proposed split; from there it can be sent to `replan` with a comment. The plan is approved without a human; if you want one, make a workflow variant with an `approve_plan` state.
 

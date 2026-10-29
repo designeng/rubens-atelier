@@ -33,7 +33,7 @@ class State(BaseModel):
     human: str | None = None  # the question
     terminal: Outcome | None = None
 
-    verdicts: list[str] = []  # agent: allowed verdicts; empty = success is `done`
+    verdicts: list[str] = []  # agent/action: allowed verdicts; empty = success is `done`
     options: list[str] = []  # human: allowed answers
     verify: bool = False  # agent: run the project's verify command, feeding failures back
     resume: bool = False  # agent: continue this role's previous session on the item
@@ -62,7 +62,7 @@ class State(BaseModel):
             case "agent":
                 return (self.verdicts or [DONE]) + [ERROR]
             case "action":
-                return [DONE, ERROR]
+                return (self.verdicts or [DONE]) + [ERROR]
             case "check":
                 return CHECK_OUTCOMES + [ERROR]
             case "human":

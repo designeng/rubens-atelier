@@ -185,8 +185,10 @@ async def _action(item, project, st: State, cwd, engine, gh) -> str:
         await s.execute(
             update(WorkItem).where(WorkItem.id == item.id).values(pr_url=item.pr_url, head_sha=item.head_sha)
         )
+        if ctx.report:
+            s.add(Artifact(item_id=item.id, name=st.action, content=ctx.report))
         await s.commit()
-    return verdict
+    return verdict if verdict in (st.verdicts or [DONE]) else ERROR
 
 
 async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: State) -> str:

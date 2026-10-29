@@ -67,7 +67,9 @@ Workflow — это детерминированный конечный авто
 
 `max_visits` и `on_exhausted` защищают от бесконечных циклов, например от пинг-понга implement ⇄ review. Если вердикта нет в `next`, item уходит в `next.error`, а если нет и его, то в `failed`.
 
-[workflows/story.yaml](../workflows/story.yaml): `plan` (только чтение) → `implement` (с verify) → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (человек). `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+[workflows/story.yaml](../workflows/story.yaml): `plan` (только чтение) → `implement` (с verify) → `sync_base` → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (человек). `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+
+**sync_base** вливает свежую базовую ветку в ветку story. Так параллельные story строятся поверх уже вмёрженной работы друг друга, и их PR не конфликтуют. Используется merge, а не rebase, поэтому проверенная история не переписывается. При конфликте merge остаётся незавершённым, и story возвращается в `implement`; артефакт `sync_base` перечисляет конфликтующие файлы. Implementer разрешает конфликты и коммитит, после чего story снова проходит `sync_base` и ревью. В `awaiting_merge` вариант `update` запускает `sync_base` для открытого PR, когда базовая ветка ушла вперёд или GitHub сообщает о конфликтах.
 
 Планировщик пишет артефакт `planner`: подход, файлы, тест-план, риски. Implementer следует этому плану, а ревьюер сверяет с ним результат. Если нужны решения человека (`needs_clarification`), item идёт в `clarify`. Ответ человека возвращает его в `plan`, и планировщик продолжает свою сессию уже с ответом. Если story не помещается в один PR (`too_big`), она уходит в `needs_human` с предложением, как её разбить; оттуда её можно отправить в `replan` с комментарием. План утверждается без человека, а если он нужен, можно сделать отдельный вариант workflow с состоянием `approve_plan`.
 
