@@ -2,11 +2,19 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ROOT = Path(__file__).resolve().parent.parent
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="HARNESS_", env_file=".env", extra="ignore")
 
     redis_url: str = "redis://localhost:6379/0"
+    # Durable factory state: projects, work items, runs, artifacts, human requests.
+    database_url: str = "postgresql+asyncpg://harness:harness@localhost:5432/harness"
+    workflows_dir: Path = ROOT / "workflows"
+    prompts_dir: Path = ROOT / "prompts"
+    # Agent/action steps with no progress for this long are re-enqueued by the reconciler.
+    step_stale_seconds: int = 600
     # Optional bearer token for the HTTP API. Empty = auth disabled (local dev only).
     api_token: str = ""
 

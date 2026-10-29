@@ -1,0 +1,36 @@
+name: story
+description: Implement one story, have it reviewed in a fresh session, open a PR, wait for the merge.
+initial: implement
+
+states:
+  implement:
+    agent: implementer
+    verify: true
+    resume: true
+    max_visits: 4
+    on_exhausted: needs_human
+    next: {done: review, error: needs_human}
+
+  review:
+    agent: reviewer
+    disallowed_tools: [Write, Edit]
+    verdicts: [approved, changes_requested, needs_human]
+    next: {approved: publish, changes_requested: implement, needs_human: needs_human, error: needs_human}
+
+  publish:
+    action: open_pr
+    next: {done: awaiting_merge, error: needs_human}
+
+  awaiting_merge:
+    human: The PR is open. Merge it, or send it back with a comment.
+    options: [merged, rework, abandon]
+    next: {merged: done, rework: implement, abandon: cancelled}
+
+  needs_human:
+    human: The workflow is stuck (see the latest artifacts). Retry with a comment, or abandon.
+    options: [retry, abandon]
+    next: {retry: implement, abandon: cancelled}
+
+  done: {terminal: succeeded}
+  failed: {terminal: failed}
+  cancelled: {terminal: cancelled}

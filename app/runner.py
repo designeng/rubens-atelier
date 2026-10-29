@@ -36,6 +36,7 @@ class AgentOutcome:
     error: str | None = None
     cost_usd: float | None = None
     num_turns: int | None = None
+    structured_output: Any = None
 
 
 class AgentRunner(Protocol):
@@ -73,6 +74,7 @@ def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgen
         disallowed_tools=spec.disallowed_tools or [],
         max_turns=spec.max_turns or settings.default_max_turns,
         max_budget_usd=spec.max_budget_usd or settings.default_max_budget_usd,
+        output_format={"type": "json_schema", "schema": spec.output_schema} if spec.output_schema else None,
     )
 
 
@@ -123,5 +125,6 @@ async def run_claude(
         error=(", ".join(map(str, result.errors or [])) or result.subtype) if result.is_error else None,
         cost_usd=result.total_cost_usd,
         num_turns=result.num_turns,
+        structured_output=result.structured_output,
     )
 

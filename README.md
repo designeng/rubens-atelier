@@ -15,8 +15,10 @@ GET …/stream ─────┘◄── Redis Stream ◄───────
 
 ```bash
 cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
-docker compose up -d --build  # redis, api :8000, worker, beat
+docker compose up -d --build  # redis, postgres, api :8000, worker, beat
 ```
+
+Доска: http://localhost:8000/board (токен из `HARNESS_API_TOKEN` вводится в поле на странице).
 
 Агенту в контейнере нужен `ANTHROPIC_API_KEY`. Вместо него можно указать `CLAUDE_CODE_OAUTH_TOKEN`, его выдаёт `claude setup-token`. Логин из keychain хоста в контейнер не попадает.
 
@@ -49,6 +51,39 @@ curl -X POST localhost:8000/issues/run -H "Authorization: Bearer $HARNESS_API_TO
   -H 'content-type: application/json' \
   -d '{"repo": "acme/app", "number": 42, "verify_command": "make test"}'
 ```
+
+## Фабрика: проекты, доска, workflow
+
+Поверх задач работает фабрика. **Проект** — это тенант: свой репозиторий и своя `verify_command`. В проекте есть **work items** (epic, story, task), и каждый item идёт по своему **workflow**.
+
+Workflow — это детерминированный конечный автомат в [workflows/](workflows/). Агент не выбирает следующий шаг. Он возвращает вердикт (enum через structured output), и следующее состояние по этому вердикту определяет `next`. Типы состояний:
+
+| | |
+|---|---|
+| `agent` | роль из [prompts/](prompts/)`<role>.md` работает в workspace item'а; есть опции `verify`, `resume` (продолжить свою прошлую сессию), `verdicts`, `disallowed_tools` |
+| `action` | встроенный шаг harness'а, например `open_pr` |
+| `human` | запрос во inbox с вариантами ответа; ответ продвигает item дальше |
+| `terminal` | `succeeded`, `failed` или `cancelled` |
+
+`max_visits` и `on_exhausted` защищают от бесконечных циклов, например от пинг-понга implement ⇄ review. Если вердикта нет в `next`, item уходит в `next.error`, а если нет и его, то в `failed`.
+
+[workflows/story.yaml](workflows/story.yaml): `implement` (с verify) → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `awaiting_merge` (человек). `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+
+Шаги передают друг другу **артефакты**: итог implementer'а, ревью, комментарии человека, ошибки. Каждый следующий промпт получает последнюю версию каждого артефакта. Workspace (clone и ветка `agent/<kind>-<id>`) общий для всех шагов item'а.
+
+| Метод | Путь | |
+|---|---|---|
+| `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
+| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
+| `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed |
+| `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
+| `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |
+| `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
+| `POST` | `/requests/{id}/answer` | `{option, comment?}`; комментарий становится артефактом для следующего агента |
+
+Надёжность. Каждый переход — это compare-and-set по `work_items.version`. Шаг воркера (`harness.step`) и запрос к человеку привязаны к версии item'а, поэтому повторная доставка, двойной клик или устаревший ответ ничего не сдвигают. Agent-шаг выполняется как обычная harness-задача: с её событиями (`/tasks/{task_id}/stream`), отменой, lease и verify-циклом. `harness.reconcile` в beat заново ставит в очередь шаги, которые потеряли enqueue или воркер которых упал до того, как сообщил вердикт.
+
+Состояние фабрики хранится в Postgres. Redis по-прежнему держит очередь, события агентов и lease. Схема создаётся при старте API (`create_all`); Alembic появится вместе с первой миграцией.
 
 ## Как работает issue-флоу
 

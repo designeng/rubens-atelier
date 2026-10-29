@@ -35,6 +35,7 @@ celery_app.conf.update(
     worker_hijack_root_logger=False,
     beat_schedule={
         "reap-orphans": {"task": "harness.reap_orphans", "schedule": max(settings.lease_ttl_seconds, 30)},
+        "reconcile-steps": {"task": "harness.reconcile", "schedule": 60},
     },
 )
 if settings.issue_repos:
@@ -71,6 +72,35 @@ def run_agent(task_id: str) -> None:
 
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     asyncio.run(_with_store(lambda store: execute_task(task_id, store, worker_id)))
+
+
+async def _with_engine(fn):
+    from .db import Database
+    from .engine import Engine
+    from .workflow import load_workflows
+
+    db = Database(settings.database_url)
+    try:
+        return await _with_store(lambda store: fn(Engine(db, load_workflows(settings.workflows_dir), store), store))
+    finally:
+        await db.dispose()
+
+
+@celery_app.task(name="harness.step", time_limit=settings.task_timeout_seconds + 600)
+def step(item_id: str, version: int) -> None:
+    """One agent/action state of a work item; reports its verdict back to the engine."""
+    from .steps import run_step
+
+    worker_id = f"{socket.gethostname()}:{os.getpid()}"
+    asyncio.run(_with_engine(lambda engine, store: run_step(item_id, version, engine=engine, store=store, worker_id=worker_id)))
+
+
+@celery_app.task(name="harness.reconcile")
+def reconcile() -> list[str]:
+    requeued = asyncio.run(_with_engine(lambda engine, _store: engine.reconcile()))
+    if requeued:
+        log.warning("re-enqueued stalled workflow steps: %s", requeued)
+    return requeued
 
 
 @celery_app.task(name="harness.reap_orphans")

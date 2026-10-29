@@ -10,10 +10,14 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
 
+from . import board_api
 from .config import settings
+from .db import Database
+from .engine import Engine
 from .models import IssueRef, TaskCreate, TaskInfo, TaskStatus
 from .service import SubmitError, submit
 from .store import TaskStore
+from .workflow import load_workflows
 
 SSE_BLOCK_MS = 15_000
 
@@ -22,7 +26,11 @@ SSE_BLOCK_MS = 15_000
 async def lifespan(app: FastAPI):
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.store = TaskStore(app.state.redis)
+    app.state.db = Database(settings.database_url)
+    await app.state.db.create_all()
+    app.state.engine = Engine(app.state.db, load_workflows(settings.workflows_dir), app.state.store)
     yield
+    await app.state.db.dispose()
     await app.state.redis.aclose()
 
 
@@ -43,6 +51,8 @@ def get_store(request: Request) -> TaskStore:
 Store = Annotated[TaskStore, Depends(get_store)]
 
 app = FastAPI(title="Claude Code agent harness", lifespan=lifespan)
+app.include_router(board_api.router, dependencies=[Depends(require_token)])
+app.include_router(board_api.page)
 
 
 async def _get_or_404(store: TaskStore, task_id: str) -> TaskInfo:

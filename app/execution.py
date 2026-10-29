@@ -33,6 +33,10 @@ class Workspace:
     resume: str | None = None
 
 
+def item_workspace(key: str) -> Path:
+    return (settings.workspaces_root / "items" / key).resolve()
+
+
 async def prepare_workspace(
     store: TaskStore, task_id: str, spec: TaskCreate, gh: GitHub | None
 ) -> Workspace:
@@ -41,6 +45,12 @@ async def prepare_workspace(
         if parent is None or not parent.get("workspace"):
             raise RuntimeError(f"parent task {spec.parent_task_id} not found or has no workspace")
         return Workspace(Path(parent["workspace"]), spec.prompt, parent.get("session_id"))
+
+    if spec.workspace_key:
+        cwd = item_workspace(spec.workspace_key)
+        if not cwd.is_dir():
+            raise RuntimeError(f"workspace {spec.workspace_key} has not been prepared")
+        return Workspace(cwd, spec.prompt, spec.resume_session)
 
     cwd = (settings.workspaces_root / task_id).resolve()
     cwd.mkdir(parents=True, exist_ok=True)
@@ -179,7 +189,7 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
             await store.set_fields(task_id, **{k: str(v) for k, v in fields.items() if v is not None})
             await fail(TaskStatus.failed, outcome.error or "agent reported an error")
         else:
-            await store.finish(task_id, TaskStatus.succeeded, **fields)
+            await store.finish(task_id, TaskStatus.succeeded, structured_output=outcome.structured_output, **fields)
     finally:
         watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):

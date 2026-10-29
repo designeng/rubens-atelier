@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory board</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --line:#e3e6eb; --accent:#3b5bdb; --warn:#c2410c; --ok:#15803d; --bad:#b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161b; --card:#1d2027; --ink:#e6e8ec; --muted:#9aa1ad; --line:#2c3039; --accent:#748ffc; --warn:#fb923c; --ok:#4ade80; --bad:#f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  input, select, textarea, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+  button { cursor:pointer; } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  #board { display:grid; grid-template-columns:repeat(5, minmax(200px, 1fr)); gap:12px; padding:16px; overflow-x:auto; }
+  .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:8px; cursor:pointer; }
+  .card .meta { color:var(--muted); font-size:12px; margin-top:4px; }
+  .col[data-col=needs_human] h2 { color:var(--warn); } .col[data-col=done] h2 { color:var(--ok); } .col[data-col=failed] h2 { color:var(--bad); }
+  #detail { position:fixed; inset:0 0 0 auto; width:min(560px, 100%); background:var(--card); border-left:1px solid var(--line); padding:16px; overflow:auto; display:none; }
+  #detail.open { display:block; }
+  #detail pre { white-space:pre-wrap; background:var(--bg); padding:8px; border-radius:6px; max-height:320px; overflow:auto; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+  .muted { color:var(--muted); } #err { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Factory</h1>
+  <input id="token" type="password" placeholder="API token" size="14">
+  <select id="project"></select>
+  <button id="newProject">+ project</button>
+  <input id="title" placeholder="New story title" size="28">
+  <button class="primary" id="add">Add &amp; start</button>
+  <span id="err"></span>
+</header>
+<main id="board"></main>
+<aside id="detail"></aside>
+<script>
+const $ = (id) => document.getElementById(id);
+const COLS = { backlog: "Backlog", working: "Agents working", needs_human: "Needs you", done: "Done", failed: "Failed / cancelled" };
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" })[c]);
+const store = { get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+let openItem = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "content-type": "application/json", authorization: `Bearer ${$("token").value}` } });
+  if (!res.ok) { const msg = (await res.json().catch(() => ({}))).detail || res.statusText; throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg)); }
+  $("err").textContent = "";
+  return res.json();
+}
+const fail = (e) => { $("err").textContent = e.message; };
+
+async function loadProjects() {
+  const projects = await api("/projects");
+  const want = store.get("project");
+  $("project").innerHTML = projects.map((p) => `<option ${p.slug === want ? "selected" : ""}>${esc(p.slug)}</option>`).join("");
+  await refresh();
+}
+
+async function refresh() {
+  const slug = $("project").value;
+  if (!slug) { $("board").innerHTML = '<p class="muted">Create a project to start.</p>'; return; }
+  const board = await api(`/projects/${slug}/board`);
+  $("board").innerHTML = Object.entries(COLS).map(([col, name]) => `
+    <section class="col" data-col="${col}"><h2>${name} · ${board[col].length}</h2>
+      ${board[col].map((i) => `<div class="card" data-id="${i.id}"><div>${esc(i.title)}</div>
+        <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div></div>`).join("")}
+    </section>`).join("");
+  if (openItem) await showItem(openItem);
+}
+
+async function showItem(id) {
+  openItem = id;
+  const it = await api(`/items/${id}`);
+  const req = it.open_request;
+  const latest = {}; it.artifacts.forEach((a) => { latest[a.name] = a; });
+  $("detail").innerHTML = `
+    <div class="row"><button id="close">✕</button>
+      ${it.state === null ? '<button class="primary" id="start">Start</button>' : ""}
+      ${it.column === "working" || it.column === "needs_human" ? '<button id="cancel">Cancel</button>' : ""}</div>
+    <h3>${esc(it.title)}</h3>
+    <p class="muted">${esc(it.kind)} · ${esc(it.workflow)} · state <b>${esc(it.state || "backlog")}</b>
+      ${it.branch ? ` · ${esc(it.branch)}` : ""} ${it.pr_url ? ` · <a href="${esc(it.pr_url)}" target="_blank">PR</a>` : ""}</p>
+    ${it.body ? `<pre>${esc(it.body)}</pre>` : ""}
+    ${req ? `<h4>Decision needed</h4><p>${esc(req.question)}</p>
+      <textarea id="comment" rows="3" style="width:100%" placeholder="Comment for the next agent (optional)"></textarea>
+      <div class="row">${req.options.map((o) => `<button class="primary" data-answer="${esc(o)}">${esc(o)}</button>`).join("")}</div>` : ""}
+    <h4>Artifacts</h4>${Object.values(latest).map((a) => `<p><b>${esc(a.name)}</b></p><pre>${esc(a.content)}</pre>`).join("") || '<p class="muted">none yet</p>'}
+    <h4>Runs</h4>${it.runs.map((r) => `<div>${esc(r.state)} · ${esc(r.role)} · ${esc(r.status)}${r.verdict ? ` → ${esc(r.verdict)}` : ""}
+      ${r.cost_usd != null ? ` · $${r.cost_usd.toFixed(2)}` : ""} <span class="muted">task ${esc(r.task_id.slice(0, 8))}</span></div>`).join("") || '<p class="muted">none</p>'}
+    <h4>History</h4>${it.events.map((e) => `<div class="muted">${new Date(e.at).toLocaleString()} · ${esc(e.from_state || "∅")} -[${esc(e.verdict || "start")}]→ <b>${esc(e.to_state)}</b> · ${esc(e.actor)}</div>`).join("")}`;
+  $("detail").classList.add("open");
+  $("close").onclick = () => { openItem = null; $("detail").classList.remove("open"); };
+  if ($("start")) $("start").onclick = () => api(`/items/${id}/start`, { method: "POST" }).then(refresh).catch(fail);
+  if ($("cancel")) $("cancel").onclick = () => api(`/items/${id}/cancel`, { method: "POST" }).then(refresh).catch(fail);
+  document.querySelectorAll("[data-answer]").forEach((b) => b.onclick = () =>
+    api(`/requests/${req.id}/answer`, { method: "POST", body: JSON.stringify({ option: b.dataset.answer, comment: $("comment").value }) }).then(refresh).catch(fail));
+}
+
+$("board").onclick = (e) => { const card = e.target.closest(".card"); if (card) showItem(card.dataset.id).catch(fail); };
+$("token").value = store.get("token");
+$("token").onchange = () => { store.set("token", $("token").value); loadProjects().catch(fail); };
+$("project").onchange = () => { store.set("project", $("project").value); openItem = null; $("detail").classList.remove("open"); refresh().catch(fail); };
+$("add").onclick = () => {
+  const title = $("title").value.trim(); if (!title) return;
+  const body = prompt("Description (what to build, acceptance criteria):") || "";
+  api(`/projects/${$("project").value}/items`, { method: "POST", body: JSON.stringify({ title, body, start: true }) })
+    .then(() => { $("title").value = ""; return refresh(); }).catch(fail);
+};
+$("newProject").onclick = () => {
+  const slug = prompt("Project slug (a-z, 0-9, -):"); if (!slug) return;
+  const repo = prompt("GitHub repo (owner/name):"); if (!repo) return;
+  const verify = prompt("Verify command (e.g. make test), optional:") || null;
+  api("/projects", { method: "POST", body: JSON.stringify({ slug, repo, verify_command: verify }) })
+    .then(() => { store.set("project", slug); return loadProjects(); }).catch(fail);
+};
+loadProjects().catch(fail);
+setInterval(() => refresh().catch(fail), 5000);
+</script>
+</body>
+</html>

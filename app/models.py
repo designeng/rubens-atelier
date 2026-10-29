@@ -39,6 +39,10 @@ class TaskCreate(BaseModel):
     repo_ref: str | None = None
     # Continue a previous task: reuse its workspace and resume its Claude session.
     parent_task_id: str | None = None
+    # Run in a workspace the workflow engine already prepared (workspaces_root/items/<key>),
+    # optionally resuming an earlier session there.
+    workspace_key: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    resume_session: str | None = None
 
     system_prompt: str | None = None
     model: str | None = None
@@ -53,6 +57,8 @@ class TaskCreate(BaseModel):
     # On failure the agent is resumed with the output, up to verify_attempts times.
     verify_command: str | None = None
     verify_attempts: int | None = Field(default=None, ge=0, le=10)
+    # JSON schema for the agent's final answer; the parsed object lands in `structured_output`.
+    output_schema: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -61,6 +67,8 @@ class TaskCreate(BaseModel):
             raise ValueError("either prompt or issue is required")
         if self.repo_url and (self.issue or self.parent_task_id):
             raise ValueError("repo_url can't be combined with issue or parent_task_id")
+        if self.workspace_key and (self.repo_url or self.issue or self.parent_task_id):
+            raise ValueError("workspace_key can't be combined with repo_url, issue or parent_task_id")
         return self
 
 
@@ -75,6 +83,7 @@ class TaskInfo(BaseModel):
     session_id: str | None = None
     parent_task_id: str | None = None
     result: str | None = None
+    structured_output: Any = None
     error: str | None = None
     cost_usd: float | None = None
     num_turns: int | None = None

@@ -10,6 +10,8 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
+COPY workflows ./workflows
+COPY prompts ./prompts
 RUN mkdir -p /workspaces && chown agent /workspaces
 USER agent
 

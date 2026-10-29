@@ -120,6 +120,7 @@ class TaskStore:
             session_id=raw.get("session_id"),
             parent_task_id=spec.parent_task_id,
             result=raw.get("result"),
+            structured_output=json.loads(raw["structured_output"]) if raw.get("structured_output") else None,
             error=raw.get("error"),
             cost_usd=float(raw["cost_usd"]) if raw.get("cost_usd") else None,
             num_turns=int(raw["num_turns"]) if raw.get("num_turns") else None,
