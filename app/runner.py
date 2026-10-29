@@ -84,6 +84,7 @@ async def run_claude(
 ) -> AgentOutcome:
     session_id: str | None = resume
     result: ResultMessage | None = None
+    turns = 0
 
     async for msg in query(prompt=spec.prompt, options=build_options(spec, cwd, resume)):
         match msg:
@@ -91,6 +92,8 @@ async def run_claude(
                 session_id = data.get("session_id", session_id)
                 await emit("session", {"session_id": session_id, "model": data.get("model")})
             case AssistantMessage(content=blocks):
+                turns += 1
+                await emit("turn", {"turn": turns})
                 for block in blocks:
                     match block:
                         case TextBlock(text=text):

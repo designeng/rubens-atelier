@@ -19,6 +19,14 @@
   .col h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:0 0 8px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:8px; cursor:pointer; }
   .card .meta { color:var(--muted); font-size:12px; margin-top:4px; }
+  .prog { font-size:12px; margin-top:6px; }
+  .activity { font:12px ui-monospace, monospace; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px; }
+  .bar { height:3px; background:var(--line); border-radius:2px; margin-top:6px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--accent); }
+  .spin { display:inline-block; width:9px; height:9px; margin-right:6px; vertical-align:-1px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
+  .todos { list-style:none; padding:0; margin:6px 0; } .todos li { font-size:13px; }
   .col[data-col=needs_human] h2 { color:var(--warn); } .col[data-col=done] h2 { color:var(--ok); } .col[data-col=failed] h2 { color:var(--bad); }
   #detail { position:fixed; inset:0 0 0 auto; width:min(560px, 100%); background:var(--card); border-left:1px solid var(--line); padding:16px; overflow:auto; display:none; }
   #detail.open { display:block; }
@@ -99,6 +107,29 @@ async function loadProjects() {
   await refresh();
 }
 
+function elapsed(iso) {
+  if (!iso) return "";
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 1000));
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+}
+
+// p: the item's `progress` from the API (only set while the item is in the working column).
+function progressSummary(p) {
+  if (p.kind === "check") return `waiting for ${p.step}`;
+  if (p.kind === "action") return `running ${p.step}`;
+  if (!p.task_id) return p.queued ? `${p.step} · waiting for a free agent slot` : `${p.step} · starting`;
+  const todos = p.todos ? `todos ${p.todos.filter((t) => t.status === "completed").length}/${p.todos.length}` : null;
+  return [p.step, p.turn != null ? `turn ${p.turn}/${p.max_turns}` : null, todos, elapsed(p.started_at)].filter(Boolean).join(" · ");
+}
+
+function progressHtml(p) {
+  if (!p) return "";
+  const pct = p.turn != null ? Math.min(100, Math.round(100 * p.turn / p.max_turns)) : null;
+  return `<div class="prog"><span class="spin"></span>${esc(progressSummary(p))}</div>
+    ${p.activity ? `<div class="activity" title="${esc(p.activity)}">${esc(p.activity)}</div>` : ""}
+    ${pct != null ? `<div class="bar" title="turns used"><i style="width:${pct}%"></i></div>` : ""}`;
+}
+
 async function refresh() {
   const slug = $("project").value;
   if (!slug) { $("board").innerHTML = '<p class="muted">Create a project to start.</p>'; return; }
@@ -106,7 +137,7 @@ async function refresh() {
   $("board").innerHTML = Object.entries(COLS).map(([col, name]) => `
     <section class="col" data-col="${col}"><h2>${name} · ${board[col].length}</h2>
       ${board[col].map((i) => `<div class="card" data-id="${i.id}"><div>${esc(i.title)}</div>
-        <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div></div>`).join("")}
+        <div class="meta">${esc(i.kind)} · ${esc(i.state || "backlog")}${i.pr_url ? " · PR" : ""}</div>${progressHtml(i.progress)}</div>`).join("")}
     </section>`).join("");
   if (openItem) await showItem(openItem);
   const sc = await api("/scheduler");
@@ -128,6 +159,8 @@ async function showItem(id) {
     <h3>${esc(it.title)}</h3>
     <p class="muted">${esc(it.kind)} · ${esc(it.workflow)} · state <b>${esc(it.state || "backlog")}</b>
       ${it.branch ? ` · ${esc(it.branch)}` : ""} ${it.pr_url ? ` · <a href="${esc(it.pr_url)}" target="_blank">PR</a>` : ""}</p>
+    ${it.progress ? `<h4>Now</h4>${progressHtml(it.progress)}
+      ${it.progress.todos ? `<ul class="todos">${it.progress.todos.map((t) => `<li>${t.status === "completed" ? "☑" : t.status === "in_progress" ? "▸" : "☐"} ${esc(t.content)}</li>`).join("")}</ul>` : ""}` : ""}
     ${it.body ? `<pre>${esc(it.body)}</pre>` : ""}
     ${req ? `<h4>Decision needed</h4><p>${esc(req.question)}</p>
       <textarea id="comment" rows="3" style="width:100%" placeholder="Comment for the next agent (optional)"></textarea>

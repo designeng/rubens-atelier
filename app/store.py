@@ -39,6 +39,14 @@ def lease_key(task_id: str) -> str:
     return f"harness:task:{task_id}:lease"
 
 
+def describe_tool(name: str, args: dict[str, Any]) -> str:
+    """One line for the board: which tool, on what."""
+    for key in ("command", "file_path", "pattern", "path", "url", "description"):
+        if isinstance(args.get(key), str):
+            return f"{name}: {args[key].splitlines()[0][:120]}" if args[key] else name
+    return name
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -147,6 +155,29 @@ class TaskStore:
 
     async def set_fields(self, task_id: str, **fields: str) -> None:
         await self.r.hset(task_key(task_id), mapping=fields)
+
+    async def progress(self, task_id: str) -> dict[str, Any] | None:
+        """Live view of a run for the board: turn, current activity, the agent's todo list."""
+        raw = await self.get_raw(task_id)
+        if raw is None:
+            return None
+        spec = TaskCreate.model_validate_json(raw["spec"])
+        activity = raw.get("activity")
+        if activity is None:
+            # Runs started by a worker that doesn't record activity yet: read the event log.
+            for _id, fields in await self.r.xrevrange(events_key(task_id), count=50):
+                if fields["type"] == "tool_use":
+                    data = json.loads(fields["data"])
+                    activity = describe_tool(data["name"], data.get("input") or {})
+                    break
+        return {
+            "status": raw["status"],
+            "started_at": raw.get("started_at"),
+            "turn": int(raw["turn"]) if raw.get("turn") else None,
+            "max_turns": spec.max_turns or settings.default_max_turns,
+            "activity": activity,
+            "todos": json.loads(raw["todos"]) if raw.get("todos") else None,
+        }
 
     # --- events --------------------------------------------------------------
 

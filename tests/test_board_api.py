@@ -95,3 +95,13 @@ def test_update_project_validation(client):
     ):
         assert client.patch("/projects/app", json=body).status_code == 422, body
     assert client.get("/projects").json() == [before]
+
+
+def test_working_items_report_progress(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    item = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()
+    # Not dispatched to a worker in this test: the agent step has no run yet.
+    (card,) = client.get("/projects/app/board").json()["working"]
+    assert card["progress"] == {"step": "planner", "kind": "agent", "queued": False}
+    assert client.get(f"/items/{item['id']}").json()["progress"]["step"] == "planner"
+    assert client.post("/projects/app/items", json={"title": "Later"}).json()["progress"] is None
