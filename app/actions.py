@@ -1,9 +1,12 @@
 """Built-in, non-agent workflow steps. Each returns a verdict (`done` unless the state lists
 its own `verdicts`), or raises → `error`."""
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+import httpx
 
 from . import gitops
 from .db import Project, WorkItem
@@ -24,6 +27,12 @@ class ActionContext:
 Action = Callable[[ActionContext], Awaitable[str]]
 
 CONFLICT = "conflict"
+MERGED = "merged"
+MANUAL = "manual"
+# GitHub won't merge: branch protection, conflicts, the head moved on, or no permission.
+MERGE_REFUSED = {403, 405, 409, 422}
+# Repository setting that allows each merge method, in order of preference.
+MERGE_METHODS = {"squash": "allow_squash_merge", "merge": "allow_merge_commit", "rebase": "allow_rebase_merge"}
 
 
 async def sync_base(ctx: ActionContext) -> str:
@@ -86,4 +95,31 @@ async def open_pr(ctx: ActionContext) -> str:
     return DONE
 
 
-ACTIONS: dict[str, Action] = {"open_pr": open_pr, "sync_base": sync_base}
+async def merge_pr(ctx: ActionContext) -> str:
+    """Merge the item's PR if the project has automerge on: by now it was reviewed and CI
+    passed. Otherwise, or when GitHub refuses, the PR waits for a human (`manual`); GitHub's
+    reason goes into the `merge` artifact. Merges only the head CI checked."""
+    if not ctx.project.auto_merge:
+        return MANUAL
+    match = re.search(r"/pull/(\d+)", ctx.item.pr_url or "")
+    if not match:
+        raise RuntimeError("the item has no PR to merge")
+    repo, number = ctx.project.repo, int(match[1])
+    repo_info = await ctx.gh.get_repo(repo)
+    method = next((m for m, allowed in MERGE_METHODS.items() if repo_info.get(allowed, True)), "merge")
+    try:
+        await ctx.gh.merge_pr(repo, number, method=method, sha=ctx.item.head_sha)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code not in MERGE_REFUSED:
+            raise
+        try:
+            reason = e.response.json().get("message") or e.response.text
+        except ValueError:
+            reason = e.response.text
+        ctx.report = f"Automerge: GitHub refused to merge PR #{number} ({e.response.status_code}): {reason}"
+        return MANUAL
+    ctx.report = f"Automerge: merged PR #{number} ({method})."
+    return MERGED
+
+
+ACTIONS: dict[str, Action] = {"open_pr": open_pr, "sync_base": sync_base, "merge": merge_pr}

@@ -24,7 +24,7 @@ def test_projects_items_board_and_inbox(client):
 
     # Simulate the worker getting the story to the merge gate.
     engine = app.state.engine
-    for verdict in ("ready", "done", "done", "approved", "done", "passed"):
+    for verdict in ("ready", "done", "done", "approved", "done", "passed", "manual"):
         item = client.get(f"/items/{started['id']}").json()
         client.portal.call(engine.advance, started["id"], item["version"], verdict)
 
@@ -32,7 +32,7 @@ def test_projects_items_board_and_inbox(client):
     assert req["state"] == "awaiting_merge"
     detail = client.get(f"/items/{started['id']}").json()
     assert detail["column"] == "needs_human" and detail["open_request"]["id"] == req["id"]
-    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "sync_base", "review", "publish", "ci", "awaiting_merge"]
+    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
 
     assert client.post(f"/requests/{req['id']}/answer", json={"option": "nope"}).status_code == 409
     r = client.post(f"/requests/{req['id']}/answer", json={"option": "merged", "comment": "thanks"})
@@ -198,6 +198,11 @@ def test_update_project_settings(client):
     (project,) = client.get("/projects").json()
     assert project["slug"] == "app" and project["repo"] == "acme/app"
     assert (project["base_branch"], project["verify_command"]) == (None, "uv run pytest -q")
+    assert project["auto_merge"] is False
+
+    r = client.patch("/projects/app", json={"auto_merge": True})
+    assert r.json()["auto_merge"] is True and r.json()["verify_command"] == "uv run pytest -q"
+    assert client.patch("/projects/app", json={"base_branch": "develop"}).json()["auto_merge"] is True
 
 
 def test_update_project_validation(client):
@@ -213,6 +218,7 @@ def test_update_project_validation(client):
         {"base_branch": "b" * 201},
         {"verify_command": ""},
         {"verify_command": "   "},
+        {"auto_merge": None},
     ):
         assert client.patch("/projects/app", json=body).status_code == 422, body
     assert client.get("/projects").json() == [before]
@@ -284,7 +290,7 @@ def test_attention_says_how_the_item_got_stuck(client):
     # plan allows 3 visits: the fourth sends the story to needs_human
     stuck = walk(story(), *["needs_clarification", "answered"] * 3)
     assert stuck["state"] == "needs_human" and stuck["attention"]["kind"] == "exhausted"
-    merge = walk(story(), "ready", "done", "done", "approved", "done", "passed")
+    merge = walk(story(), "ready", "done", "done", "approved", "done", "passed", "manual")
     assert merge["state"] == "awaiting_merge" and merge["attention"]["kind"] == "pr"
 
 

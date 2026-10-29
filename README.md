@@ -81,7 +81,7 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 `max_visits` and `on_exhausted` guard against endless loops, such as implement ⇄ review ping-pong. If a verdict is missing from `next`, the item goes to `next.error`, and if that is missing too, to `failed`.
 
-[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (human). `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
+[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (human). With the project's `auto_merge` on, `merge` merges the reviewed, green PR itself and the story is done; otherwise, or when GitHub refuses the merge (branch protection, conflicts), the PR waits for a human, and the `merge` artifact says why. `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
 
 **sync_base** merges the latest base branch into the story's branch, so stories running in parallel build on each other's merged work and their PRs don't conflict. It merges rather than rebases, so reviewed history stays intact. On a conflict the merge is left in progress and the story goes back to `implement`; the `sync_base` artifact lists the conflicted files. The implementer resolves them and commits, and then the story goes through `sync_base` and review again. In `awaiting_merge`, the `update` option runs `sync_base` for an open PR when the base branch has moved on or GitHub reports conflicts.
 
@@ -93,8 +93,8 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
-| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
+| `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?, auto_merge?}` |
+| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?, auto_merge?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
 | `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
 | `POST` | `/projects/{slug}/import-issues` | Put the repo's open GitHub issues (PRs left out, up to 1000) into the backlog as stories linked to their issue, so the PR closes it; nothing starts. An issue that already has an item in any state is skipped. Returns `{imported, skipped}`; the board's "Import issues" button calls it |
 | `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |

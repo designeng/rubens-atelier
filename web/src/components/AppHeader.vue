@@ -17,7 +17,8 @@ const githubLabel = computed(() =>
 const schedulerText = computed(() => {
   const sc = b.scheduler.value;
   if (!sc) return "";
-  return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${sc.reason}` : "");
+  const why = b.isPaused() ? "queue paused" : sc.reason;
+  return `agents ${sc.active.length}/${sc.capacity} · queued ${sc.ready.length}` + (sc.reason !== "ok" ? ` · ${why}` : "");
 });
 
 function onLimit(key: "max_agents" | "max_agents_per_project", e: Event) {
@@ -117,7 +118,18 @@ defineExpose({ clearTitle: () => (title.value = "") });
         force
       </label>
     </template>
-    <button v-if="b.scheduler.value" @click="b.togglePause()">{{ b.isPaused() ? "Resume" : "Pause" }}</button>
+    <button
+      v-if="b.scheduler.value"
+      :class="{ primary: b.isPaused() }"
+      :title="
+        b.isPaused()
+          ? 'Agent steps are not dispatched. Resume to let queued steps start.'
+          : 'Stop dispatching new agent steps; running ones finish'
+      "
+      @click="b.togglePause()"
+    >
+      {{ b.isPaused() ? "Resume queue" : "Pause queue" }}
+    </button>
     <span id="err">{{ b.error.value }}</span>
   </header>
 </template>
