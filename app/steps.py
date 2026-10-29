@@ -8,6 +8,9 @@ item version picks up the existing run instead of starting a second agent.
 Agent steps hold a scheduler slot from dispatch until they report. A run cut short by
 a subscription limit is not the work's fault: the step goes back to the scheduler's
 queue (resuming the session where it stopped) instead of producing a verdict.
+
+A finished run's task and event stream are archived to Postgres (see `archive`), so the
+transcript `Run.task_id` points to survives Redis's result TTL.
 """
 
 import logging
@@ -21,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import gitops
 from .actions import ACTIONS, ActionContext
+from .archive import archive_task
 from .config import settings
 from .db import Artifact, Project, Run, WorkItem, utcnow
 from .engine import Engine
@@ -155,6 +159,12 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
             await s.commit()
         log.warning("item %s: %s hit a subscription limit, requeued", item.id, st.agent)
         return RATE_LIMITED
+
+    try:
+        # Before the run is updated: a step re-run after a crash here still archives.
+        await archive_task(db, store, run.task_id, run.id)
+    except Exception:
+        log.exception("item %s: archiving task %s failed", item.id, run.task_id)
 
     if info.status == TaskStatus.succeeded:
         out = info.structured_output if isinstance(info.structured_output, dict) else {}

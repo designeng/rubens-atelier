@@ -4,9 +4,11 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select, update
 
+from app import steps
+from app.archive import archive_task
 from app.checks import poll_checks
 from app.config import settings
-from app.db import Artifact, HumanRequest, ItemEvent, Project, Run, WorkItem, utcnow
+from app.db import Artifact, HumanRequest, ItemEvent, Project, Run, TaskTranscript, WorkItem, utcnow
 from app.engine import Engine, EngineError
 from app.runner import AgentOutcome
 from app.steps import run_step
@@ -251,6 +253,43 @@ async def test_duplicate_and_stale_steps_are_no_ops(make_factory):
     assert await f.path(item_id) == ["plan", "implement"]
 
     assert not await f.engine.advance(item_id, step[1], "done")  # stale verdict
+
+
+async def test_finished_runs_are_archived_once(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    async with f.db.session() as s:
+        runs = (await s.scalars(select(Run).where(Run.item_id == item_id))).all()
+        transcripts = {t.task_id: t for t in await s.scalars(select(TaskTranscript))}
+    assert len(runs) == 3 and set(transcripts) == {r.task_id for r in runs}
+    for run in runs:
+        t = transcripts[run.task_id]
+        assert t.run_id == run.id and t.task["status"] == run.status == "succeeded"
+        assert t.events[0] == {"id": t.events[0]["id"], "type": "status", "data": {"status": "queued"}}
+        assert t.events[-1]["data"] == {"status": "succeeded"}
+        assert any(e["type"] == "session" for e in t.events)
+
+    # A redelivered step after a crash between finish and archive: same run, no second row.
+    assert not await archive_task(f.db, f.store, runs[0].task_id, runs[0].id)
+    async with f.db.session() as s:
+        assert len((await s.scalars(select(TaskTranscript))).all()) == 3
+
+
+async def test_a_failed_archive_does_not_hold_up_the_item(make_factory, monkeypatch):
+    async def broken(*args, **kwargs):
+        raise RuntimeError("postgres is down")
+
+    monkeypatch.setattr(steps, "archive_task", broken)
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    async with f.db.session() as s:
+        assert (await s.scalars(select(TaskTranscript))).all() == []
 
 
 async def test_cancel_supersedes_the_open_request(make_factory):
