@@ -9,3 +9,4 @@ web/node_modules/
 
 .DS_Store
 .playwright-mcp/
+.claude/worktrees/
