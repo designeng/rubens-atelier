@@ -79,7 +79,7 @@ export function createClient(
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (!res.ok) throw await apiError(res);
-    const data = (await res.json()) as T;
+    const data = (res.status === 204 ? undefined : await res.json()) as T;
     onOk();
     return data;
   }
@@ -124,6 +124,7 @@ export function createClient(
     startItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/start`, "POST"),
     reopenItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/reopen`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
+    deleteItem: (id: string) => api<void>(`/items/${seg(id)}`, "DELETE"),
     runItemNow: (id: string) => api<ItemOut>(`/items/${seg(id)}/run-now`, "POST"),
     answerRequest: (id: string, option: string, comment: string) =>
       api<{ advanced: boolean }>(`/requests/${seg(id)}/answer`, "POST", { option, comment }),

@@ -61,6 +61,14 @@ def test_projects_items_board_and_inbox(client):
     assert client.post(f"/items/{backlog['id']}/start").json()["column"] == "working"
     assert client.post(f"/items/{started['id']}/reopen").status_code == 409
 
+    # Only a failed or cancelled story can be deleted.
+    assert client.delete(f"/items/{backlog['id']}").status_code == 409  # running again
+    assert client.delete("/items/nope").status_code == 404
+    client.post(f"/items/{backlog['id']}/cancel")
+    assert client.delete(f"/items/{backlog['id']}").status_code == 204
+    assert client.get(f"/items/{backlog['id']}").status_code == 404
+    assert client.delete(f"/items/{backlog['id']}").status_code == 404
+
 
 def test_import_issues(client, monkeypatch):
     issues = [
