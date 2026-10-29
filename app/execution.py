@@ -6,6 +6,7 @@ Kept independent of Celery so it can be tested (and reused) with any executor.
 
 import asyncio
 import contextlib
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from .github import GitHub
 from .models import TaskCreate, TaskStatus
 from .runner import AgentOutcome, AgentRunner, Emit, run_claude
 from .scheduler import record_rate_limit
-from .store import TaskStore
+from .store import TaskStore, describe_tool
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +143,17 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
         if type_ == "session" and data.get("session_id"):
             # Persist early so cancelled / timed-out runs can still be resumed.
             await store.set_fields(task_id, session_id=data["session_id"])
+        if type_ == "turn":
+            await store.set_fields(task_id, turn=str(data["turn"]))
+        if type_ == "tool_use":
+            fields = {"activity": describe_tool(data["name"], data.get("input") or {})}
+            if data["name"] == "TodoWrite" and isinstance(data.get("input", {}).get("todos"), list):
+                fields["todos"] = json.dumps(
+                    [{"content": t.get("content", ""), "status": t.get("status", "")} for t in data["input"]["todos"]]
+                )
+            await store.set_fields(task_id, **fields)
+        if type_ == "verify":
+            await store.set_fields(task_id, activity=f"verify: {data['command']} → exit {data['exit_code']}")
         if type_ == "rate_limit":
             await record_rate_limit(store.r, data)
             if data.get("status") == "rejected":

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -87,6 +87,8 @@ class ItemOut(Orm):
     priority: int
     updated_at: datetime
     column: Column = "backlog"
+    # Only for items in the working column: what is happening right now (see _progress).
+    progress: dict[str, Any] | None = None
 
 
 class RunOut(Orm):
@@ -153,6 +155,30 @@ def _column(engine: Engine, item: WorkItem) -> Column:
 
 def _item_out(engine: Engine, item: WorkItem) -> ItemOut:
     return ItemOut.model_validate(item).model_copy(update={"column": _column(engine, item)})
+
+
+async def _progress(engine: Engine, s, item: WorkItem) -> dict[str, Any] | None:
+    """Agent step: its live run (turn, activity, todos) or that it waits for a scheduler slot.
+    Action and check steps: just which one is running."""
+    wf = engine.workflows.get(item.workflow)
+    st = wf.states.get(item.state) if wf and item.state else None
+    if st is None or not (st.agent or st.action or st.check):
+        return None
+    if not st.agent:
+        return {"step": st.action or st.check, "kind": st.kind}
+    run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
+    if run is None:
+        queued = bool(engine.scheduler and await engine.scheduler.is_pending(item.id, item.version))
+        return {"step": st.agent, "kind": "agent", "queued": queued}
+    live = await engine.store.progress(run.task_id) or {}
+    return {"step": st.agent, "kind": "agent", "task_id": run.task_id, **live}
+
+
+async def _item_with_progress(engine: Engine, s, item: WorkItem) -> ItemOut:
+    out = _item_out(engine, item)
+    if out.column == "working":
+        out.progress = await _progress(engine, s, item)
+    return out
 
 
 async def _project(db: Database, slug: str) -> Project:
@@ -255,8 +281,8 @@ async def board(slug: str, db: Db, engine: Eng) -> dict[Column, list[ItemOut]]:
         items = await s.scalars(
             select(WorkItem).where(WorkItem.project_id == project.id).order_by(WorkItem.updated_at.desc())
         )
-        for item in items:
-            out = _item_out(engine, item)
+        for item in items.all():
+            out = await _item_with_progress(engine, s, item)
             columns[out.column].append(out)
     return columns
 
@@ -295,7 +321,7 @@ async def get_item(item_id: str, db: Db, engine: Eng) -> ItemDetail:
             select(HumanRequest).where(HumanRequest.item_id == item_id, HumanRequest.answer.is_(None))
         )
         return ItemDetail(
-            **_item_out(engine, item).model_dump(),
+            **(await _item_with_progress(engine, s, item)).model_dump(),
             body=item.body,
             runs=[RunOut.model_validate(r) for r in runs],
             artifacts=[ArtifactOut.model_validate(a) for a in artifacts],

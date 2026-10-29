@@ -148,3 +148,32 @@ async def test_finished_task_expires(store, redis):
     await execute_task(task_id, store, "w1", runner=FakeRunner())
     ttl = await redis.ttl(f"harness:task:{task_id}")
     assert 0 < ttl <= settings.result_ttl_seconds
+
+
+async def test_progress_tracks_turn_activity_and_todos(store):
+    seen = {}
+
+    async def runner(spec, *, cwd, resume, emit):
+        await emit("turn", {"turn": 1})
+        await emit("tool_use", {"id": "t1", "name": "Bash", "input": {"command": "uv run pytest -q\necho done"}})
+        await emit("turn", {"turn": 2})
+        todos = [{"content": "Add endpoint", "status": "completed", "activeForm": "x"}, {"content": "Add tests", "status": "in_progress"}]
+        await emit("tool_use", {"id": "t2", "name": "TodoWrite", "input": {"todos": todos}})
+        seen.update(await store.progress(task_id))
+        return AgentOutcome("s", "ok", False)
+
+    task_id = await store.create(TaskCreate(prompt="x", max_turns=30))
+    await execute_task(task_id, store, "w1", runner=runner)
+
+    assert seen["status"] == "running" and seen["turn"] == 2 and seen["max_turns"] == 30
+    assert seen["activity"] == "TodoWrite"
+    assert seen["todos"] == [{"content": "Add endpoint", "status": "completed"}, {"content": "Add tests", "status": "in_progress"}]
+
+
+async def test_progress_falls_back_to_the_event_log(store):
+    task_id = await store.create(TaskCreate(prompt="x"))
+    await store.append_event(task_id, "tool_use", {"name": "Read", "input": {"file_path": "app/api.py"}})
+    await store.append_event(task_id, "text", {"text": "thinking out loud"})
+    progress = await store.progress(task_id)
+    assert progress["activity"] == "Read: app/api.py" and progress["turn"] is None
+    assert progress["max_turns"] == settings.default_max_turns

@@ -60,3 +60,13 @@ def test_scheduler_pause_and_resume(client):
     paused = client.post("/scheduler/pause", json={"reason": "release freeze"}).json()
     assert paused["capacity"] == 0 and paused["reason"] == "paused: release freeze"
     assert client.post("/scheduler/resume").json()["reason"] == "ok"
+
+
+def test_working_items_report_progress(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    item = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()
+    # Not dispatched to a worker in this test: the agent step has no run yet.
+    (card,) = client.get("/projects/app/board").json()["working"]
+    assert card["progress"] == {"step": "planner", "kind": "agent", "queued": False}
+    assert client.get(f"/items/{item['id']}").json()["progress"]["step"] == "planner"
+    assert client.post("/projects/app/items", json={"title": "Later"}).json()["progress"] is None

@@ -29,6 +29,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# Only our tests: workspaces/ holds agents' clones of repos, possibly this one.
+testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["."]
 asyncio_default_fixture_loop_scope = "function"
