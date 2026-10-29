@@ -57,7 +57,7 @@ defineExpose({ clearTitle: () => (title.value = "") });
 
 <template>
   <header>
-    <h1>Factory</h1>
+    <h1>Rubens Atelier</h1>
     <input type="password" placeholder="API token" size="14" :value="b.token.value" @change="onToken" />
     <select :value="b.slug.value" @change="onProject">
       <option v-for="p in b.projects.value" :key="p.id" :value="p.slug">{{ p.slug }}</option>

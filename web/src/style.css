@@ -11,7 +11,8 @@ body::before { content:""; position:fixed; top:0; left:0; width:min(560px, 60vw)
   mask-composite:intersect; }
 body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
 header { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
-header h1 { font-size:16px; margin:0 12px 0 0; }
+header h1 { font:700 40px/1 Corinthia, cursive; margin:-6px 12px -2px 0; color:#5a3a1a; letter-spacing:.01em; }
+@media (prefers-color-scheme: dark) { header h1 { color:#c9a574; } }
 input, select, textarea, button { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
 input.num { width:4.5em; }
 button { cursor:pointer; } button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
