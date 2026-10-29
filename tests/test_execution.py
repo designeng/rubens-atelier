@@ -1,7 +1,8 @@
 import asyncio
+import json
 from pathlib import Path
 
-from app.config import settings
+from app.config import ROOT, settings
 from app.execution import WORKER_LOST, execute_task, reap_orphans
 from app.models import TaskCreate, TaskStatus
 from app.runner import AgentOutcome
@@ -208,6 +209,21 @@ def test_bash_allowlist_and_sandbox(monkeypatch):
     assert "Bash" not in opts.allowed_tools
     assert {"Bash(pytest:*)", "Bash(git status:*)", "Read"} <= set(opts.allowed_tools)
     assert opts.sandbox["enabled"] and not opts.sandbox["allowUnsandboxedCommands"]
+    # Secrets are denied through settings, the only place the sandbox takes read rules from.
+    deny = json.loads(opts.settings)["permissions"]["deny"]
+    assert f"Read(/{ROOT / '.env'})" in deny
+
+
+def test_agent_env_hides_harness_config(monkeypatch):
+    from app.runner import agent_env, uv_cache_dir
+
+    monkeypatch.setenv("HARNESS_GITHUB_TOKEN", "secret")
+    monkeypatch.setenv("VIRTUAL_ENV", "/worker/.venv")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    env = agent_env()
+    assert env["HARNESS_GITHUB_TOKEN"] == "" and env["VIRTUAL_ENV"] == ""
+    assert "PATH" not in env  # inherited unchanged
+    assert env["UV_CACHE_DIR"] == str(uv_cache_dir()) and uv_cache_dir().is_dir()
 
 
 def test_error_names_the_last_failed_tool_call():
