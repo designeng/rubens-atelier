@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -380,6 +380,26 @@ async def resume_scheduler(scheduler: Sched) -> dict:
     return await scheduler.status()
 
 
-@page.get("/board", include_in_schema=False)
-async def board_page() -> FileResponse:
-    return FileResponse(Path(__file__).parent / "static" / "board.html")
+# Built by `make web-build` from web/ (Vue + Vite). Read at request time: the API works without a build.
+DIST = Path(__file__).parent / "static" / "dist"
+
+NOT_BUILT = """<!doctype html><meta charset="utf-8"><title>Factory board</title>
+<p>Board is not built: run <code>make web-build</code> (needs Node 22 and pnpm) and reload.</p>
+"""
+
+
+@page.get("/board", include_in_schema=False, response_model=None)
+async def board_page() -> FileResponse | HTMLResponse:
+    index = DIST / "index.html"
+    if not index.is_file():
+        return HTMLResponse(NOT_BUILT)
+    return FileResponse(index, headers={"cache-control": "no-cache"})
+
+
+@page.get("/board/assets/{path:path}", include_in_schema=False)
+async def board_asset(path: str) -> FileResponse:
+    root = (DIST / "assets").resolve()
+    file = (root / path).resolve()
+    if not file.is_relative_to(root) or not file.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    return FileResponse(file)

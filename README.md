@@ -33,6 +33,16 @@ uv run celery -A app.celery_app beat -l info
 uv run pytest
 ```
 
+### Board (web/)
+
+The board is a Vue 3 + Vite + TypeScript app in `web/`. It needs Node 22 and pnpm (`corepack enable` provides the version pinned in `web/package.json`). `vite build` writes it to `app/static/dist/` (not committed), and `GET /board` serves it from there. Without a build `/board` shows a page asking to run `make web-build`; the API and the Python tests do not need Node.
+
+- `make web-build`: install the dependencies and build the board. `make dev` runs it when `app/static/dist/` is missing; after changing `web/` rebuild or use the dev server.
+- `make web-dev`: Vite dev server with hot reload at http://localhost:5173/board/. API requests go to http://localhost:8000, so run `make api` (or `make dev`) next to it.
+- `make web-test`: type check (`vue-tsc --noEmit`) and unit tests (Vitest). Inside `web/`: `pnpm typecheck`, `pnpm test`.
+
+The Docker image builds the board itself in a Node stage.
+
 ## API
 
 | Method | Path | |

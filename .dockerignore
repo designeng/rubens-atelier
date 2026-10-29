@@ -1,0 +1,6 @@
+.git
+.env
+.venv
+workspaces
+web/node_modules
+app/static/dist
