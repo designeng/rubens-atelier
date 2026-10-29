@@ -54,6 +54,7 @@ states:
     human: >-
       The PR is open. Merge it, send it back with a comment, or update it when the base branch
       has moved on or GitHub reports conflicts.
+    watch: merge  # answers `merged` / `abandon` by itself once GitHub reports the PR's fate
     options: [merged, update, rework, abandon]
     next: {merged: done, update: sync_base, rework: implement, abandon: cancelled}
 

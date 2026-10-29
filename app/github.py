@@ -110,6 +110,9 @@ class GitHub:
             json={"head": head, "base": base, "title": title, "body": body},
         )
 
+    async def get_pr(self, repo: str, number: int) -> dict[str, Any]:
+        return await self._req("GET", f"/repos/{repo}/pulls/{number}")
+
     async def check_runs(self, repo: str, ref: str) -> list[dict[str, Any]]:
         data = await self._req("GET", f"/repos/{repo}/commits/{ref}/check-runs", params={"per_page": 100})
         return data["check_runs"]

@@ -1,12 +1,14 @@
 """Check states: external conditions the workflow waits for without holding a worker.
 
-`poll_checks` (celery beat) evaluates every item sitting in a check state. A check
+`poll_checks` (celery beat) evaluates every item sitting in a check state, and in a human
+state that `watch`es a check (the person may answer first; whoever does wins). A check
 returns a verdict once it knows the outcome, or None to be asked again next poll;
 details (e.g. which CI jobs failed and their log tails) become an artifact that the
 next agent sees.
 """
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -96,12 +98,25 @@ async def _describe(gh: GitHub, repo: str, sha: str, failed: list[Result]) -> st
     return "\n\n".join(parts)
 
 
-CHECKS: dict[str, Check] = {"ci": ci}
+async def merge(ctx: CheckContext) -> tuple[str | None, str]:
+    """Has the item's PR been merged (`merged`) or closed without merging (`abandon`)?"""
+    match = re.search(r"/pull/(\d+)", ctx.item.pr_url or "")
+    if not match:
+        return None, ""
+    pr = await ctx.gh.get_pr(ctx.project.repo, int(match[1]))
+    if pr.get("merged_at") or pr.get("merged"):
+        return "merged", f"PR #{pr['number']} was merged on GitHub."
+    if pr.get("state") == "closed":
+        return "abandon", f"PR #{pr['number']} was closed on GitHub without merging."
+    return None, ""
+
+
+CHECKS: dict[str, Check] = {"ci": ci, "merge": merge}
 
 
 async def poll_checks(engine: Engine, github_factory: Callable[[Project], GitHub] = GitHub.for_project) -> list[tuple[str, str]]:
     """Evaluate every item in a check state; returns (item_id, verdict) for those that moved."""
-    check_states = {n for wf in engine.workflows.values() for n, st in wf.states.items() if st.check}
+    check_states = {n for wf in engine.workflows.values() for n, st in wf.states.items() if st.check or st.watch}
     if not check_states:
         return []
     async with engine.db.session() as s:
@@ -116,12 +131,13 @@ async def poll_checks(engine: Engine, github_factory: Callable[[Project], GitHub
         for item in items:
             wf = engine.workflows.get(item.workflow)
             st = wf.states.get(item.state) if wf else None
-            if st is None or not st.check:
+            name = st.check or st.watch if st else None
+            if name is None:
                 continue
             waited = (utcnow() - aware(item.updated_at)).total_seconds()
-            check = CHECKS.get(st.check)
+            check = CHECKS.get(name)
             if check is None:
-                verdict, details = ERROR, f"unknown check {st.check!r}"
+                verdict, details = ERROR, f"unknown check {name!r}"
             else:
                 try:
                     project = projects[item.project_id]
@@ -130,17 +146,17 @@ async def poll_checks(engine: Engine, github_factory: Callable[[Project], GitHub
                     verdict, details = await check(CheckContext(clients[project.installation_id], project, item, st, waited))
                 except Exception:
                     # Transient (GitHub hiccup) until proven otherwise: try again next poll.
-                    log.exception("check %s for item %s failed", st.check, item.id)
+                    log.exception("check %s for item %s failed", name, item.id)
                     verdict, details = None, ""
-            if verdict is None and waited >= st.timeout_seconds:
-                verdict, details = "timeout", f"{st.check} gave no result within {st.timeout_seconds}s"
+            if verdict is None and st.check and waited >= st.timeout_seconds:
+                verdict, details = "timeout", f"{name} gave no result within {st.timeout_seconds}s"
             if verdict is None:
                 continue
             if details:
                 async with engine.db.session() as s:
-                    s.add(Artifact(item_id=item.id, name=st.check, content=details))
+                    s.add(Artifact(item_id=item.id, name=name, content=details))
                     await s.commit()
-            if await engine.advance(item.id, item.version, verdict, actor=f"check:{st.check}"):
+            if await engine.advance(item.id, item.version, verdict, actor=f"check:{name}"):
                 moved.append((item.id, verdict))
     finally:
         for gh in clients.values():

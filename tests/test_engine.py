@@ -21,6 +21,7 @@ class CIGitHub(FakeGitHub):
         super().__init__(origin)
         self.checks = [{"id": 1, "name": "test", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}}]
         self.statuses: list[dict] = []
+        self.pr_state: dict = {"state": "open", "merged_at": None}
         self.logs = {1: "collected 3 items\nFAILED test_hello.py::test_says_hi - AssertionError\n"}
 
     async def check_runs(self, repo, ref):
@@ -31,6 +32,9 @@ class CIGitHub(FakeGitHub):
 
     async def job_log(self, repo, job_id):
         return self.logs[job_id]
+
+    async def get_pr(self, repo, number):
+        return {"number": number, **self.pr_state}
 
 
 class Factory:
@@ -140,7 +144,7 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     item = await f.item(item_id)
     assert item.head_sha == git(origin, "rev-parse", item.branch).strip()
     assert item.branch == f"agent/story-{item_id[:8]}"
-    assert item.pr_url == "https://gh/pr/1"
+    assert item.pr_url == "https://gh/pull/1"
     assert set(item.sessions) == {"planner", "implementer", "reviewer"}
     pr = f.gh.prs[0]
     assert pr["head"] == item.branch and pr["base"] == "main"
@@ -469,3 +473,27 @@ async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, orig
         reports = (await s.scalars(select(Artifact.content).where(Artifact.name == "sync_base"))).all()
     assert reports[1].startswith("The merge of origin/main still has conflicts")
     assert "<<<<<<<" not in git(origin, "show", f"{(await f.item(item_id)).branch}:hello.txt")
+
+
+async def test_merged_pr_moves_the_story_to_done_by_itself(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "awaiting_merge"  # PR still open: keeps waiting
+
+    f.gh.pr_state = {"state": "closed", "merged_at": "2026-10-29T10:00:00Z"}
+    await f.drain()
+    assert (await f.item(item_id)).state == "done"
+    assert await f.open_request(item_id) is None
+
+
+async def test_pr_closed_without_merge_abandons_the_story(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    f.gh.pr_state = {"state": "closed", "merged_at": None}
+    await f.drain()
+    assert (await f.item(item_id)).state == "cancelled"
