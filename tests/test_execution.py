@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.config import ROOT, settings
 from app.execution import WORKER_LOST, execute_task, reap_orphans
-from app.models import TaskCreate, TaskStatus
+from app.models import FailureReason, TaskCreate, TaskStatus
 from app.runner import AgentOutcome
 from app.store import lease_key
 
@@ -77,7 +77,7 @@ async def test_timeout(store):
     await execute_task(task_id, store, "w1", runner=FakeRunner(delay=5))
     info = await store.get(task_id)
     assert info.status == TaskStatus.failed
-    assert "timed out" in info.error
+    assert "timed out" in info.error and info.failure_reason == FailureReason.timeout
 
 
 async def test_verify_loop_resumes_session_until_green(store):
@@ -107,8 +107,19 @@ async def test_verify_gives_up(store):
     await execute_task(task_id, store, "w1", runner=runner)
     info = await store.get(task_id)
     assert info.status == TaskStatus.failed
-    assert "verify command" in info.error
+    assert "verify command" in info.error and info.failure_reason == FailureReason.verify_failed
     assert len(runner.calls) == 2
+    (*_, (_, _, status)) = await store.read_events(task_id)
+    assert status["failure_reason"] == "verify_failed"
+
+
+async def test_agent_error_keeps_the_runners_failure_reason(store):
+    async def out_of_turns(spec, *, cwd, resume, emit):
+        return AgentOutcome("s", None, True, error="error_max_turns", failure=FailureReason.turn_limit)
+
+    task_id = await store.create(TaskCreate(prompt="x"))
+    await execute_task(task_id, store, "w1", runner=out_of_turns)
+    assert (await store.get(task_id)).failure_reason == FailureReason.turn_limit
 
 
 async def test_follow_up_reuses_workspace_and_session(store):
@@ -134,6 +145,7 @@ async def test_redelivery_after_worker_death_fails_instead_of_rerunning(store, r
     assert runner.calls == []
     info = await store.get(task_id)
     assert info.status == TaskStatus.failed and info.error == WORKER_LOST
+    assert info.failure_reason == FailureReason.worker_lost
 
 
 async def test_redelivered_duplicate_of_live_run_is_ignored(store):
@@ -239,3 +251,13 @@ def test_error_names_the_last_failed_tool_call():
     msg = describe_error(result, _failure(call, "The user doesn't want to proceed"))
     assert "Bash until ! pgrep x" in msg and "doesn't want to proceed" in msg and "28 turns" in msg
     assert "last failed" not in describe_error(result, None)
+
+
+def test_sdk_result_subtypes_map_to_failure_reasons():
+    from types import SimpleNamespace
+
+    from app.runner import failure_reason
+
+    assert failure_reason(SimpleNamespace(subtype="error_max_turns")) == FailureReason.turn_limit
+    assert failure_reason(SimpleNamespace(subtype="error_max_budget_usd")) == FailureReason.budget
+    assert failure_reason(SimpleNamespace(subtype="error_during_execution")) == FailureReason.model_error

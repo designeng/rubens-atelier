@@ -83,6 +83,8 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 `max_visits` and `on_exhausted` guard against endless loops, such as implement ⇄ review ping-pong. If a verdict is missing from `next`, the item goes to `next.error`, and if that is missing too, to `failed`.
 
+An agent run that ends without a result gives its failure reason as the verdict: `turn_limit`, `budget`, `model_error`, `verify_failed`, `timeout`, `crashed`, `workspace`, `restart_limit` (see `FailureReason` in `app/models.py`). An agent state can route any of them in `next`; the rest go to `next.error` as before. In `story.yaml` an implementer that runs out of turns continues its session in another `implement` visit, bounded by `max_visits`. The reason is also stored on the harness task (`failure_reason` in `/tasks/{id}` and in the final `status` event).
+
 [workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (human). With the project's `auto_merge` on, `merge` merges the reviewed, green PR itself and the story is done; otherwise, or when GitHub refuses the merge (branch protection, conflicts), the PR waits for a human, and the `merge` artifact says why. `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
 
 **sync_base** merges the latest base branch into the story's branch, so stories running in parallel build on each other's merged work and their PRs don't conflict. It merges rather than rebases, so reviewed history stays intact. On a conflict the merge is left in progress and the story goes back to `implement`; the `sync_base` artifact lists the conflicted files. The implementer resolves them and commits, and then the story goes through `sync_base` and review again. In `awaiting_merge`, the `update` option runs `sync_base` for an open PR when the base branch has moved on or GitHub reports conflicts.
@@ -140,7 +142,8 @@ The push goes to the PR branch, not to `main`: CI and review confirm production 
 
 ## Reliability
 
-- `acks_late` + `prefetch=1`: if a worker dies, the message is redelivered. Redelivery does not restart the agent: an atomic claim (Lua) moves such a task to `failed: worker lost`.
+- `acks_late` + `prefetch=1`: if a worker dies, the message is redelivered. Redelivery does not rerun the agent in the same task: an atomic claim (Lua) moves such a task to `failed: worker lost`.
+- A factory agent step whose worker died is not escalated: the cut run is dropped and the step runs again, resuming the cut session with a prompt to check the workspace and carry on. After `HARNESS_RESTART_LIMIT` (3) such restarts in one state visit, the next crash ends the step with `restart_limit`, which goes to `next.error` (in a story, a human).
 - Lease with heartbeat and a reaper in beat: tasks of dead workers are marked failed in about 30 seconds rather than after `visibility_timeout`.
 - `session_id` is saved right at startup. A cancelled, failed or timed-out task can be continued via `parent_task_id`.
 - Finished tasks and their events are kept in Redis for `HARNESS_RESULT_TTL_SECONDS` (7 days by default); factory runs are archived to Postgres before that.

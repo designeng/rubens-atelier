@@ -16,7 +16,7 @@ from typing import Any
 from . import gitops, issue_flow
 from .config import settings
 from .github import GitHub
-from .models import TaskCreate, TaskStatus
+from .models import FailureReason, TaskCreate, TaskStatus
 from .runner import AgentOutcome, AgentRunner, Emit, run_claude
 from .scheduler import record_rate_limit
 from .store import TaskStore, describe_tool
@@ -97,6 +97,7 @@ async def run_with_verify(
         if attempts <= 0:
             outcome.is_error = True
             outcome.error = f"verify command `{command}` failed with exit code {code}"
+            outcome.failure = FailureReason.verify_failed
             break
         attempts -= 1
         fix_prompt = (
@@ -123,14 +124,14 @@ async def execute_task(
         # message for a run whose worker died (status still `running`, lease gone).
         raw = await store.get_raw(task_id)
         if raw and raw["status"] == TaskStatus.running and not await store.lease_alive(task_id):
-            await store.finish(task_id, TaskStatus.failed, error=WORKER_LOST)
+            await store.finish(task_id, TaskStatus.failed, error=WORKER_LOST, failure_reason=FailureReason.worker_lost)
         return
 
     spec = await store.get_spec(task_id)
     gh: GitHub | None = None
 
-    async def fail(status: TaskStatus, error: str) -> None:
-        if await store.finish(task_id, status, error=error) and spec.issue and gh:
+    async def fail(status: TaskStatus, error: str, reason: FailureReason) -> None:
+        if await store.finish(task_id, status, error=error, failure_reason=reason) and spec.issue and gh:
             await issue_flow.mark_failed(gh, spec.issue, task_id, error)
 
     try:
@@ -140,7 +141,7 @@ async def execute_task(
         try:
             ws = await prepare_workspace(store, task_id, spec, gh)
         except Exception as e:
-            await fail(TaskStatus.failed, f"workspace setup failed: {e}")
+            await fail(TaskStatus.failed, f"workspace setup failed: {e}", FailureReason.workspace)
             return
         await store.set_fields(task_id, workspace=str(ws.cwd))
         await _run(task_id, spec, ws, store, worker_id, runner, gh, fail)
@@ -200,12 +201,12 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
     except asyncio.CancelledError:
         if not user_cancelled.is_set():
             raise
-        await fail(TaskStatus.cancelled, "cancelled by user")
+        await fail(TaskStatus.cancelled, "cancelled by user", FailureReason.cancelled)
     except TimeoutError:
-        await fail(TaskStatus.failed, f"timed out after {timeout}s")
+        await fail(TaskStatus.failed, f"timed out after {timeout}s", FailureReason.timeout)
     except Exception as e:
         log.exception("task %s crashed", task_id)
-        await fail(TaskStatus.failed, f"{type(e).__name__}: {e}")
+        await fail(TaskStatus.failed, f"{type(e).__name__}: {e}", FailureReason.crashed)
     else:
         fields = dict(
             session_id=outcome.session_id,
@@ -216,7 +217,9 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
         )
         if outcome.is_error:
             await store.set_fields(task_id, **{k: str(v) for k, v in fields.items() if v is not None})
-            await fail(TaskStatus.failed, outcome.error or "agent reported an error")
+            await fail(
+                TaskStatus.failed, outcome.error or "agent reported an error", outcome.failure or FailureReason.model_error
+            )
         else:
             await store.finish(task_id, TaskStatus.succeeded, structured_output=outcome.structured_output, **fields)
     finally:
@@ -231,7 +234,7 @@ async def reap_orphans(store: TaskStore) -> list[str]:
     for task_id in await store.running_ids():
         if await store.lease_alive(task_id):
             continue
-        if await store.finish(task_id, TaskStatus.failed, error=WORKER_LOST):
+        if await store.finish(task_id, TaskStatus.failed, error=WORKER_LOST, failure_reason=FailureReason.worker_lost):
             reaped.append(task_id)
         else:
             await store.forget_running(task_id)  # finished or expired meanwhile

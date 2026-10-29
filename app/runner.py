@@ -24,7 +24,7 @@ from claude_agent_sdk import (
 )
 
 from .config import ROOT, settings
-from .models import TaskCreate
+from .models import FailureReason, TaskCreate
 
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -45,6 +45,7 @@ class AgentOutcome:
     cost_usd: float | None = None
     num_turns: int | None = None
     structured_output: Any = None
+    failure: FailureReason | None = None  # set with is_error; None there means model_error
 
 
 class AgentRunner(Protocol):
@@ -137,6 +138,14 @@ def describe_error(result: ResultMessage, last_failure: str | None) -> str:
     return "; ".join(parts)
 
 
+def failure_reason(result: ResultMessage) -> FailureReason:
+    if result.subtype == "error_max_turns":
+        return FailureReason.turn_limit
+    if result.subtype.startswith("error_max_budget"):
+        return FailureReason.budget
+    return FailureReason.model_error
+
+
 def _failure(call: dict[str, Any] | None, content: Any) -> str:
     text = content if isinstance(content, str) else str(content)
     what = call["name"] + " " + str(call["input"].get("command") or call["input"]) if call else "tool call"
@@ -194,7 +203,9 @@ async def run_claude(
                 pass
 
     if result is None:
-        return AgentOutcome(session_id, None, True, error="agent exited without a result")
+        return AgentOutcome(
+            session_id, None, True, error="agent exited without a result", failure=FailureReason.model_error
+        )
     return AgentOutcome(
         session_id=session_id,
         result=result.result,
@@ -203,5 +214,6 @@ async def run_claude(
         cost_usd=result.total_cost_usd,
         num_turns=result.num_turns,
         structured_output=result.structured_output,
+        failure=failure_reason(result) if result.is_error else None,
     )
 

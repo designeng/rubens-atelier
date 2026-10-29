@@ -26,7 +26,8 @@ states:
     resume: true
     max_visits: 4
     on_exhausted: needs_human
-    next: {done: sync_base, error: needs_human}
+    # Out of turns: continue the same session (resume) once more; max_visits bounds it.
+    next: {done: sync_base, turn_limit: implement, error: needs_human}
 
   # Bring in what other stories merged meanwhile, so the reviewer sees the code as it will
   # land and the PR doesn't conflict. Conflicts go back to the implementer.

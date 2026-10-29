@@ -40,11 +40,21 @@ def test_unmapped_verdicts_fall_back_to_error_then_failed():
         ({"a": {"human": "?", "options": ["y", "n"], "next": {"y": "failed"}}}, "without a transition"),
         ({"a": {"agent": "x", "action": "open_pr"}}, "exactly one"),
         ({"a": {"terminal": "succeeded", "next": {"done": "failed"}}}, "not an outcome"),
+        ({"a": {"action": "open_pr", "next": {"turn_limit": "failed"}}}, "not an outcome"),
     ],
 )
 def test_invalid_workflows_are_rejected(states, message):
     with pytest.raises(ValidationError, match=message):
         wf(**states)
+
+
+def test_agent_states_route_failure_reasons():
+    w = wf(a={"agent": "x", "next": {"done": "b", "turn_limit": "a", "error": "b"}}, b={"action": "open_pr"})
+    assert w.decide("a", "turn_limit") == "a"
+    assert w.decide("a", "budget") == "b"  # unmapped: like error
+    story = load_workflows(settings.workflows_dir)["story"]
+    assert story.decide("implement", "turn_limit") == "implement"
+    assert story.decide("implement", "restart_limit") == "needs_human"
 
 
 def test_failed_state_is_required():

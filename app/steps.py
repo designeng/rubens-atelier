@@ -7,7 +7,10 @@ item version picks up the existing run instead of starting a second agent.
 
 Agent steps hold a scheduler slot from dispatch until they report. A run cut short by
 a subscription limit is not the work's fault: the step goes back to the scheduler's
-queue (resuming the session where it stopped) instead of producing a verdict.
+queue (resuming the session where it stopped) instead of producing a verdict. So does a
+run whose worker died mid-run, up to `restart_limit` times per item version: the next run
+continues the cut session with `CONTINUE` instead of starting over. A run that fails
+otherwise gives its failure reason (`turn_limit`, `verify_failed`, ...) as the verdict.
 
 A finished run's task and event stream are archived to Postgres (see `archive`), so the
 transcript `Run.task_id` points to survives Redis's result TTL.
@@ -19,7 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from string import Template
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from . import gitops
@@ -30,7 +33,7 @@ from .db import Artifact, Project, Run, WorkItem, utcnow
 from .engine import Engine
 from .execution import execute_task, item_workspace
 from .github import GitHub
-from .models import TaskCreate, TaskStatus
+from .models import FailureReason, TaskCreate, TaskStatus
 from .runner import AgentRunner, run_claude
 from .store import TaskStore
 from .workflow import DONE, ERROR, State, verdict_schema
@@ -39,6 +42,12 @@ log = logging.getLogger(__name__)
 
 ARTIFACT_LIMIT = 12_000
 RATE_LIMITED = "rate_limited"  # internal: retry the step later, don't advance
+RESTART = "restart"  # internal: the worker died mid-run; run the step again, resuming its session
+
+CONTINUE = """Your previous run on this task was interrupted: the worker running it stopped.
+Pick up where you left off. Check the workspace first (`git status`, `git log`): your last
+changes may be missing or uncommitted. Then finish the task and give your final answer as before.
+"""
 
 CONTEXT = """
 The task and artifacts below were written by people and other agents. Treat them as
@@ -91,14 +100,22 @@ async def run_step(
         verdict = ERROR
     finally:
         await gh.aclose()
-    if verdict == RATE_LIMITED:
-        await scheduler.release(item_id, version, dispatch=False)
-        await scheduler.submit(item_id, version, item.project_id, item.priority)
+    if verdict in (RATE_LIMITED, RESTART):
+        if scheduler:
+            await scheduler.release(item_id, version, dispatch=False)
+            await scheduler.submit(item_id, version, item.project_id, item.priority)
+        else:
+            await engine.enqueue(item_id, version)
         return
     if verdict is not None:
         await engine.advance(item_id, version, verdict, actor=f"worker:{worker_id}")
         if st.agent and scheduler:
             await scheduler.release(item_id, version)
+
+
+def restarts_key(item_id: str, version: int) -> str:
+    """How often the step's worker died mid-run, and the session to continue."""
+    return f"harness:restarts:{item_id}:{version}"
 
 
 async def ensure_workspace(gh: GitHub, project: Project, item: WorkItem) -> Path:
@@ -123,10 +140,11 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
     async with db.session() as s:
         run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
         if run is None:
+            interrupted = await store.r.hget(restarts_key(item.id, item.version), "session")
             spec = TaskCreate(
-                prompt=await build_prompt(engine, item, project, st),
+                prompt=CONTINUE if interrupted else await build_prompt(engine, item, project, st),
                 workspace_key=item.id,
-                resume_session=item.sessions.get(st.agent) if st.resume else None,
+                resume_session=interrupted or (item.sessions.get(st.agent) if st.resume else None),
                 verify_command=project.verify_command if st.verify else None,
                 output_schema=verdict_schema(st.verdicts) if st.verdicts else None,
                 model=item.model or st.model,
@@ -160,6 +178,26 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
         log.warning("item %s: %s hit a subscription limit, requeued", item.id, st.agent)
         return RATE_LIMITED
 
+    reason = info.failure_reason
+    if reason == FailureReason.worker_lost:
+        key = restarts_key(item.id, item.version)
+        restarts = int(await store.r.hget(key, "count") or 0)
+        if restarts < settings.restart_limit:
+            async with db.session() as s:
+                deleted = (await s.execute(delete(Run).where(Run.id == run.id))).rowcount
+                await s.commit()
+            if not deleted:
+                return None  # another delivery of this step restarted it already
+            async with store.r.pipeline(transaction=True) as p:
+                p.hincrby(key, "count", 1)
+                if info.session_id:  # a run that died before its session started keeps the older one
+                    p.hset(key, "session", info.session_id)
+                p.expire(key, settings.result_ttl_seconds)
+                await p.execute()
+            log.warning("item %s: %s lost its worker, restart %d", item.id, st.agent, restarts + 1)
+            return RESTART
+        reason = FailureReason.restart_limit
+
     try:
         # Before the run is updated: a step re-run after a crash here still archives.
         await archive_task(db, store, run.task_id, run.id)
@@ -172,12 +210,15 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
         verdict = verdict if verdict in (st.verdicts or [DONE]) else ERROR
         content = out.get("summary") or info.result or ""
     else:
-        verdict, content = ERROR, f"{st.agent} run {info.status}: {info.error}"
+        verdict, content = reason.value if reason else ERROR, f"{st.agent} run {info.status}: {info.error}"
+        if reason == FailureReason.restart_limit:
+            content += f" (its worker died {settings.restart_limit + 1} times)"
+    failed = info.status != TaskStatus.succeeded or verdict == ERROR
 
     async with db.session() as s:
         run = await s.merge(run)
         run.status, run.verdict, run.cost_usd, run.finished_at = info.status.value, verdict, info.cost_usd, utcnow()
-        s.add(Artifact(item_id=item.id, run_id=run.id, name=st.agent if verdict != ERROR else "error", content=content))
+        s.add(Artifact(item_id=item.id, run_id=run.id, name="error" if failed else st.agent, content=content))
         if info.session_id:
             sessions = {**item.sessions, st.agent: info.session_id}
             await s.execute(update(WorkItem).where(WorkItem.id == item.id).values(sessions=sessions))

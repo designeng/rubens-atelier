@@ -3,6 +3,8 @@
 The agent never picks the next step. An agent state returns a verdict (a value of an
 enum enforced through structured output, or `done`), an action returns `done`/`error`,
 a human state returns the chosen option; `next` maps that verdict to the next state.
+An agent run that ends without a result gives its failure reason instead (`turn_limit`,
+`budget`, `verify_failed`, `restart_limit`, ... see `models.FailureReason`).
 Anything unmapped — including `error` — falls back to `next.error`, then to `failed`.
 
 Every state is exactly one of:
@@ -20,11 +22,14 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+from .models import FailureReason
+
 Outcome = Literal["succeeded", "failed", "cancelled"]
 ERROR = "error"
 DONE = "done"
 KINDS = ("agent", "action", "check", "human", "terminal")
 CHECK_OUTCOMES = ["passed", "failed", "no_checks", "timeout"]
+FAILURE_REASONS = [r.value for r in FailureReason]
 
 
 class State(BaseModel):
@@ -62,7 +67,7 @@ class State(BaseModel):
     def outcomes(self) -> list[str]:
         match self.kind:
             case "agent":
-                return (self.verdicts or [DONE]) + [ERROR]
+                return (self.verdicts or [DONE]) + FAILURE_REASONS + [ERROR]
             case "action":
                 return (self.verdicts or [DONE]) + [ERROR]
             case "check":

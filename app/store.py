@@ -137,6 +137,7 @@ class TaskStore:
             result=raw.get("result"),
             structured_output=json.loads(raw["structured_output"]) if raw.get("structured_output") else None,
             error=raw.get("error"),
+            failure_reason=raw.get("failure_reason"),
             cost_usd=float(raw["cost_usd"]) if raw.get("cost_usd") else None,
             num_turns=int(raw["num_turns"]) if raw.get("num_turns") else None,
             branch=raw.get("branch"),
@@ -239,7 +240,9 @@ class TaskStore:
             task_id, [TaskStatus.running], status, finished_at=_now(), **fields
         )
         if ok:
-            event = {"status": status.value} | {k: v for k, v in fields.items() if k == "error"}
+            event = {"status": status.value} | {
+                k: v for k, v in fields.items() if k in ("error", "failure_reason") and v is not None
+            }
             await self.append_event(task_id, "status", event)
             await self._expire(task_id)
         return ok

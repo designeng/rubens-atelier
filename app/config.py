@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     prompts_dir: Path = ROOT / "prompts"
     # Agent/action steps with no progress for this long are re-enqueued by the reconciler.
     step_stale_seconds: int = 600
+    # An agent step whose worker died mid-run continues its session in a new run this many
+    # times per item state; one more crash ends the step with `restart_limit`.
+    restart_limit: int = 3
 
     # Scheduler: how many agents run at once and how they pace subscription usage.
     # Celery worker concurrency must be at least max_agents (actions need a few more).

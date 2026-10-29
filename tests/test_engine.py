@@ -11,6 +11,7 @@ from app.checks import poll_checks
 from app.config import settings
 from app.db import Artifact, HumanRequest, ItemEvent, Project, Run, TaskTranscript, WorkItem, utcnow
 from app.engine import Engine, EngineError
+from app.models import FailureReason
 from app.runner import AgentOutcome
 from app.steps import run_step
 from app.workflow import load_workflows
@@ -252,6 +253,91 @@ async def test_agent_failure_escalates_with_the_error(make_factory):
     await f.drain()
     assert (await f.item(item_id)).state == "awaiting_merge"
     assert "try a smaller change" in f.runner.of("implement")[-1]["prompt"]
+
+
+class WorkerDies(BaseException):
+    """Kills the step like an OOM would: nothing in the harness catches it."""
+
+
+class DiesMidImplement(ScriptedRunner):
+    """The first `deaths` implement runs start a session and then lose their worker."""
+
+    def __init__(self, deaths=1, **kw):
+        super().__init__(**kw)
+        self.deaths = deaths
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        if spec.metadata["state"] == "implement" and self.deaths:
+            self.deaths -= 1
+            n = len(self.of("implement"))
+            self.calls.append({"role": "implement", "prompt": spec.prompt, "resume": resume, "spec": spec})
+            await emit("session", {"session_id": f"implement-cut-{n}"})
+            raise WorkerDies
+        return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+
+async def die_and_redeliver(f, item_id):
+    with pytest.raises(WorkerDies):
+        await f.drain()
+    for key in await f.store.r.keys("harness:task:*:lease"):
+        await f.store.r.delete(key)  # the lease runs out
+    await f.step(item_id, (await f.item(item_id)).version)  # Celery redelivers the step
+
+
+async def test_a_lost_worker_restarts_the_step_resuming_its_session(make_factory):
+    f = make_factory(DiesMidImplement())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await die_and_redeliver(f, item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    cut, resumed = f.runner.of("implement")
+    assert resumed["resume"] == "implement-cut-0" and resumed["prompt"] == steps.CONTINUE
+    async with f.db.session() as s:
+        runs = (await s.scalars(select(Run).where(Run.item_id == item_id))).all()
+    assert [r.state for r in runs] == ["plan", "implement", "review"]  # the cut run doesn't count
+
+
+async def test_workers_dying_too_often_end_the_step_with_restart_limit(make_factory, monkeypatch):
+    monkeypatch.setattr(settings, "restart_limit", 1)
+    f = make_factory(DiesMidImplement(deaths=2))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await die_and_redeliver(f, item_id)
+    await die_and_redeliver(f, item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert [c["resume"] for c in f.runner.of("implement")] == [None, "implement-cut-0"]
+    async with f.db.session() as s:
+        run = await s.scalar(select(Run).where(Run.item_id == item_id, Run.state == "implement"))
+        error = await s.scalar(select(Artifact.content).where(Artifact.name == "error"))
+    assert run.verdict == "restart_limit" and "worker died 2 times" in error
+
+
+class OutOfTurnsOnce(ScriptedRunner):
+    async def __call__(self, spec, *, cwd, resume, emit):
+        if spec.metadata["state"] == "implement" and not self.of("implement"):
+            self.calls.append({"role": "implement", "prompt": spec.prompt, "resume": resume, "spec": spec})
+            await emit("session", {"session_id": "implement-long"})
+            return AgentOutcome("implement-long", None, True, error="error_max_turns", failure=FailureReason.turn_limit)
+        return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+
+async def test_implementer_out_of_turns_continues_its_session(make_factory):
+    f = make_factory(OutOfTurnsOnce())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    assert (await f.path(item_id))[:3] == ["plan", "implement", "implement"]
+    assert f.runner.of("implement")[1]["resume"] == "implement-long"
+    async with f.db.session() as s:
+        verdicts = (await s.scalars(select(Run.verdict).where(Run.state == "implement").order_by(Run.version))).all()
+    assert verdicts == ["turn_limit", "done"]
 
 
 async def test_duplicate_and_stale_steps_are_no_ops(make_factory):
