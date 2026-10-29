@@ -16,10 +16,10 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from .config import settings
-from .db import Artifact, Database, HumanRequest, ItemEvent, Run, WorkItem, aware, utcnow
+from .db import Artifact, Database, HumanRequest, ItemEvent, Run, TaskTranscript, WorkItem, aware, utcnow
 from .scheduler import Scheduler
 from .store import TaskStore
 from .workflow import Workflow
@@ -68,7 +68,20 @@ class Engine:
             if item.state is not None:
                 raise EngineError(f"item is already in state {item.state!r}")
             wf = self.workflow(item.workflow)
+            if waiting := await self.unfinished_blockers(s, item):
+                raise EngineError(f"blocked by: {', '.join(waiting)}")
             return await self._enter(s, item, wf, wf.initial, None, actor)
+
+    async def unfinished_blockers(self, s, item: WorkItem) -> list[str]:
+        """Titles (or ids, for blockers that no longer exist) of the blockers that have not succeeded."""
+        waiting = []
+        for blocker_id in item.blocked_by or []:
+            blocker = await s.get(WorkItem, blocker_id)
+            wf = self.workflows.get(blocker.workflow) if blocker else None
+            st = wf.states.get(blocker.state) if wf and blocker.state else None
+            if st is None or st.terminal != "succeeded":
+                waiting.append(f"{blocker.title} ({blocker_id})" if blocker else blocker_id)
+        return waiting
 
     async def advance(self, item_id: str, version: int, verdict: str, actor: str = "engine") -> bool:
         """Leave the item's current state with `verdict`. False if the item has moved on."""
@@ -131,6 +144,22 @@ class Engine:
             s.add(ItemEvent(item_id=item.id, from_state=item.state, to_state=BACKLOG, verdict="reopen", actor=actor))
             await s.commit()
         return True
+
+    async def delete(self, item_id: str) -> None:
+        """Remove a failed or cancelled item with its runs, artifacts, requests and events.
+        Child stories lose their parent link. The branch, workspace and issue are kept."""
+        async with self.db.session() as s:
+            item = await _get(s, item_id)
+            wf = self.workflow(item.workflow)
+            if item.state is None or wf.states[item.state].terminal not in ("failed", "cancelled"):
+                raise EngineError(f"only failed or cancelled items can be deleted (state {item.state!r})")
+            run_ids = select(Run.id).where(Run.item_id == item_id)
+            await s.execute(delete(TaskTranscript).where(TaskTranscript.run_id.in_(run_ids)))
+            for model in (Artifact, HumanRequest, ItemEvent, Run):
+                await s.execute(delete(model).where(model.item_id == item_id))
+            await s.execute(update(WorkItem).where(WorkItem.parent_id == item_id).values(parent_id=None))
+            await s.delete(item)
+            await s.commit()
 
     async def run_action(self, item_id: str, action: str, actor: str = "user") -> bool:
         """Manually send a running item to the workflow's state that runs `action` (e.g. open_pr),

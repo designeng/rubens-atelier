@@ -2,8 +2,9 @@
 import { computed, ref, watch } from "vue";
 import type { ArtifactOut, GitSnapshot } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
-import { todoMark } from "../format";
+import { rerunReasons, todoMark } from "../format";
 import ProgressBlock from "./ProgressBlock.vue";
+import SessionView from "./SessionView.vue";
 
 const b = useBoardStore();
 const it = computed(() => b.item.value);
@@ -62,7 +63,12 @@ const githubChanges = computed(() => {
 // Edit the story in place. A step waiting for a slot picks the changes up when it starts,
 // a running one from the next agent step; a new priority reorders the queue right away.
 const editing = ref(false);
-const draft = ref({ title: "", body: "", priority: 0, model: "" });
+const draft = ref({ title: "", body: "", priority: 0, blocked_by: [] as string[] });
+// Items of the project that can be picked as blockers (the server rejects cycles).
+const blockerChoices = computed(() => {
+  const all = Object.values(b.board.value ?? {}).flat();
+  return all.filter((x) => x.id !== it.value?.id);
+});
 const editError = ref("");
 const editBusy = ref(false);
 const editable = computed(() => it.value?.column !== "done" && it.value?.column !== "failed");
@@ -73,7 +79,7 @@ watch(
 function startEdit(): void {
   const i = it.value;
   if (!i) return;
-  draft.value = { title: i.title, body: i.body, priority: i.priority, model: i.model ?? "" };
+  draft.value = { title: i.title, body: i.body, priority: i.priority, blocked_by: [...i.blocked_by] };
   editError.value = "";
   editing.value = true;
 }
@@ -91,7 +97,7 @@ async function saveEdit(): Promise<void> {
       title: d.title.trim(),
       body: d.body,
       priority: d.priority,
-      model: d.model.trim() || null,
+      blocked_by: d.blocked_by,
     });
     editing.value = false;
   } catch (e) {
@@ -101,17 +107,59 @@ async function saveEdit(): Promise<void> {
   }
 }
 
+// The agent session being watched: a run's harness task (the live one from "Now", or any past run).
+const sessionTask = ref<string | null>(null);
+const sessionRun = computed(() => it.value?.runs.find((r) => r.task_id === sessionTask.value) ?? null);
+watch(
+  () => it.value?.id,
+  () => (sessionTask.value = null),
+);
+// A step that ran again shows what sent the story back, e.g. "implement ← sync_base: conflict".
+const reruns = computed(() => rerunReasons(it.value?.runs ?? [], it.value?.events ?? []));
+const toggleSession = (taskId: string) => (sessionTask.value = sessionTask.value === taskId ? null : taskId);
+
+// The model picker saves right away; "" is the default (the step's model, else the harness's).
+const modelOptions = computed(() => {
+  const list = b.models.value?.models ?? [];
+  const current = it.value?.model;
+  return current && !list.includes(current) ? [current, ...list] : list;
+});
+const modelError = ref("");
+async function setModel(value: string): Promise<void> {
+  const i = it.value;
+  if (!i) return;
+  modelError.value = "";
+  try {
+    await b.updateItem(i.id, { model: value || null });
+  } catch (e) {
+    modelError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+function confirmDelete(id: string, title: string): void {
+  if (window.confirm(`Delete “${title}”? This can't be undone.`)) void b.deleteItem(id);
+}
+
 const reopenable = computed(() => it.value?.column === "failed");
 const cancellable = computed(() => it.value?.column === "working" || it.value?.column === "needs_human");
 </script>
 
 <template>
-  <aside id="detail" :class="{ open: it }">
+  <aside id="detail" :class="{ open: it, wide: sessionTask }">
     <template v-if="it">
       <div class="row">
         <button @click="b.closeItem()">✕</button>
-        <button v-if="it.state === null" class="primary" @click="b.startItem(it.id)">Start</button>
+        <button
+          v-if="it.state === null"
+          class="primary"
+          :disabled="it.blocked.length > 0"
+          :title="it.blocked.length ? `Blocked by ${it.blocked.join(', ')}` : undefined"
+          @click="b.startItem(it.id)"
+        >
+          Start
+        </button>
         <button v-if="reopenable" @click="b.reopenItem(it.id)">Back to backlog</button>
+        <button v-if="reopenable" @click="confirmDelete(it.id, it.title)">Delete</button>
         <button v-if="cancellable" @click="b.cancelItem(it.id)">Cancel</button>
         <button v-if="editable && !editing" @click="startEdit()">Edit</button>
       </div>
@@ -126,8 +174,10 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
           <label for="ePriority">Priority (higher runs first)</label>
           <input id="ePriority" v-model.number="draft.priority" type="number" min="-100" max="100" class="num" />
         </div>
-        <label for="eModel">Model (empty: the default)</label>
-        <input id="eModel" v-model="draft.model" maxlength="100" style="width: 100%" />
+        <label for="eBlockedBy">Blocked by (must succeed before this can start)</label>
+        <select id="eBlockedBy" v-model="draft.blocked_by" multiple size="5" style="width: 100%">
+          <option v-for="x in blockerChoices" :key="x.id" :value="x.id">{{ x.title }} · {{ x.state || "backlog" }}</option>
+        </select>
         <div class="row" style="margin-top: 8px">
           <button class="primary" :disabled="editBusy" @click="saveEdit()">Save</button>
           <button @click="editing = false">Cancel edit</button>
@@ -138,16 +188,37 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <p class="muted">
         {{ it.kind }} · {{ it.workflow }} · state <b>{{ it.state || "backlog" }}</b>
         <template v-if="it.priority"> · priority {{ it.priority }}</template>
-        <template v-if="it.model"> · {{ it.model }}</template>
+        <template v-if="it.blocked.length"> · blocked by {{ it.blocked.join(", ") }}</template>
         <template v-if="it.branch"> · {{ it.branch }}</template>
         <template v-if="it.pr_url"> · <a :href="it.pr_url" target="_blank" rel="noopener">PR</a></template>
       </p>
+      <div class="row model">
+        <label for="iModel">Model</label>
+        <select id="iModel" :value="it.model ?? ''" :disabled="!editable" @change="setModel(($event.target as HTMLSelectElement).value)">
+          <option value="">default<template v-if="b.models.value"> ({{ b.models.value.default }})</template></option>
+          <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
+        </select>
+        <span v-if="it.progress?.task_id" class="muted">the running step keeps its model; the next one uses this</span>
+        <span class="err">{{ modelError }}</span>
+      </div>
       <template v-if="it.progress">
         <h4>Now</h4>
-        <ProgressBlock :progress="it.progress" />
+        <ProgressBlock :progress="it.progress" :paused="b.isPaused()" />
+        <div v-if="it.progress.task_id" class="row">
+          <button @click="toggleSession(it.progress.task_id)">
+            {{ sessionTask === it.progress.task_id ? "Hide session" : "Session" }}
+          </button>
+        </div>
         <ul v-if="it.progress.todos" class="todos">
           <li v-for="(t, n) in it.progress.todos" :key="n">{{ todoMark(t.status) }} {{ t.content }}</li>
         </ul>
+      </template>
+      <template v-if="sessionTask">
+        <h4>
+          Session<template v-if="sessionRun"> · {{ sessionRun.state }} · {{ sessionRun.role }}</template>
+          <button style="margin-left: 8px" @click="sessionTask = null">✕</button>
+        </h4>
+        <SessionView :task-id="sessionTask" />
       </template>
       <pre v-if="it.body && !editing">{{ it.body }}</pre>
       <template v-if="req">
@@ -192,16 +263,22 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <p v-if="!artifacts.length" class="muted">none yet</p>
       <h4>Runs</h4>
       <div v-for="r in it.runs" :key="r.id">
-        {{ r.state }} · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> → {{ r.verdict }}</template>
+        {{ r.state }}<span v-if="reruns.get(r.id)" class="muted"> ← {{ reruns.get(r.id) }}</span> · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> · result: {{ r.verdict }}</template>
         <template v-if="r.cost_usd != null"> · ${{ r.cost_usd.toFixed(2) }}</template>
         <span class="muted">task {{ r.task_id.slice(0, 8) }}</span>
+        <button class="link" @click="toggleSession(r.task_id)">
+          {{ sessionTask === r.task_id ? "hide session" : "session" }}
+        </button>
         <div v-if="r.error" class="run-error">{{ r.error }}</div>
       </div>
       <p v-if="!it.runs.length" class="muted">none</p>
       <h4>History</h4>
       <div v-for="(e, n) in it.events" :key="n" class="muted">
-        {{ new Date(e.at).toLocaleString() }} · {{ e.from_state || "∅" }} -[{{ e.verdict || "start" }}]→
-        <b>{{ e.to_state }}</b> · {{ e.actor }}
+        <!-- The verdict is the result of the step that ended (from_state), not the story's status. -->
+        {{ new Date(e.at).toLocaleString() }} · {{ e.from_state || "created" }}<template v-if="e.verdict">
+          (result: {{ e.verdict }})</template
+        >
+        → <b>{{ e.to_state }}</b> · {{ e.actor }}
       </div>
     </template>
   </aside>

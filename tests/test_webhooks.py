@@ -30,7 +30,7 @@ def item_in(client, state, repo="acme/app"):
     slug = repo.split("/")[1]
     client.post("/projects", json={"slug": slug, "repo": repo})
     item = client.post(f"/projects/{slug}/items", json={"title": "x", "start": True}).json()
-    verdicts = ["ready", "done", "done", "approved", "done"] + (["passed"] if state == "awaiting_merge" else [])
+    verdicts = ["ready", "done", "done", "approved", "done"] + (["passed", "manual"] if state == "awaiting_merge" else [])
     for verdict in verdicts:
         version = client.get(f"/items/{item['id']}").json()["version"]
         client.portal.call(app.state.engine.advance, item["id"], version, verdict)

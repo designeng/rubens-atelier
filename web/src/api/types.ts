@@ -9,12 +9,14 @@ export interface ProjectIn {
   base_branch?: string | null;
   verify_command?: string | null;
   installation_id?: number | null;
+  auto_merge?: boolean;
 }
 
 // PATCH /projects/{slug}: fields left out stay as they are, null clears them.
 export interface ProjectPatch {
   base_branch?: string | null;
   verify_command?: string | null;
+  auto_merge?: boolean;
 }
 
 export interface ProjectOut {
@@ -24,6 +26,7 @@ export interface ProjectOut {
   base_branch: string | null;
   verify_command: string | null;
   installation_id: number | null;
+  auto_merge: boolean;
 }
 
 export interface ItemIn {
@@ -34,6 +37,7 @@ export interface ItemIn {
   parent_id?: string | null;
   issue?: number | null;
   priority?: number;
+  blocked_by?: string[];
   start?: boolean;
 }
 
@@ -43,6 +47,7 @@ export interface ItemPatch {
   body?: string;
   priority?: number;
   model?: string | null;
+  blocked_by?: string[];
 }
 
 export interface Todo {
@@ -78,9 +83,29 @@ export interface ItemOut {
   pr_url: string | null;
   priority: number;
   model: string | null;
+  blocked_by: string[];
   updated_at: string;
   column: Column;
+  issue: number | null;
   progress: Progress | null;
+  attention?: Attention | null;
+  // Backlog items only: the blockers that have not succeeded yet ("title (id)").
+  blocked: string[];
+  // Ids of the backlog items waiting for this one.
+  blocking: string[];
+}
+
+// `_attention` in board_api.py: why an item in the needs_human column waits. `kind` is pr, error,
+// questions, exhausted, or the verdict that led there (timeout, too_big, needs_clarification, ...).
+export interface Attention {
+  kind: string;
+  text: string;
+  from?: string;
+}
+
+export interface ImportResult {
+  imported: ItemOut[];
+  skipped: number;
 }
 
 export interface RunOut {
@@ -129,6 +154,11 @@ export interface ItemDetail extends ItemOut {
   open_request: RequestOut | null;
 }
 
+export interface Models {
+  default: string;
+  models: string[];
+}
+
 export interface GitSnapshot {
   branch: string;
   head: string;
@@ -175,4 +205,27 @@ export interface Repository {
   full_name: string;
   default_branch: string;
   private: boolean;
+}
+
+// The harness task behind an agent run (app/models.py TaskInfo), as far as the board uses it.
+export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface TaskInfo {
+  id: string;
+  status: TaskStatus;
+  prompt: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  session_id: string | null;
+  error: string | null;
+  cost_usd: number | null;
+  num_turns: number | null;
+}
+
+// One entry of a task's event log (app/runner.py, app/execution.py, app/store.py).
+export interface TaskEvent {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
 }

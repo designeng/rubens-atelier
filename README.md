@@ -41,6 +41,8 @@ The board is a Vue 3 + Vite + TypeScript app in `web/`. It needs Node 22 and pnp
 - `make web-dev`: Vite dev server with hot reload at http://localhost:5173/board/. API requests go to http://localhost:8000, so run `make api` (or `make dev`) next to it.
 - `make web-test`: type check (`vue-tsc --noEmit`) and unit tests (Vitest). Inside `web/`: `pnpm typecheck`, `pnpm test`.
 
+The header's theme switch (Auto, Day, Midnight) is remembered per browser. Auto follows the OS colour scheme; Day and Midnight pin the light and dark palette.
+
 The Docker image builds the board itself in a Node stage.
 
 ## API
@@ -52,6 +54,8 @@ The Docker image builds the board itself in a Node stage.
 | `GET` | `/tasks/{id}` | Status, result, cost, `session_id`, `pr_url` |
 | `GET` | `/tasks/{id}/stream` | SSE: history and live events until the task finishes, supports `Last-Event-ID` |
 | `GET` | `/tasks/{id}/events?after=` | The same events, paginated |
+
+On the board, **Session** (in a story's "Now" block and next to each run) shows an agent run's full session: prompt, text, thinking, tool calls with their results, verify output and the result. It reads `/tasks/{id}/stream` and updates live until the run ends, reconnecting from the last event if the connection drops. Event strings are clipped at 8000 characters. Factory runs stay viewable after Redis expires them, from the Postgres archive (see below).
 | `POST` | `/tasks/{id}/cancel` | Cancel: a queued task is removed at once, a running one stops within about 2 seconds |
 | `GET` | `/tasks?status=` | Task list |
 
@@ -79,7 +83,7 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 `max_visits` and `on_exhausted` guard against endless loops, such as implement ⇄ review ping-pong. If a verdict is missing from `next`, the item goes to `next.error`, and if that is missing too, to `failed`.
 
-[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (human). `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
+[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (human). With the project's `auto_merge` on, `merge` merges the reviewed, green PR itself and the story is done; otherwise, or when GitHub refuses the merge (branch protection, conflicts), the PR waits for a human, and the `merge` artifact says why. `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
 
 **sync_base** merges the latest base branch into the story's branch, so stories running in parallel build on each other's merged work and their PRs don't conflict. It merges rather than rebases, so reviewed history stays intact. On a conflict the merge is left in progress and the story goes back to `implement`; the `sync_base` artifact lists the conflicted files. The implementer resolves them and commits, and then the story goes through `sync_base` and review again. In `awaiting_merge`, the `update` option runs `sync_base` for an open PR when the base branch has moved on or GitHub reports conflicts.
 
@@ -91,13 +95,15 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
-| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
-| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
+| `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?, auto_merge?}` |
+| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?, auto_merge?}`; `null` clears a value; `slug`, `repo` and `installation_id` cannot be changed |
+| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, blocked_by?, start?}`. `blocked_by` lists up to 20 items of the same project that must succeed before this one can start (`start` then answers 409 naming them; a failed or cancelled blocker keeps blocking until it is reopened and succeeds or removed from the list; a cycle is a 422). Dependents are not started automatically |
+| `POST` | `/projects/{slug}/import-issues` | Put the repo's open GitHub issues (PRs left out, up to 1000) into the backlog as stories linked to their issue, so the PR closes it; nothing starts. An issue that already has an item in any state is skipped. Returns `{imported, skipped}`; the board's "Import issues" button calls it |
 | `GET` | `/projects/{slug}/board` | Columns backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Open requests to a human |
 | `GET` | `/items/{id}` | Item, transition history, runs, artifacts, open request |
-| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?}`, also on the board (**Edit**). A step waiting for a slot starts with the changes, a running one picks them up from the next agent step; a new priority reorders the queue right away |
+| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?, blocked_by?}`, also on the board (**Edit**; the model through the **Model** picker, which saves right away). A step waiting for a slot starts with the changes, a running one picks them up from the next agent step; a new priority reorders the queue right away |
+| `GET` | `/models` | The models offered by the board's picker (`HARNESS_MODELS`) and `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Run a shell command in the story's workspace (board terminal). Off by default: needs `HARNESS_TERMINAL_ENABLED=true` and `HARNESS_API_TOKEN`; refused while an agent works there; runs on the worker, without `HARNESS_*` in its environment, killed after `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
 | `POST` | `/items/{id}/open-pr` | Push the branch and open (or update) the PR now, skipping review and CI; a running agent is cancelled |
@@ -120,7 +126,7 @@ A run that hits the limit is not a work failure. The step returns to the queue w
 
 Reliability. Every transition is a compare-and-set on `work_items.version`. A worker step (`harness.step`) and a human request are bound to the item's version, so a redelivery, a double click or a stale answer moves nothing. An agent step runs as a regular harness task, with its events (`/tasks/{task_id}/stream`), cancellation, lease and verify loop. `harness.reconcile` in beat re-enqueues steps that lost their enqueue or whose worker died before reporting a verdict.
 
-Factory state lives in Postgres. Redis still holds the queue, agent events and leases. The schema is created at API startup (`create_all`); Alembic will arrive with the first migration.
+Factory state lives in Postgres. Redis still holds the queue, agent events and leases. When an agent step finishes, its task and full event stream are archived to Postgres (`task_transcripts`, keyed by `runs.task_id`), so `/tasks/{id}`, `/tasks/{id}/events` and `/tasks/{id}/stream` keep serving a run's transcript after Redis has expired it. Ad-hoc `/tasks` runs are not archived. The schema is created at API startup (`create_all`); Alembic will arrive with the first migration.
 
 ## How the issue flow works
 
@@ -137,7 +143,7 @@ The push goes to the PR branch, not to `main`: CI and review confirm production 
 - `acks_late` + `prefetch=1`: if a worker dies, the message is redelivered. Redelivery does not restart the agent: an atomic claim (Lua) moves such a task to `failed: worker lost`.
 - Lease with heartbeat and a reaper in beat: tasks of dead workers are marked failed in about 30 seconds rather than after `visibility_timeout`.
 - `session_id` is saved right at startup. A cancelled, failed or timed-out task can be continued via `parent_task_id`.
-- Finished tasks and their events are kept in Redis for `HARNESS_RESULT_TTL_SECONDS` (7 days by default).
+- Finished tasks and their events are kept in Redis for `HARNESS_RESULT_TTL_SECONDS` (7 days by default); factory runs are archived to Postgres before that.
 
 ## GitHub App
 

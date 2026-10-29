@@ -10,6 +10,7 @@ Layout:
   harness:task:{id}:lease    string — owning worker, TTL refreshed by the task's watchdog
   harness:tasks              zset   — all task ids scored by creation time
   harness:running            set    — ids currently in `running`, scanned by the orphan reaper
+  harness:session:{id}:cost  string — a Claude session's running cost total, to price a resumed run
 """
 
 import json
@@ -25,6 +26,8 @@ from .models import TaskCreate, TaskInfo, TaskStatus
 
 TASKS_INDEX = "harness:tasks"
 RUNNING = "harness:running"
+# Sessions are resumed across steps of a long-lived item (rework after review, CI, merge).
+SESSION_COST_TTL = 30 * 24 * 3600
 
 
 def task_key(task_id: str) -> str:
@@ -37,6 +40,10 @@ def events_key(task_id: str) -> str:
 
 def lease_key(task_id: str) -> str:
     return f"harness:task:{task_id}:lease"
+
+
+def session_cost_key(session_id: str) -> str:
+    return f"harness:session:{session_id}:cost"
 
 
 def describe_tool(name: str, args: dict[str, Any]) -> str:
@@ -217,6 +224,14 @@ class TaskStore:
 
     async def lease_alive(self, task_id: str) -> bool:
         return bool(await self.r.exists(lease_key(task_id)))
+
+    async def session_cost(self, session_id: str) -> float:
+        """What the SDK last reported as the session's total cost; 0 for an unknown session."""
+        value = await self.r.get(session_cost_key(session_id))
+        return float(value) if value else 0.0
+
+    async def set_session_cost(self, session_id: str, total_usd: float) -> None:
+        await self.r.set(session_cost_key(session_id), total_usd, ex=SESSION_COST_TTL)
 
     async def finish(self, task_id: str, status: TaskStatus, **fields: Any) -> bool:
         assert status.is_terminal

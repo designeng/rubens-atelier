@@ -50,6 +50,8 @@ Docker-образ собирает доску сам, в отдельной Node
 | `GET` | `/tasks/{id}` | Статус, результат, стоимость, `session_id`, `pr_url` |
 | `GET` | `/tasks/{id}/stream` | SSE: история и живые события до завершения задачи, поддерживает `Last-Event-ID` |
 | `GET` | `/tasks/{id}/events?after=` | Те же события страницами |
+
+В борде кнопка **Session** (в блоке «Now» истории и у каждого run'а) показывает полную сессию агента: промпт, текст, thinking, вызовы инструментов с результатами, вывод verify и итог. Она читает `/tasks/{id}/stream` и обновляется на лету до конца run'а, а при обрыве соединения переподключается с последнего события. Строки событий обрезаются до 8000 символов. Run'ы фабрики остаются доступны и после того, как Redis их удалил, — из архива в Postgres (см. ниже).
 | `POST` | `/tasks/{id}/cancel` | Отмена: задача из очереди снимается сразу, работающая останавливается в течение примерно 2 секунд |
 | `GET` | `/tasks?status=` | Список задач |
 
@@ -77,7 +79,7 @@ Workflow — это детерминированный конечный авто
 
 `max_visits` и `on_exhausted` защищают от бесконечных циклов, например от пинг-понга implement ⇄ review. Если вердикта нет в `next`, item уходит в `next.error`, а если нет и его, то в `failed`.
 
-[workflows/story.yaml](../workflows/story.yaml): `plan` (только чтение) → `implement` (с verify) → `sync_base` → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `ci` → `awaiting_merge` (человек). `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+[workflows/story.yaml](../workflows/story.yaml): `plan` (только чтение) → `implement` (с verify) → `sync_base` → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (человек). Если у проекта включён `auto_merge`, шаг `merge` сам вливает проверенный PR с зелёным CI, и story завершается; иначе, или если GitHub отказывает в merge (branch protection, конфликты), PR ждёт человека, а артефакт `merge` объясняет причину. `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
 
 **sync_base** вливает свежую базовую ветку в ветку story. Так параллельные story строятся поверх уже вмёрженной работы друг друга, и их PR не конфликтуют. Используется merge, а не rebase, поэтому проверенная история не переписывается. При конфликте merge остаётся незавершённым, и story возвращается в `implement`; артефакт `sync_base` перечисляет конфликтующие файлы. Implementer разрешает конфликты и коммитит, после чего story снова проходит `sync_base` и ревью. В `awaiting_merge` вариант `update` запускает `sync_base` для открытого PR, когда базовая ветка ушла вперёд или GitHub сообщает о конфликтах.
 
@@ -89,13 +91,15 @@ Workflow — это детерминированный конечный авто
 
 | Метод | Путь | |
 |---|---|---|
-| `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?}` |
-| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?}`; `null` очищает значение; `slug`, `repo` и `installation_id` менять нельзя |
-| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, start?}` |
+| `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?, auto_merge?}` |
+| `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?, auto_merge?}`; `null` очищает значение; `slug`, `repo` и `installation_id` менять нельзя |
+| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, blocked_by?, start?}`. `blocked_by` — до 20 элементов того же проекта, которые должны успешно завершиться до старта этого (иначе `start` отвечает 409 с их именами; упавший или отменённый блокер продолжает блокировать, пока его не переоткроют и он не завершится успешно, или пока его не уберут из списка; цикл — 422). Зависимые элементы сами не стартуют |
+| `POST` | `/projects/{slug}/import-issues` | Кладёт открытые GitHub issues репозитория (без PR, до 1000) в backlog историями, привязанными к своему issue, так что PR его закроет; ничего не запускается. Issue, у которого уже есть элемент в любом состоянии, пропускается. Возвращает `{imported, skipped}`; его вызывает кнопка «Import issues» на доске |
 | `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed |
 | `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
 | `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |
-| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?}`, также в борде (**Edit**). Шаг, ждущий слот, стартует уже с изменениями, работающий подхватит их со следующего agent-шага; новый priority сразу переставляет его в очереди |
+| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?, blocked_by?}`, также в борде (**Edit**; модель — через выбор **Model**, он сохраняет сразу). Шаг, ждущий слот, стартует уже с изменениями, работающий подхватит их со следующего agent-шага; новый priority сразу переставляет его в очереди |
+| `GET` | `/models` | Модели для выбора в борде (`HARNESS_MODELS`) и `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Выполнить shell-команду в рабочей копии задачи (терминал доски). По умолчанию выключено: нужны `HARNESS_TERMINAL_ENABLED=true` и `HARNESS_API_TOKEN`; отказ, пока там работает агент; выполняется на воркере без `HARNESS_*` в окружении, убивается через `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
 | `POST` | `/items/{id}/open-pr` | Запушить ветку и открыть (или обновить) PR сразу, минуя review и CI; работающий агент отменяется |
@@ -118,7 +122,7 @@ Workflow — это детерминированный конечный авто
 
 Надёжность. Каждый переход — это compare-and-set по `work_items.version`. Шаг воркера (`harness.step`) и запрос к человеку привязаны к версии item'а, поэтому повторная доставка, двойной клик или устаревший ответ ничего не сдвигают. Agent-шаг выполняется как обычная harness-задача: с её событиями (`/tasks/{task_id}/stream`), отменой, lease и verify-циклом. `harness.reconcile` в beat заново ставит в очередь шаги, которые потеряли enqueue или воркер которых упал до того, как сообщил вердикт.
 
-Состояние фабрики хранится в Postgres. Redis по-прежнему держит очередь, события агентов и lease. Схема создаётся при старте API (`create_all`); Alembic появится вместе с первой миграцией.
+Состояние фабрики хранится в Postgres. Redis по-прежнему держит очередь, события агентов и lease. Когда agent-шаг завершается, его задача и весь поток событий архивируются в Postgres (`task_transcripts`, ключ — `runs.task_id`), поэтому `/tasks/{id}`, `/tasks/{id}/events` и `/tasks/{id}/stream` отдают транскрипт run'а и после того, как Redis его удалил. Разовые задачи `/tasks` не архивируются. Схема создаётся при старте API (`create_all`); Alembic появится вместе с первой миграцией.
 
 ## Как работает issue-флоу
 
@@ -135,7 +139,7 @@ Push идёт в ветку с PR, а не в `main`: production-готовно�
 - `acks_late` + `prefetch=1`: если воркер упал, сообщение доставляется повторно. Повторная доставка не перезапускает агента: атомарный claim (Lua) переводит такую задачу в `failed: worker lost`.
 - Lease с heartbeat и reaper в beat: задачи упавших воркеров помечаются failed примерно через 30 секунд, а не через `visibility_timeout`.
 - `session_id` сохраняется сразу при старте. Отменённую, упавшую или зависшую по таймауту задачу можно продолжить через `parent_task_id`.
-- Готовые задачи и их события хранятся в Redis `HARNESS_RESULT_TTL_SECONDS` (по умолчанию 7 дней).
+- Готовые задачи и их события хранятся в Redis `HARNESS_RESULT_TTL_SECONDS` (по умолчанию 7 дней); run'ы фабрики до этого архивируются в Postgres.
 
 ## GitHub App
 

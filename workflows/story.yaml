@@ -1,7 +1,7 @@
 name: story
 description: >-
   Plan one story, implement it, merge in the latest base branch, have it reviewed in a fresh
-  session, open a PR, pass CI, wait for the merge.
+  session, open a PR, pass CI, then merge it (project automerge) or wait for a human to.
 initial: plan
 
 states:
@@ -21,6 +21,7 @@ states:
 
   implement:
     agent: implementer
+    effort: medium
     verify: true
     resume: true
     max_visits: 4
@@ -48,7 +49,14 @@ states:
     check: ci
     timeout_seconds: 3600
     grace_seconds: 300
-    next: {passed: awaiting_merge, no_checks: awaiting_merge, failed: implement, timeout: needs_human, error: needs_human}
+    next: {passed: merge, no_checks: merge, failed: implement, timeout: needs_human, error: needs_human}
+
+  # The PR is reviewed and green: merge it if the project has automerge on. Without it, or when
+  # GitHub refuses (branch protection, conflicts), a human takes over; the `merge` artifact says why.
+  merge:
+    action: merge
+    verdicts: [merged, manual]
+    next: {merged: done, manual: awaiting_merge, error: awaiting_merge}
 
   awaiting_merge:
     human: >-
