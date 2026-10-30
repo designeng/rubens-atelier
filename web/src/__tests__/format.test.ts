@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EventOut, Progress, RunOut } from "../api/types";
-import { attentionBadge, canRunNow, elapsed, isRunning, progressSummary, rerunReasons, todoMark, turnPercent } from "../format";
+import { attentionBadge, canRunNow, elapsed, formatBytes, isRunning, progressSummary, rerunReasons, todoMark, turnPercent } from "../format";
 
 const now = Date.parse("2026-10-29T12:00:00Z");
 const ago = (s: number) => new Date(now - s * 1000).toISOString();
@@ -129,5 +129,16 @@ describe("rerunReasons", () => {
       ev("sync_base", "review", "done", "2026-10-29T21:19:51Z"),
     ];
     expect([...rerunReasons(runs, events)]).toEqual([["i2", "sync_base: conflict"]]);
+  });
+});
+
+describe("formatBytes", () => {
+  it("scales to the largest unit that keeps the number short", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(1023)).toBe("1023 B");
+    expect(formatBytes(1536)).toBe("1.5 KB");
+    expect(formatBytes(20 * 1024)).toBe("20 KB");
+    expect(formatBytes(5 * 1024 ** 3)).toBe("5.0 GB");
+    expect(formatBytes(3000 * 1024 ** 4)).toBe("3000 TB");
   });
 });

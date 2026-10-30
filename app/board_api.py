@@ -1,5 +1,6 @@
 """HTTP API of the factory: projects (tenants), work items, the Kanban board and the inbox."""
 
+import asyncio
 import re
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from . import github_app, gitops, terminal
+from . import github_app, gitops, terminal, workspaces
 from .config import settings
 from .execution import item_workspace
 from .github import GitHub
@@ -589,6 +590,38 @@ async def item_git(item_id: str, db: Db, diff: bool = False) -> dict:
     if not item.branch or not (cwd / ".git").exists():
         raise HTTPException(status.HTTP_409_CONFLICT, "no workspace for this story (yet, or it is on another host)")
     return await gitops.snapshot(cwd, item.base_branch, diff)
+
+
+@router.get("/workspaces")
+async def list_workspaces(
+    db: Db, engine: Eng, size: bool = True, phase: workspaces.Phase | None = None, project: str | None = None
+) -> list[workspaces.WorkspaceOut]:
+    """The working copies on this volume, newest first; `size=false` skips measuring them on disk."""
+    return await workspaces.scan(
+        db, engine, lambda item: _column(engine, item), size=size, phase=phase, project=project
+    )
+
+
+@router.post("/workspaces/prune")
+async def prune_workspaces(body: workspaces.PruneIn, db: Db, engine: Eng) -> workspaces.PruneOut:
+    """Remove the copies of finished stories and tasks and the orphans (and of failed ones with
+    `include_failed`); `dry_run` only reports what would go and how much space it frees."""
+    return await workspaces.prune(db, engine, lambda item: _column(engine, item), body)
+
+
+@router.delete("/workspaces/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_workspace(workspace_id: str, db: Db, engine: Eng) -> Response:
+    """Remove one copy by the id of its story or task; 409 with the reason while it is in use."""
+    found = await asyncio.to_thread(workspaces.find, workspace_id)
+    if not found:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "workspace not found")
+    try:
+        await workspaces.remove(db, engine, lambda item: _column(engine, item), found[0])
+    except PermissionError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from None
+    except OSError as e:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"could not remove the workspace: {e}") from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 class ExecIn(BaseModel):

@@ -109,11 +109,16 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Run a shell command in the story's workspace (board terminal). Off by default: needs `HARNESS_TERMINAL_ENABLED=true` and `HARNESS_API_TOKEN`; refused while an agent works there; runs on the worker, without `HARNESS_*` in its environment, killed after `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
 | `POST` | `/items/{id}/open-pr` | Push the branch and open (or update) the PR now, skipping review and CI; a running agent is cancelled |
+| `GET` | `/workspaces?size=&phase=&project=` | The working copies on the volume the API sees (a copy on another worker host is not listed), newest first: `id` (of the story or task), `path`, `size_bytes`, `modified_at`, the `item` (project, title, state, column, branch, pr_url) or `task` (status, prompt) it belongs to, `phase`, `reason`, `removable`. `size=false` skips measuring the disk (`size_bytes` is null); `phase` and `project` (a slug) filter |
+| `DELETE` | `/workspaces/{id}` | Remove one copy by the id of its story or task. 404 if there is none, 409 with the reason while it is in use |
+| `POST` | `/workspaces/prune` | `{older_than_hours?, include_failed?, dry_run?}`: remove the finished and orphaned copies not modified for `older_than_hours` (default 0), failed and cancelled ones too with `include_failed`. `dry_run` removes nothing and reports the same `{removed, freed_bytes, skipped}`; a copy that cannot be removed is listed in `skipped` and does not stop the rest |
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; the comment becomes an artifact for the next agent |
 | `GET` | `/scheduler` | Busy slots, queue, capacity and its reason, subscription window state |
 | `POST` | `/scheduler/pause`, `/scheduler/resume` | Stop or resume handing out new agent steps; running ones finish |
 | `PATCH` | `/scheduler/limits` | `{max_agents?, max_agents_per_project?, force?}`: change the slot limits without a restart; `DELETE` returns to the settings |
 | `POST` | `/github/webhook` | GitHub events (signed with `HARNESS_GITHUB_WEBHOOK_SECRET`, not the bearer token): re-check the items waiting on that commit or PR, see [GitHub webhook](#github-webhook) |
+
+A working copy has a `phase`: `active` (a step or task is running in it), `idle` (a backlog story or one waiting for a human, which continues in it), `finished` (merged story, successful task), `failed` (failed or cancelled story or task; reopening or a follow-up reuses it) and `orphan` (no story or task refers to it, e.g. its task expired from Redis and was never archived). `active` and `idle` copies are not `removable`. Prune takes `finished` and `orphan` copies, so an orphan goes without `include_failed`; the shared `.cache` is never touched. Removability is checked again just before the delete, but a step that starts in that instant is not noticed. The board's **Workspaces** button shows the list and runs the cleanup with a preview first.
 
 Project settings can also be edited on the board (**Settings**). A changed `verify_command` applies from the next agent step of every story, including running ones. A changed `base_branch` applies only to stories that have not created their workspace yet; started ones keep their base.
 

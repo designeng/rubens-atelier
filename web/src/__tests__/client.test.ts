@@ -37,6 +37,28 @@ describe("createClient", () => {
     expect(f.calls.map((c) => c.url)).toEqual(["/items/a%2Fb/git", "/items/a%2Fb/git?diff=true"]);
   });
 
+  it("lists workspaces with only the filters that are set", async () => {
+    const f = fakeFetch(() => json([]));
+    const api = createClient(() => "t", f.impl);
+    await api.listWorkspaces();
+    await api.listWorkspaces({ size: false, phase: "failed", project: "my app" });
+    await api.listWorkspaces({ size: true, phase: "", project: "" });
+    expect(f.calls.map((c) => c.url)).toEqual(["/workspaces", "/workspaces?size=false&phase=failed&project=my+app", "/workspaces"]);
+  });
+
+  it("deletes and prunes workspaces", async () => {
+    const f = fakeFetch(() => json({ dry_run: true, removed: [], freed_bytes: 0, skipped: [] }));
+    const api = createClient(() => "t", f.impl);
+    await api.deleteWorkspace("a/b");
+    const body = { older_than_hours: 24, include_failed: false, dry_run: true };
+    await api.pruneWorkspaces(body);
+    expect(f.calls.map((c) => [c.init.method, c.url])).toEqual([
+      ["DELETE", "/workspaces/a%2Fb"],
+      ["POST", "/workspaces/prune"],
+    ]);
+    expect(JSON.parse(f.calls[1].init.body as string)).toEqual(body);
+  });
+
   it("patches an item", async () => {
     const f = fakeFetch(() => json({}));
     const api = createClient(() => "t", f.impl);

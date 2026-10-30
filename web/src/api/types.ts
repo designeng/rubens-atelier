@@ -229,3 +229,39 @@ export interface TaskEvent {
   type: string;
   data: Record<string, unknown>;
 }
+
+// GET /workspaces (app/workspaces.py): a working copy on the volume and what it belongs to.
+export type WorkspacePhase = "active" | "idle" | "finished" | "failed" | "orphan";
+
+export interface WorkspaceOut {
+  id: string;
+  path: string;
+  size_bytes: number | null;
+  modified_at: string;
+  item: {
+    id: string;
+    project: string;
+    title: string;
+    state: string | null;
+    column: string;
+    branch: string | null;
+    pr_url: string | null;
+  } | null;
+  task: { id: string; status: TaskStatus; prompt: string } | null;
+  phase: WorkspacePhase;
+  reason: string;
+  removable: boolean;
+}
+
+export interface PruneIn {
+  older_than_hours: number;
+  include_failed: boolean;
+  dry_run: boolean;
+}
+
+export interface PruneResult {
+  dry_run: boolean;
+  removed: { id: string; path: string; size_bytes: number }[];
+  freed_bytes: number;
+  skipped: { id: string; error: string }[];
+}

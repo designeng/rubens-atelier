@@ -32,6 +32,17 @@ export function isRunning(p: Progress): boolean {
 // An agent step in the scheduler's queue: the operator may start it now (POST /items/{id}/run-now).
 export const canRunNow = (p: Progress): boolean => p.kind === "agent" && !!p.queued && !p.task_id;
 
+// 1536 -> "1.5 KB"; the size of a workspace on disk.
+export function formatBytes(n: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${i === 0 || n >= 10 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
+}
+
 export type Tone = "ok" | "bad" | "warn" | "info" | "muted";
 
 const BADGES: Record<string, [string, Tone]> = {

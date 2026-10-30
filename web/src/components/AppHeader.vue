@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { useBoardStore } from "../composables/useBoard";
 import { loadTheme, saveTheme, THEMES, type Theme } from "../theme";
 
-const emit = defineEmits<{ settings: []; github: []; "new-project": []; "new-item": [title: string] }>();
+const emit = defineEmits<{ settings: []; workspaces: []; github: []; "new-project": []; "new-item": [title: string] }>();
 const b = useBoardStore();
 const title = ref("");
 const theme = ref<Theme>(loadTheme());
@@ -70,6 +70,9 @@ defineExpose({ clearTitle: () => (title.value = "") });
       <option v-for="p in b.projects.value" :key="p.id" :value="p.slug">{{ p.slug }}</option>
     </select>
     <button title="Project settings" :disabled="!b.slug.value" @click="emit('settings')">Settings</button>
+    <button title="Working copies on disk: see them and clear the finished ones" @click="emit('workspaces')">
+      Workspaces
+    </button>
     <button
       title="GitHub App connection"
       :class="{ primary: b.github.value.configured && !liveInstallations.length }"
