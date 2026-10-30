@@ -10,7 +10,7 @@ from app.store import TaskStore, events_key, task_key
 
 
 @pytest.fixture
-def client(redis, monkeypatch):
+def client(redis, db, monkeypatch):
     enqueued: list[str] = []
     monkeypatch.setattr(service.run_agent, "apply_async", lambda args, task_id: enqueued.append(task_id))
     with TestClient(app) as c:

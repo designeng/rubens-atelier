@@ -14,17 +14,18 @@ HTTP-сервис для запуска Claude Code ([Claude Agent SDK](https://
 
 ```bash
 cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
-docker compose up -d --build  # redis, postgres, api :8000, worker, beat
+docker compose up -d --build  # redis, postgres, migrate (разовый), api :8000, worker, beat
 ```
 
 Доска: http://localhost:8000/board (токен из `HARNESS_API_TOKEN` вводится в поле на странице).
 
 Агенту в контейнере нужен `ANTHROPIC_API_KEY`. Вместо него можно указать `CLAUDE_CODE_OAUTH_TOKEN`, его выдаёт `claude setup-token`. Логин из keychain хоста в контейнер не попадает.
 
-Локально без Docker, только с Redis:
+Локально без Docker, со своими Redis и Postgres:
 
 ```bash
 uv sync
+uv run python -m app.migrate                                    # схема актуальна до старта сервисов
 uv run uvicorn app.api:app --reload
 uv run celery -A app.celery_app worker -l info --pool threads   # на macOS prefork+spawn не работает
 uv run celery -A app.celery_app beat -l info
@@ -130,7 +131,7 @@ Agent-прогон, закончившийся без результата, от
 
 Надёжность. Каждый переход — это compare-and-set по `work_items.version`. Шаг воркера (`harness.step`) и запрос к человеку привязаны к версии item'а, поэтому повторная доставка, двойной клик или устаревший ответ ничего не сдвигают. Agent-шаг выполняется как обычная harness-задача: с её событиями (`/tasks/{task_id}/stream`), отменой, lease и verify-циклом. `harness.reconcile` в beat заново ставит в очередь шаги, которые потеряли enqueue или воркер которых упал до того, как сообщил вердикт.
 
-Состояние фабрики хранится в Postgres. Redis по-прежнему держит очередь, события агентов и lease. Когда agent-шаг завершается, его задача и весь поток событий архивируются в Postgres (`task_transcripts`, ключ — `runs.task_id`), поэтому `/tasks/{id}`, `/tasks/{id}/events` и `/tasks/{id}/stream` отдают транскрипт run'а и после того, как Redis его удалил. Разовые задачи `/tasks` не архивируются. Схема создаётся при старте API (`create_all`); Alembic появится вместе с первой миграцией.
+Состояние фабрики хранится в Postgres. Redis по-прежнему держит очередь, события агентов и lease. Когда agent-шаг завершается, его задача и весь поток событий архивируются в Postgres (`task_transcripts`, ключ — `runs.task_id`), поэтому `/tasks/{id}`, `/tasks/{id}/events` и `/tasks/{id}/stream` отдают транскрипт run'а и после того, как Redis его удалил. Разовые задачи `/tasks` не архивируются. Схема версионируется через Alembic (`migrations/versions/`, применённая ревизия в `alembic_version`). `python -m app.migrate` (`make migrate`, разовый сервис `migrate` в compose) выполняет `alembic upgrade head` до старта api, worker и beat; сами они схему не трогают. БД, созданная до Alembic (таблицы есть, `alembic_version` нет), сначала помечается ревизией `0001`, затем обновляется; если в ней не хватает колонки этой ревизии, команда останавливается. Как менять схему: поправить модели в `app/db.py`, `make migrate`, `make revision m="что изменилось"` и проверить сгенерированный файл (autogenerate не видит переименований и заполнения данных). Тесты строят схему через `create_all`; `tests/test_db.py` падает, если модели и миграции расходятся.
 
 ## Как работает issue-флоу
 

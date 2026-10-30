@@ -43,7 +43,8 @@ async def db():
 
 
 @pytest.fixture
-def client(redis):
+def client(redis, db):
+    # `db` creates the schema: the API's startup no longer does.
     enqueued: list[tuple[str, int]] = []
 
     async def enqueue(item_id, version):

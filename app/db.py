@@ -10,6 +10,8 @@ what the factory is about: projects, the work graph, and the history of every st
   human_requests    the inbox: decisions the workflow is waiting for
   item_events       every state change, for the board and for loop guards
   task_transcripts  a finished run's harness task and event stream, kept after Redis expires them
+
+The schema is versioned with Alembic: change a model here, then `make revision m="..."`.
 """
 
 import uuid
@@ -18,7 +20,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, inspect, text
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -82,7 +84,7 @@ class WorkItem(Base):
     priority: Mapped[int] = mapped_column(default=0)  # higher runs first
     # Model for every agent step of this item; None = the workflow state's or the default model.
     model: Mapped[str | None] = mapped_column(String(100))
-    # Ids of items that must succeed before this one can be started (NULL in old rows = none).
+    # Ids of items that must succeed before this one can be started.
     blocked_by: Mapped[list[str]] = mapped_column(default=list)
     # Claude session per role, so a role can resume its own context on the next visit.
     sessions: Mapped[dict[str, Any]] = mapped_column(default=dict)
@@ -160,30 +162,15 @@ class TaskTranscript(Base):
     archived_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
-def _add_missing_columns(conn) -> None:
-    """create_all skips existing tables; add the columns introduced after them."""
-    existing = {c["name"] for c in inspect(conn).get_columns("projects")}
-    if "installation_id" not in existing:
-        conn.execute(text("ALTER TABLE projects ADD COLUMN installation_id BIGINT"))
-    if "auto_merge" not in existing:
-        conn.execute(text("ALTER TABLE projects ADD COLUMN auto_merge BOOLEAN NOT NULL DEFAULT false"))
-    existing = {c["name"] for c in inspect(conn).get_columns("work_items")}
-    if "model" not in existing:
-        conn.execute(text("ALTER TABLE work_items ADD COLUMN model VARCHAR(100)"))
-    if "blocked_by" not in existing:
-        conn.execute(text("ALTER TABLE work_items ADD COLUMN blocked_by JSON"))
-
-
 class Database:
     def __init__(self, url: str):
         self.engine = create_async_engine(url)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def create_all(self) -> None:
-        # Good enough until the schema needs its first migration; then switch to Alembic.
+        # Tests only: real databases get their schema from migrations/ (python -m app.migrate).
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            await conn.run_sync(_add_missing_columns)
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:

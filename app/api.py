@@ -28,8 +28,8 @@ SSE_BLOCK_MS = 15_000
 async def lifespan(app: FastAPI):
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.store = TaskStore(app.state.redis)
+    # The schema is brought up to date beforehand by `python -m app.migrate`.
     app.state.db = Database(settings.database_url)
-    await app.state.db.create_all()
     app.state.scheduler = Scheduler(app.state.redis, celery_enqueue)
     app.state.exec_enqueue = terminal.celery_enqueue
     app.state.checks_enqueue = checks.celery_enqueue

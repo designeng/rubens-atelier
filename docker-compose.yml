@@ -4,7 +4,12 @@ x-app: &app
   environment:
     HARNESS_REDIS_URL: redis://redis:6379/0
     HARNESS_DATABASE_URL: postgresql+asyncpg://harness:harness@postgres:5432/harness
-  depends_on: [redis, postgres]
+  depends_on:
+    redis:
+      condition: service_started
+    # The schema is migrated once, before any service touches the database.
+    migrate:
+      condition: service_completed_successfully
 
 services:
   redis:
@@ -21,6 +26,20 @@ services:
       POSTGRES_DB: harness
     ports: ["5432:5432"]
     volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harness -d harness"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # One-off: alembic upgrade head (stamps a pre-Alembic database first), then exits.
+  migrate:
+    <<: *app
+    command: ["python", "-m", "app.migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   api:
     <<: *app

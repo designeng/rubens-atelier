@@ -1,21 +1,92 @@
-from sqlalchemy import inspect, text
+"""Migrations: sync tests, because Alembic's env.py runs its own event loop (asyncio.run)."""
+
+import asyncio
+
+import pytest
+from alembic import command
+from alembic.autogenerate import compare_metadata
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from sqlalchemy import MetaData, inspect, text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
-from app.db import Database
+from app.db import Base
+from app.migrate import alembic_config, migrate
 
 
-async def test_create_all_adds_columns_missing_from_an_older_database():
-    db = Database(settings.database_url)
-    async with db.engine.begin() as conn:
-        await conn.execute(text("CREATE TABLE projects (id VARCHAR(32) PRIMARY KEY, installation_id BIGINT)"))
-        await conn.execute(text("CREATE TABLE work_items (id VARCHAR(32) PRIMARY KEY, model VARCHAR(100))"))
-        await conn.execute(text("INSERT INTO work_items (id) VALUES ('old')"))
+def _run(fn):
+    """fn(sync connection) on the test database, in a transaction."""
 
-    await db.create_all()
+    async def go():
+        engine = create_async_engine(settings.database_url)
+        try:
+            async with engine.begin() as conn:
+                return await conn.run_sync(fn)
+        finally:
+            await engine.dispose()
 
-    async with db.engine.connect() as conn:
-        columns = await conn.run_sync(lambda c: {col["name"] for col in inspect(c).get_columns("work_items")})
-        assert "blocked_by" in columns
-        # Rows from before the column hold NULL, which reads as "no blockers".
-        assert (await conn.execute(text("SELECT blocked_by FROM work_items"))).scalar() is None
-    await db.dispose()
+    return asyncio.run(go())
+
+
+def _diff(conn):
+    return compare_metadata(MigrationContext.configure(conn), Base.metadata)
+
+
+def _revision(conn):
+    return MigrationContext.configure(conn).get_current_revision()
+
+
+def _head():
+    return ScriptDirectory.from_config(alembic_config()).get_current_head()
+
+
+def _create_pre_alembic(conn, *, drop: str | None = None) -> None:
+    """The schema create_all + the old ad-hoc ALTERs left: blocked_by nullable, no alembic_version."""
+    legacy = MetaData()
+    for table in Base.metadata.sorted_tables:
+        table.to_metadata(legacy)
+    legacy.tables["work_items"].c.blocked_by.nullable = True
+    legacy.create_all(conn)
+    if drop:
+        conn.execute(text(f"ALTER TABLE work_items DROP COLUMN {drop}"))
+
+
+def test_migrations_build_the_schema_of_the_models():
+    migrate()
+
+    assert _run(_revision) == _head()
+    # A model change without a migration (or a migration the models disagree with) shows up here.
+    assert _run(_diff) == []
+
+
+def test_downgrade_to_base_drops_every_table():
+    migrate()
+    command.downgrade(alembic_config(), "base")
+
+    assert set(_run(lambda c: inspect(c).get_table_names())) == {"alembic_version"}
+
+
+def test_pre_alembic_database_is_stamped_and_upgraded():
+    def setup(conn):
+        _create_pre_alembic(conn)
+        conn.execute(text("INSERT INTO projects (id, slug, repo, auto_merge, created_at) VALUES ('p', 'p', 'o/r', false, '2026-01-01')"))
+        conn.execute(text(
+            "INSERT INTO work_items (id, project_id, kind, title, body, workflow, version, priority, sessions, source,"
+            " created_at, updated_at) VALUES ('old', 'p', 'story', 't', '', 'story', 0, 0, '{}', '{}', '2026-01-01', '2026-01-01')"
+        ))
+
+    _run(setup)
+    migrate()
+
+    assert _run(_revision) == _head()
+    assert _run(lambda c: c.execute(text("SELECT blocked_by FROM work_items")).scalar()) == "[]"
+    assert _run(_diff) == []
+
+
+def test_pre_alembic_database_missing_a_column_is_not_stamped():
+    _run(lambda c: _create_pre_alembic(c, drop="model"))
+
+    with pytest.raises(SystemExit, match="work_items.model"):
+        migrate()
+    assert "alembic_version" not in _run(lambda c: inspect(c).get_table_names())

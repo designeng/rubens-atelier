@@ -14,19 +14,20 @@ The core flow: an agent picks up a GitHub issue, implements it, runs the checks,
 
 ```bash
 cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
-docker compose up -d --build  # redis, postgres, api :8000, worker, beat
+docker compose up -d --build  # redis, postgres, migrate (one-off), api :8000, worker, beat
 ```
 
 Board: http://localhost:8000/board (enter the `HARNESS_API_TOKEN` token in the field on the page).
 
 The agent inside the container needs `ANTHROPIC_API_KEY`. You can set `CLAUDE_CODE_OAUTH_TOKEN` instead; `claude setup-token` issues one. The login from the host keychain does not reach the container.
 
-Local development: `make dev` starts Redis and Postgres in Docker, then the api, worker and beat on the host (Ctrl-C stops all three). See `make help` for the other targets.
+Local development: `make dev` starts Redis and Postgres in Docker, migrates the schema (`make migrate`), then the api, worker and beat on the host (Ctrl-C stops all three). See `make help` for the other targets.
 
-Locally without Docker, with only Redis:
+Locally without Docker, with your own Redis and Postgres:
 
 ```bash
 uv sync
+uv run python -m app.migrate                                    # schema up to date before anything starts
 uv run uvicorn app.api:app --reload
 uv run celery -A app.celery_app worker -l info --pool threads   # prefork+spawn does not work on macOS
 uv run celery -A app.celery_app beat -l info
@@ -133,7 +134,7 @@ A run that hits the limit is not a work failure. The step returns to the queue w
 
 Reliability. Every transition is a compare-and-set on `work_items.version`. A worker step (`harness.step`) and a human request are bound to the item's version, so a redelivery, a double click or a stale answer moves nothing. An agent step runs as a regular harness task, with its events (`/tasks/{task_id}/stream`), cancellation, lease and verify loop. `harness.reconcile` in beat re-enqueues steps that lost their enqueue or whose worker died before reporting a verdict.
 
-Factory state lives in Postgres. Redis still holds the queue, agent events and leases. When an agent step finishes, its task and full event stream are archived to Postgres (`task_transcripts`, keyed by `runs.task_id`), so `/tasks/{id}`, `/tasks/{id}/events` and `/tasks/{id}/stream` keep serving a run's transcript after Redis has expired it. Ad-hoc `/tasks` runs are not archived. The schema is created at API startup (`create_all`); Alembic will arrive with the first migration.
+Factory state lives in Postgres. Redis still holds the queue, agent events and leases. When an agent step finishes, its task and full event stream are archived to Postgres (`task_transcripts`, keyed by `runs.task_id`), so `/tasks/{id}`, `/tasks/{id}/events` and `/tasks/{id}/stream` keep serving a run's transcript after Redis has expired it. Ad-hoc `/tasks` runs are not archived. The schema is versioned with Alembic (`migrations/versions/`, applied revision in `alembic_version`). `python -m app.migrate` (`make migrate`, the one-off `migrate` service in compose) runs `alembic upgrade head` before the api, worker and beat start; they do not touch the schema themselves. A database created before Alembic (tables, no `alembic_version`) is stamped at revision `0001` first and then upgraded; if it lacks a column of that revision, the command stops instead. To change the schema: edit the models in `app/db.py`, `make migrate`, `make revision m="what changed"`, then review the generated file (autogenerate misses renames and data backfills). Tests build the schema with `create_all`; `tests/test_db.py` fails when the models and the migrations disagree.
 
 ## How the issue flow works
 
