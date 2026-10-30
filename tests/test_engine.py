@@ -243,6 +243,20 @@ async def test_endless_review_ping_pong_is_cut_off_and_escalated(make_factory):
     assert (await f.item(item_id)).state == "cancelled"
 
 
+async def test_retry_after_the_loop_limit_gives_the_step_a_fresh_budget(make_factory):
+    f = make_factory(ScriptedRunner(reviews=["changes_requested"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "needs_human"
+
+    await f.engine.answer((await f.open_request(item_id)).id, "retry", comment="lock refreshed")
+    assert (await f.item(item_id)).state == "implement"
+    await f.drain()
+    path = await f.path(item_id)
+    assert path.count("implement") == 8 and path[-1] == "needs_human"
+
+
 async def test_agent_failure_escalates_with_the_error(make_factory):
     f = make_factory(ScriptedRunner(implement_ok=False))
     item_id = await f.new_item()

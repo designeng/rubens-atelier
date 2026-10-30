@@ -246,12 +246,17 @@ class Engine:
     async def _enter(self, s, item: WorkItem, wf: Workflow, target: str, verdict: str | None, actor: str) -> bool:
         st = wf.states[target]
         if st.max_visits is not None:
-            visits = await s.scalar(
+            # An answer in the state an exhausted step escalates to (or a reopen) starts the count
+            # over, otherwise a retry would bounce straight back there. Other human states
+            # (clarify, awaiting_merge) keep counting, so a loop through a person stays bounded.
+            escalations = {other.on_exhausted for other in wf.states.values() if other.max_visits is not None}
+            reset = select(func.coalesce(func.max(ItemEvent.id), 0)).where(
+                ItemEvent.item_id == item.id,
+                or_(ItemEvent.to_state == BACKLOG, ItemEvent.from_state.in_(escalations)),
+            ).scalar_subquery()
+            visits = 0 if item.state in escalations else await s.scalar(
                 select(func.count()).select_from(ItemEvent).where(
-                    ItemEvent.item_id == item.id, ItemEvent.to_state == target,
-                    ItemEvent.id > select(func.coalesce(func.max(ItemEvent.id), 0)).where(
-                        ItemEvent.item_id == item.id, ItemEvent.to_state == BACKLOG
-                    ).scalar_subquery(),
+                    ItemEvent.item_id == item.id, ItemEvent.to_state == target, ItemEvent.id >= reset
                 )
             )
             if visits >= st.max_visits:
