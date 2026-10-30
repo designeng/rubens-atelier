@@ -151,6 +151,7 @@ export function useBoard() {
   const startItem = (id: string) => act(api.startItem(id));
   const cancelItem = (id: string) => act(api.cancelItem(id));
   const reopenItem = (id: string) => act(api.reopenItem(id));
+  const openPr = (id: string) => act(api.openPr(id));
   const deleteItem = (id: string) =>
     act(
       api.deleteItem(id).then(() => {
@@ -255,6 +256,7 @@ export function useBoard() {
     startItem,
     cancelItem,
     reopenItem,
+    openPr,
     deleteItem,
     runItemNow,
     answer,
