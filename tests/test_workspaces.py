@@ -101,7 +101,8 @@ def test_prune(client):
     assert client.post("/workspaces/prune", json={"older_than_hours": 1, "dry_run": True}).json()["would_remove"] == []
     old = time.time() - 7200
     os.utime(item_workspace(ids["orphan"]), (old, old))
-    assert client.post("/workspaces/prune", json={"older_than_hours": 1, "dry_run": True}).json()["would_remove"] == [ids["orphan"]]
+    pruned = client.post("/workspaces/prune", json={"older_than_hours": 1, "dry_run": True}).json()
+    assert pruned["would_remove"] == [ids["orphan"]]
     assert client.post("/workspaces/prune", json={"older_than_hours": -1}).status_code == 422
 
 

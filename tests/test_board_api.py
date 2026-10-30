@@ -32,7 +32,8 @@ def test_projects_items_board_and_inbox(client):
     assert req["state"] == "awaiting_merge"
     detail = client.get(f"/items/{started['id']}").json()
     assert detail["column"] == "needs_human" and detail["open_request"]["id"] == req["id"]
-    assert [e["to_state"] for e in detail["events"]] == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    path = ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    assert [e["to_state"] for e in detail["events"]] == path
 
     assert client.post(f"/requests/{req['id']}/answer", json={"option": "nope"}).status_code == 409
     r = client.post(f"/requests/{req['id']}/answer", json={"option": "merged", "comment": "thanks"})
@@ -72,7 +73,12 @@ def test_projects_items_board_and_inbox(client):
 
 def test_import_issues(client, monkeypatch):
     issues = [
-        {"number": 1, "title": "Crash on start", "body": "Steps:\n1. run", "html_url": "https://github.com/acme/app/issues/1"},
+        {
+            "number": 1,
+            "title": "Crash on start",
+            "body": "Steps:\n1. run",
+            "html_url": "https://github.com/acme/app/issues/1",
+        },
         {"number": 2, "title": "x" * 400, "body": None, "html_url": "https://github.com/acme/app/issues/2"},
     ]
     seen = []
@@ -184,7 +190,11 @@ def test_run_now_starts_one_waiting_step_while_paused(client):
 def test_scheduler_limits(client):
     changed = client.patch("/scheduler/limits", json={"max_agents": 1}).json()
     assert changed["capacity"] == 1
-    assert changed["limits"] == {"max_agents": 1, "max_agents_per_project": settings.max_agents_per_project, "force": False}
+    assert changed["limits"] == {
+        "max_agents": 1,
+        "max_agents_per_project": settings.max_agents_per_project,
+        "force": False,
+    }
     assert client.patch("/scheduler/limits", json={"force": True}).json()["limits"]["force"] is True
     assert client.patch("/scheduler/limits", json={"max_agents": 0}).status_code == 422
     assert client.delete("/scheduler/limits").json()["limits"]["max_agents"] == settings.max_agents
@@ -316,7 +326,8 @@ def test_item_git_view(client):
     cwd.mkdir(parents=True)
 
     def git(*a):
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+        cmd = ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a]
+        subprocess.run(cmd, cwd=cwd, check=True, capture_output=True)
 
     git("init", "-b", "main")
     (cwd / "a.txt").write_text("one\n")
@@ -372,7 +383,8 @@ def test_terminal(client, monkeypatch):
 
     client.portal.call(seed)
     assert client.post(f"/items/{iid}/exec", json=body, headers=auth).status_code == 409  # plan agent is working
-    client.portal.call(app.state.engine.advance, iid, client.get(f"/items/{iid}", headers=auth).json()["version"], "error")
+    version = client.get(f"/items/{iid}", headers=auth).json()["version"]
+    client.portal.call(app.state.engine.advance, iid, version, "error")
 
     monkeypatch.setenv("HARNESS_API_TOKEN", "secret")
     r = client.post(f"/items/{iid}/exec", json=body, headers=auth)

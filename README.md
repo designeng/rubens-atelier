@@ -32,6 +32,7 @@ uv run uvicorn app.api:app --reload
 uv run celery -A app.celery_app worker -l info --pool threads   # prefork+spawn does not work on macOS
 uv run celery -A app.celery_app beat -l info
 uv run pytest
+uv run ruff check . && uv run pyright                           # or: make lint
 ```
 
 ### Board (web/)

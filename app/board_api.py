@@ -95,7 +95,9 @@ class ItemIn(BaseModel):
     issue: int | None = Field(default=None, ge=1, description="GitHub issue the PR should close")
     priority: int = Field(default=0, ge=-100, le=100, description="Higher is scheduled first")
     model: ModelName | None = None
-    blocked_by: list[str] = Field(default_factory=list, max_length=MAX_BLOCKERS, description="Items that must succeed first")
+    blocked_by: list[str] = Field(
+        default_factory=list, max_length=MAX_BLOCKERS, description="Items that must succeed first"
+    )
     start: bool = False
 
 
@@ -502,7 +504,9 @@ async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
                 project_id=project.id,
                 kind="story",
                 title=(issue.get("title") or f"Issue #{issue['number']}")[:300],  # ItemIn.title limit
-                body="\n\n".join(filter(None, [(issue.get("body") or "").strip(), f"Imported from {issue['html_url']}"])),
+                body="\n\n".join(
+                    filter(None, [(issue.get("body") or "").strip(), f"Imported from {issue['html_url']}"])
+                ),
                 workflow="story",
                 source={"issue": issue["number"]},
             )
@@ -665,7 +669,11 @@ async def list_workspaces(
     `project` filter. Phases: orphan, finished, failed, idle, busy (see app/workspaces.py)."""
     found = await asyncio.to_thread(workspaces.scan, size)
     rows = await workspaces.describe(engine, found)
-    rows = [r for r in rows if (phase is None or r["phase"] == phase) and (project is None or (r["item"] or {}).get("project") == project)]
+    rows = [
+        r
+        for r in rows
+        if (phase is None or r["phase"] == phase) and (project is None or (r["item"] or {}).get("project") == project)
+    ]
     return {
         "root": str(settings.workspaces_root.resolve()),
         "count": len(rows),
@@ -850,7 +858,8 @@ class Limits(BaseModel):
     max_agents: int | None = Field(default=None, ge=1, le=64)
     max_agents_per_project: int | None = Field(default=None, ge=1, le=64)
     force: bool | None = Field(
-        default=None, description="Keep max_agents while subscription windows throttle or stop dispatch, unless one is rejected"
+        default=None,
+        description="Keep max_agents while subscription windows throttle or stop dispatch, unless one is rejected",
     )
 
 

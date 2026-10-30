@@ -115,7 +115,9 @@ async def describe(engine: Engine, found: list[Found]) -> list[dict[str, Any]]:
         ids = [f.id for f in found if f.kind == "item"]
         if ids:
             rows = (await s.execute(
-                select(WorkItem, Project.slug).join(Project, Project.id == WorkItem.project_id).where(WorkItem.id.in_(ids))
+                select(WorkItem, Project.slug)
+                .join(Project, Project.id == WorkItem.project_id)
+                .where(WorkItem.id.in_(ids))
             )).all()
             items = {it.id: (it, slug) for it, slug in rows}
 
@@ -176,7 +178,9 @@ def old_enough(row: dict[str, Any], older_than_hours: float) -> bool:
     return time.time() - when.timestamp() >= older_than_hours * 3600
 
 
-def prunable(rows: list[dict[str, Any]], *, include_failed: bool = False, older_than_hours: float = 0) -> list[dict[str, Any]]:
+def prunable(
+    rows: list[dict[str, Any]], *, include_failed: bool = False, older_than_hours: float = 0
+) -> list[dict[str, Any]]:
     phases = SAFE + (RISKY if include_failed else ())
     return [r for r in rows if r["phase"] in phases and old_enough(r, older_than_hours)]
 

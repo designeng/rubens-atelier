@@ -105,7 +105,8 @@ async def test_list_issues_pages_and_skips_prs():
         page = int(request.url.params["page"])
         pages.append((page, request.url.params["state"], request.url.params["per_page"]))
         if page == 1:
-            return httpx.Response(200, json=[{"number": n} for n in range(1, 100)] + [{"number": 100, "pull_request": {}}])
+            issues = [{"number": n} for n in range(1, 100)] + [{"number": 100, "pull_request": {}}]
+            return httpx.Response(200, json=issues)
         return httpx.Response(200, json=[{"number": 101}, {"number": 102, "pull_request": {}}])
 
     def mock(gh, handler):  # a fresh client, so proxy mounts from the environment don't bypass the mock

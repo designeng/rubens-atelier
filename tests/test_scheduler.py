@@ -10,7 +10,6 @@ from app.models import TaskCreate, TaskStatus
 from app.runner import AgentOutcome
 from app.scheduler import ACTIVE, QUOTA, Scheduler, SchedulerError, record_rate_limit
 from tests.test_engine import CIGitHub, Factory, ScriptedRunner
-from tests.test_issue_flow import origin  # noqa: F401  (fixture)
 
 
 @pytest.fixture
@@ -176,7 +175,7 @@ async def test_slots_of_dead_or_finished_steps_are_reclaimed(scheduler, dispatch
     assert await redis.zrange(ACTIVE, 0, -1) == []
 
 
-async def test_story_runs_through_scheduler_and_frees_its_slots(db, store, redis, origin):  # noqa: F811
+async def test_story_runs_through_scheduler_and_frees_its_slots(db, store, redis, origin):
     f = Factory(db, store, CIGitHub(origin), ScriptedRunner())
     f.engine.scheduler = Scheduler(redis, f.enqueue)
     item_id = await f.new_item()
@@ -195,12 +194,13 @@ class RateLimitedOnce(ScriptedRunner):
         if spec.metadata["state"] == "implement" and not self.of("implement"):
             self.calls.append({"role": "implement", "prompt": spec.prompt, "resume": resume, "spec": spec})
             await emit("session", {"session_id": "implement-cut"})
-            await emit("rate_limit", {"status": "rejected", "rate_limit_type": "five_hour", "resets_at": time.time() + 600})
+            limit = {"status": "rejected", "rate_limit_type": "five_hour", "resets_at": time.time() + 600}
+            await emit("rate_limit", limit)
             return AgentOutcome("implement-cut", None, True, error="usage limit reached")
         return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
 
 
-async def test_rate_limited_step_waits_for_the_reset_and_resumes(db, store, redis, origin):  # noqa: F811
+async def test_rate_limited_step_waits_for_the_reset_and_resumes(db, store, redis, origin):
     f = Factory(db, store, CIGitHub(origin), RateLimitedOnce())
     f.engine.scheduler = Scheduler(redis, f.enqueue)
     item_id = await f.new_item()

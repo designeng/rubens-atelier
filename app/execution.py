@@ -228,7 +228,9 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
         if outcome.is_error:
             await store.set_fields(task_id, **{k: str(v) for k, v in fields.items() if v is not None})
             await fail(
-                TaskStatus.failed, outcome.error or "agent reported an error", outcome.failure or FailureReason.model_error
+                TaskStatus.failed,
+                outcome.error or "agent reported an error",
+                outcome.failure or FailureReason.model_error,
             )
         else:
             await store.finish(task_id, TaskStatus.succeeded, structured_output=outcome.structured_output, **fields)
