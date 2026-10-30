@@ -127,9 +127,12 @@ defineExpose({ clearTitle: () => (title.value = "") });
         force
       </label>
     </template>
-    <select title="Theme" :value="theme" @change="onTheme">
-      <option v-for="t in THEMES" :key="t.value" :value="t.value">{{ t.label }}</option>
-    </select>
+    <label class="muted" title="Theme">
+      Theme
+      <select :value="theme" @change="onTheme">
+        <option v-for="t in THEMES" :key="t.value" :value="t.value">{{ t.label }}</option>
+      </select>
+    </label>
     <button
       v-if="b.scheduler.value"
       :class="{ primary: b.isPaused() }"
