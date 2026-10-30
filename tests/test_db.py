@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
 from app.db import Base
-from app.migrate import alembic_config, migrate
+from app.migrate import PRE_ALEMBIC_REVISION, REVISION_0001_COLUMNS, _missing, alembic_config, migrate
 
 
 def _run(fn):
@@ -96,3 +96,26 @@ def test_pre_alembic_database_missing_a_column_is_not_stamped():
     with pytest.raises(SystemExit, match="work_items.model"):
         migrate()
     assert "alembic_version" not in _run(lambda c: inspect(c).get_table_names())
+
+
+def test_revision_0001_columns_match_the_migration():
+    command.upgrade(alembic_config(), PRE_ALEMBIC_REVISION)
+
+    def reflect(conn):
+        insp = inspect(conn)
+        return {
+            t: frozenset(c["name"] for c in insp.get_columns(t))
+            for t in insp.get_table_names()
+            if t != "alembic_version"
+        }
+
+    assert _run(reflect) == REVISION_0001_COLUMNS
+
+
+def test_pre_alembic_check_ignores_columns_added_after_0001():
+    schema = {t: set(cols) for t, cols in REVISION_0001_COLUMNS.items()}
+    schema["work_items"].add("column_from_a_later_revision")
+    assert _missing(schema) == []
+
+    schema["work_items"].remove("model")
+    assert _missing(schema) == ["work_items.model"]

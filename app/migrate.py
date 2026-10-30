@@ -12,9 +12,39 @@ from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from .config import ROOT, settings
-from .db import Base
 
 PRE_ALEMBIC_REVISION = "0001"
+
+# The columns of revision 0001, frozen. A pre-Alembic database is stamped at that revision, so it is
+# checked against that schema and not against the current models. Never edit this: a column added
+# later belongs in a new revision, which `upgrade head` applies after the stamp.
+REVISION_0001_COLUMNS: dict[str, frozenset[str]] = {
+    "projects": frozenset(
+        {"id", "slug", "repo", "base_branch", "verify_command", "installation_id", "auto_merge", "created_at"}
+    ),
+    "work_items": frozenset(
+        {
+            "id", "project_id", "parent_id", "kind", "title", "body", "workflow", "state", "version",
+            "branch", "base_branch", "pr_url", "head_sha", "priority", "model", "blocked_by", "sessions",
+            "source", "created_at", "updated_at",
+        }
+    ),
+    "human_requests": frozenset(
+        {
+            "id", "item_id", "version", "state", "question", "options", "answer", "comment",
+            "answered_by", "created_at", "answered_at",
+        }
+    ),
+    "item_events": frozenset({"id", "item_id", "from_state", "to_state", "verdict", "actor", "at"}),
+    "runs": frozenset(
+        {
+            "id", "item_id", "version", "state", "role", "task_id", "status", "verdict", "cost_usd",
+            "created_at", "finished_at",
+        }
+    ),
+    "artifacts": frozenset({"id", "item_id", "run_id", "name", "content", "created_at"}),
+    "task_transcripts": frozenset({"task_id", "run_id", "task", "events", "archived_at"}),
+}
 
 
 def alembic_config() -> Config:
@@ -36,12 +66,11 @@ async def _schema() -> dict[str, set[str]]:
 
 
 def _missing(schema: dict[str, set[str]]) -> list[str]:
-    """Columns of the models that a pre-Alembic database lacks (it never ran the last startup)."""
+    """Columns of revision 0001 that a pre-Alembic database lacks (it never ran the last startup)."""
     return [
-        f"{t.name}.{c.name}"
-        for t in Base.metadata.sorted_tables
-        for c in t.columns
-        if c.name not in schema.get(t.name, set())
+        f"{table}.{column}"
+        for table, columns in REVISION_0001_COLUMNS.items()
+        for column in sorted(columns - schema.get(table, set()))
     ]
 
 
