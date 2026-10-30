@@ -68,8 +68,9 @@ class Settings(BaseSettings):
     # ["uv run", "pytest", "git status"]); anything else is denied. Empty = any command.
     bash_allowed_commands: list[str] = []
     # Run the agent's Bash in Claude Code's OS sandbox: writes confined to the workspace, no
-    # unsandboxed escape hatch. Needs bubblewrap/socat on Linux.
-    sandbox: bool = False
+    # unsandboxed escape hatch. Needs bubblewrap/socat on Linux. On by default: without it Bash
+    # ignores the secret-file read rules and can read .env, /proc/1/environ and process argv.
+    sandbox: bool = True
     default_max_turns: int = 50
     default_max_budget_usd: float = 5.0
     default_verify_attempts: int = 2

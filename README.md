@@ -184,6 +184,6 @@ Deliveries are verified by their `X-Hub-Signature-256` HMAC rather than the API 
 The agent has Bash, and issue text can come from an outsider. Keep in mind:
 - the worker runs in a container as an unprivileged user;
 - the GitHub token (or the GitHub App private key) is used only by the harness: it is passed via `-c http.extraheader` rather than stored in `.git/config`, and is removed from the worker processes' env;
-- `HARNESS_BASH_ALLOWED_COMMANDS` limits Bash to command prefixes (empty = any) and `HARNESS_SANDBOX=true` runs it in Claude Code's OS sandbox (writes only in the workspace); both are off by default;
+- `HARNESS_BASH_ALLOWED_COMMANDS` limits Bash to command prefixes (empty = any) and Bash runs in Claude Code's OS sandbox by default (writes only in the workspace, secret files unreadable; needs bubblewrap and socat on Linux, both in the Docker image, and in a container the sandbox needs unprivileged user namespaces, so Docker's default seccomp profile may have to be relaxed). `HARNESS_SANDBOX=false` turns it off, and then Bash can read `.env`, `/proc/1/environ` and other processes' argv (including the git token), so do that only for trusted tasks;
 - `allowed_tools`, `max_turns`, `max_budget_usd` and a timeout bound each task;
 - for production, isolate each task: its own container or microVM, an egress filter. You can also enable `sandbox` in `ClaudeAgentOptions`.

@@ -181,4 +181,5 @@ Push идёт в ветку с PR, а не в `main`: production-готовно�
 - воркер работает в контейнере под непривилегированным пользователем;
 - GitHub-токен (или private key GitHub App) используется только harness'ом: он передаётся через `-c http.extraheader`, а не хранится в `.git/config`, и удаляется из env воркер-процессов;
 - `allowed_tools`, `max_turns`, `max_budget_usd` и timeout ограничивают каждую задачу;
+- Bash агента по умолчанию работает в OS-sandbox Claude Code (запись только в workspace, файлы с секретами недоступны; на Linux нужны bubblewrap и socat, они есть в Docker-образе, а в контейнере sandbox требует непривилегированных user namespaces, поэтому seccomp-профиль Docker по умолчанию, возможно, придётся ослабить). `HARNESS_SANDBOX=false` отключает sandbox, и тогда Bash читает `.env`, `/proc/1/environ` и argv чужих процессов (включая git-токен): отключайте только для доверенных задач;
 - для продакшена стоит изолировать каждую задачу отдельно: свой контейнер или microVM, egress-фильтр. Можно также включить `sandbox` в `ClaudeAgentOptions`.
