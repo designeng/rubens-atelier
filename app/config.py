@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # unsandboxed escape hatch. Needs bubblewrap/socat on Linux. On by default: without it Bash
     # ignores the secret-file read rules and can read .env, /proc/1/environ and process argv.
     sandbox: bool = True
+    # Start agents with as little context as possible: a short system prompt instead of Claude
+    # Code's preset, only the allowed tools' definitions, no CLAUDE.md or skills preloaded (the
+    # agent reads the repo's docs itself when it needs them). Can be overridden per task.
+    lean_context: bool = False
     default_max_turns: int = 50
     default_max_budget_usd: float = 5.0
     default_verify_attempts: int = 2

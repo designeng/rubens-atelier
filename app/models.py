@@ -61,6 +61,7 @@ class TaskCreate(BaseModel):
     resume_session: str | None = None
 
     system_prompt: str | None = None
+    lean_context: bool | None = None  # default: settings.lean_context
     model: str | None = None
     effort: Effort | None = None
     permission_mode: PermissionMode | None = None

@@ -35,6 +35,13 @@ MAX_EVENT_STR = 8_000
 HIDDEN_ENV_PREFIXES = ("HARNESS_",)
 HIDDEN_ENV = ("GITHUB_TOKEN", "GH_TOKEN", "VIRTUAL_ENV")
 
+# Replaces Claude Code's preset under `lean_context`; the task prompt carries the rest.
+LEAN_SYSTEM_PROMPT = """\
+You are a software engineer working autonomously in the git repository in the current directory.
+Nobody answers questions during the run. Read files with Read, search with Glob and Grep, change
+them with Edit and Write, and use Bash only to run commands (tests, linters, git). Bash runs in a
+sandbox: writes outside the repository fail. Keep your messages short."""
+
 
 @dataclass
 class AgentOutcome:
@@ -110,24 +117,36 @@ def sandbox_settings() -> Any:
     }
 
 
+def tool_names(allowed: list[str]) -> list[str]:
+    """Built-in tool names behind permission rules: `Bash(pytest:*)` → `Bash`."""
+    return list(dict.fromkeys(t.split("(", 1)[0] for t in allowed))
+
+
 def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgentOptions:
-    system_prompt: dict[str, Any] = {"type": "preset", "preset": "claude_code"}
-    if spec.system_prompt:
-        system_prompt["append"] = spec.system_prompt
+    lean = spec.lean_context if spec.lean_context is not None else settings.lean_context
+    allowed = effective_tools(spec.allowed_tools if spec.allowed_tools is not None else settings.default_allowed_tools)
+    system_prompt: str | dict[str, Any]
+    if lean:
+        system_prompt = LEAN_SYSTEM_PROMPT + (f"\n\n{spec.system_prompt}" if spec.system_prompt else "")
+    else:
+        system_prompt = {"type": "preset", "preset": "claude_code"}
+        if spec.system_prompt:
+            system_prompt["append"] = spec.system_prompt
     return ClaudeAgentOptions(
         cwd=str(cwd),
         resume=resume,
         env=agent_env(),
         add_dirs=[uv_cache_dir()],
         system_prompt=system_prompt,
+        # Lean: only the allowed tools' definitions reach the context, not every built-in one.
+        tools=tool_names(allowed) if lean else None,
         # Load the repo's CLAUDE.md / .claude/settings.json, but not the host user's settings.
-        setting_sources=["project"],
+        # Lean loads nothing: the sandbox and deny rules come from `sandbox` and `settings` below.
+        setting_sources=[] if lean else ["project"],
         model=spec.model or settings.default_model,
         effort=spec.effort,
         permission_mode=spec.permission_mode or settings.default_permission_mode,
-        allowed_tools=effective_tools(
-            spec.allowed_tools if spec.allowed_tools is not None else settings.default_allowed_tools
-        ),
+        allowed_tools=allowed,
         sandbox=sandbox_settings() if settings.sandbox else None,
         disallowed_tools=spec.disallowed_tools or [],
         settings=json.dumps({"permissions": {"deny": secret_read_rules()}}),

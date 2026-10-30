@@ -46,7 +46,7 @@ Docker-образ собирает доску сам, в отдельной Node
 
 | Метод | Путь | |
 |---|---|---|
-| `POST` | `/tasks` | Произвольная задача (`prompt`, опционально `repo_url`, `verify_command`, `model`, `effort`, `allowed_tools`, `max_budget_usd`, …) |
+| `POST` | `/tasks` | Произвольная задача (`prompt`, опционально `repo_url`, `verify_command`, `model`, `effort`, `allowed_tools`, `max_budget_usd`, `lean_context`, …) |
 | `POST` | `/issues/run` | `{repo, number, verify_command?, prompt?}`: работа над issue от начала до PR |
 | `GET` | `/tasks/{id}` | Статус, результат, стоимость, `session_id`, `pr_url` |
 | `GET` | `/tasks/{id}/stream` | SSE: история и живые события до завершения задачи, поддерживает `Last-Event-ID` |
@@ -57,6 +57,8 @@ Docker-образ собирает доску сам, в отдельной Node
 | `GET` | `/tasks?status=` | Список задач |
 
 Наблюдаемость. `GET /healthz` (без токена) проверяет Redis и Postgres, у каждого таймаут 2 секунды: отвечает `200 {"ok": true, "redis": true, "postgres": true}` или `503`, где упавшая зависимость равна `false`. `GET /metrics` (bearer-токен) отдаёт текст в формате Prometheus, считается при каждом запросе: `harness_queue_depth` (сообщений в очереди Celery), `harness_tasks{status}` (200 новейших задач в Redis) и, по `runs` в Postgres за последние 24 часа, `harness_runs{status}`, `harness_run_cost_usd_sum`, `harness_run_duration_seconds_sum` / `_count` (завершённые run'ы) и `harness_run_success_ratio` (succeeded / (succeeded + failed), 0 если их нет). Это gauge'и за окно, а не счётчики.
+
+Облегчённый контекст. `HARNESS_LEAN_CONTEXT=true` (или `"lean_context": true` в задаче) запускает агента с минимальным контекстом: короткий системный промпт вместо пресета Claude Code, определения только разрешённых инструментов вместо всех встроенных, без предзагрузки CLAUDE.md и skills (документацию репозитория агент читает сам, когда она нужна). Sandbox и правила для файлов с секретами остаются как есть.
 
 Follow-up: `POST /tasks {"prompt": "...", "parent_task_id": "<id>"}` продолжает ту же Claude-сессию в том же workspace. Для issue-задачи он пушит в ту же ветку, и PR обновляется.
 

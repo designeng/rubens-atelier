@@ -54,7 +54,7 @@ The Docker image builds the board itself in a Node stage.
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/tasks` | Arbitrary task (`prompt`, optionally `repo_url`, `verify_command`, `model`, `effort`, `allowed_tools`, `max_budget_usd`, …) |
+| `POST` | `/tasks` | Arbitrary task (`prompt`, optionally `repo_url`, `verify_command`, `model`, `effort`, `allowed_tools`, `max_budget_usd`, `lean_context`, …) |
 | `POST` | `/issues/run` | `{repo, number, verify_command?, prompt?}`: work on an issue from start to PR |
 | `GET` | `/tasks/{id}` | Status, result, cost, `session_id`, `pr_url` |
 | `GET` | `/tasks/{id}/stream` | SSE: history and live events until the task finishes, supports `Last-Event-ID` |
@@ -65,6 +65,8 @@ On the board, **Session** (in a story's "Now" block and next to each run) shows 
 | `GET` | `/tasks?status=` | Task list |
 
 Observability. `GET /healthz` (no token) pings Redis and Postgres, each with a 2-second timeout: it answers `200 {"ok": true, "redis": true, "postgres": true}`, or `503` with the failing dependency set to `false`. `GET /metrics` (bearer token) is Prometheus text computed on each scrape: `harness_queue_depth` (messages in the Celery queue), `harness_tasks{status}` (the newest 200 tasks in Redis), and, from the Postgres `runs` of the last 24 hours, `harness_runs{status}`, `harness_run_cost_usd_sum`, `harness_run_duration_seconds_sum` / `_count` (finished runs) and `harness_run_success_ratio` (succeeded / (succeeded + failed), 0 when there are none). They are gauges over the window, not counters.
+
+Lean context. `HARNESS_LEAN_CONTEXT=true` (or `"lean_context": true` on a task) starts the agent with as little context as possible: a short system prompt instead of Claude Code's preset, only the allowed tools' definitions instead of every built-in tool, and no CLAUDE.md or skills preloaded (the agent reads the repo's docs when it needs them). The sandbox and secret-file rules stay as they are.
 
 Follow-up: `POST /tasks {"prompt": "...", "parent_task_id": "<id>"}` continues the same Claude session in the same workspace. For an issue task it pushes to the same branch, and the PR updates.
 

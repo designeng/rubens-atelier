@@ -246,6 +246,28 @@ def test_sandbox_is_on_by_default(monkeypatch):
     assert opts.sandbox["failIfUnavailable"] is True
 
 
+def test_lean_context(monkeypatch):
+    from app.config import settings
+    from app.models import TaskCreate
+    from app.runner import LEAN_SYSTEM_PROMPT, build_options
+
+    monkeypatch.setattr(settings, "lean_context", False)
+    monkeypatch.setattr(settings, "bash_allowed_commands", ["pytest"])
+    opts = build_options(TaskCreate(prompt="x"), Path("."), None)
+    assert opts.system_prompt == {"type": "preset", "preset": "claude_code"}
+    assert opts.tools is None and opts.setting_sources == ["project"]
+
+    opts = build_options(TaskCreate(prompt="x", lean_context=True, system_prompt="extra"), Path("."), None)
+    assert opts.system_prompt == LEAN_SYSTEM_PROMPT + "\n\nextra"
+    assert opts.tools == ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+    assert "Bash(pytest:*)" in opts.allowed_tools and opts.setting_sources == []
+    # Lean drops the context, not the safety: sandbox and secret deny rules stay.
+    assert opts.sandbox["enabled"] and json.loads(opts.settings)["permissions"]["deny"]
+
+    monkeypatch.setattr(settings, "lean_context", True)
+    assert build_options(TaskCreate(prompt="x", lean_context=False), Path("."), None).tools is None
+
+
 def test_agent_env_hides_harness_config(monkeypatch):
     from app.runner import agent_env, uv_cache_dir
 
