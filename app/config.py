@@ -6,7 +6,11 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="HARNESS_", env_file=".env", extra="ignore")
+    # The runner blanks HARNESS_* for agents (the SDK can only override env vars, not delete
+    # them), so an empty variable must behave as unset.
+    model_config = SettingsConfigDict(
+        env_prefix="HARNESS_", env_file=".env", extra="ignore", env_ignore_empty=True
+    )
 
     redis_url: str = "redis://localhost:6379/0"
     # Durable factory state: projects, work items, runs, artifacts, human requests.
@@ -68,8 +72,9 @@ class Settings(BaseSettings):
     # ["uv run", "pytest", "git status"]); anything else is denied. Empty = any command.
     bash_allowed_commands: list[str] = []
     # Run the agent's Bash in Claude Code's OS sandbox: writes confined to the workspace, no
-    # unsandboxed escape hatch. Needs bubblewrap/socat on Linux.
-    sandbox: bool = False
+    # unsandboxed escape hatch. Needs bubblewrap/socat on Linux. On by default: without it Bash
+    # ignores the secret-file read rules and can read .env, /proc/1/environ and process argv.
+    sandbox: bool = True
     default_max_turns: int = 50
     default_max_budget_usd: float = 5.0
     default_verify_attempts: int = 2

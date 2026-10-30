@@ -213,6 +213,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
         {{ it.kind }} · {{ it.workflow }} · state <b>{{ it.state || "backlog" }}</b>
         <template v-if="it.priority"> · priority {{ it.priority }}</template>
         <template v-if="it.blocked.length"> · blocked by {{ it.blocked.join(", ") }}</template>
+        <template v-if="it.ready"> · <b>ready to start</b> (blockers done)</template>
         <template v-if="it.branch"> · {{ it.branch }}</template>
         <template v-if="it.pr_url"> · <a :href="it.pr_url" target="_blank" rel="noopener">PR</a></template>
       </p>

@@ -51,6 +51,11 @@ services:
     # At least HARNESS_MAX_AGENTS, plus room for actions (push, PR).
     command: ["celery", "-A", "app.celery_app", "worker", "-l", "info", "--concurrency", "6"]
     volumes: [workspaces:/workspaces]
+    # The agent's Bash sandbox (bubblewrap) needs unprivileged user namespaces, which Docker's
+    # default seccomp profile blocks; without them Bash fails (the sandbox is fail-closed).
+    # Pick one: uncomment the line below (drops seccomp filtering for the worker container),
+    # use a custom profile that allows them, or set HARNESS_SANDBOX=false (secrets readable).
+    # security_opt: ["seccomp=unconfined"]
     # Warm shutdown waits for running agents; give them time before SIGKILL.
     stop_grace_period: 10m
 

@@ -149,6 +149,8 @@ class ItemOut(Orm):
     attention: dict[str, str] | None = None
     # Only for backlog items: the blockers that have not succeeded yet, as "title (id)".
     blocked: list[str] = []
+    # Only for backlog items: had blockers and all of them have succeeded, so it can be started.
+    ready: bool = False
     # Ids of the backlog items that wait for this one.
     blocking: list[str] = []
 
@@ -338,6 +340,7 @@ async def _item_with_progress(
     out.blocking = dependents.get(item.id, [])
     if out.column == "backlog":
         out.blocked = await engine.unfinished_blockers(s, item, blockers)
+        out.ready = bool(item.blocked_by) and not out.blocked
     if out.column == "working":
         out.progress = await _progress(engine, s, item, runs, live)
     elif out.column == "needs_human":

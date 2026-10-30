@@ -98,6 +98,18 @@ def secret_read_rules() -> list[str]:
     return [f"Read(/{p})" for p in dict.fromkeys(paths)]
 
 
+def sandbox_settings() -> Any:
+    """Bash sandbox config. `failIfUnavailable` makes a sandbox that can't start (no bubblewrap,
+    user namespaces blocked) fail the command instead of silently running it unsandboxed; the
+    SDK's `SandboxSettings` doesn't declare that key yet, hence `Any`."""
+    return {
+        "enabled": True,
+        "autoAllowBashIfSandboxed": True,
+        "allowUnsandboxedCommands": False,
+        "failIfUnavailable": True,
+    }
+
+
 def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgentOptions:
     system_prompt: dict[str, Any] = {"type": "preset", "preset": "claude_code"}
     if spec.system_prompt:
@@ -116,9 +128,7 @@ def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgen
         allowed_tools=effective_tools(
             spec.allowed_tools if spec.allowed_tools is not None else settings.default_allowed_tools
         ),
-        sandbox={"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False}
-        if settings.sandbox
-        else None,
+        sandbox=sandbox_settings() if settings.sandbox else None,
         disallowed_tools=spec.disallowed_tools or [],
         settings=json.dumps({"permissions": {"deny": secret_read_rules()}}),
         max_turns=spec.max_turns or settings.default_max_turns,
