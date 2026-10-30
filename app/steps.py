@@ -265,7 +265,9 @@ async def latest_artifacts(engine: Engine, item_id: str) -> dict[str, str]:
     latest = {a.name: a.content for a in rows}  # later rows overwrite earlier ones
     # An error is only news until something else is produced after it; a retry that
     # succeeded has fixed it, and later steps must not review a problem that is gone.
-    if rows and rows[-1].name != "error":
+    # Human comments are not progress: a retry comment must not hide the error it answers.
+    last = next((a for a in reversed(rows) if not a.name.startswith("human:")), None)
+    if last and last.name != "error":
         latest.pop("error", None)
     return latest
 
