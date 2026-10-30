@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import type { Column } from "../api/types";
-import { useBoardStore } from "../composables/useBoard";
+import { canShowMoreDone, useBoardStore } from "../composables/useBoard";
 import ItemCard from "./ItemCard.vue";
 
 const COLS: [Column, string][] = [
@@ -72,7 +72,7 @@ const open = (id: string) => b.openItem(id).catch(b.fail);
           @dragend="dragEnd"
         />
         <button
-          v-if="col === 'done' && b.doneTotal.value > b.board.value.done.length"
+          v-if="col === 'done' && canShowMoreDone(b.doneTotal.value, b.board.value.done.length, b.doneLimit.value)"
           type="button"
           class="more"
           @click="b.showMoreDone()"

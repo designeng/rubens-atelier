@@ -18,6 +18,10 @@ import type {
 export const POLL_MS = 5000;
 export const MAX_DONE = 500; // the server maximum
 export const DONE_PAGE = 50; // the server default; each "show more" adds this many
+
+/** More done items exist than are shown, and the limit can still grow. */
+export const canShowMoreDone = (total: number, shown: number, limit: number): boolean =>
+  total > shown && limit < MAX_DONE;
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
 
 /** Board state and actions; App.vue creates it once and provides it to the components. */
@@ -233,6 +237,7 @@ export function useBoard() {
     slug,
     board,
     doneTotal,
+    doneLimit,
     scheduler,
     openItemId,
     item,
