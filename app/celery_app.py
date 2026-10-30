@@ -45,6 +45,8 @@ celery_app.conf.update(
         },
     },
 )
+if settings.workspace_ttl_hours:
+    celery_app.conf.beat_schedule["prune-workspaces"] = {"task": "harness.prune_workspaces", "schedule": 3600}
 if settings.issue_repos:
     celery_app.conf.beat_schedule["poll-issues"] = {
         "task": "harness.poll_issues",
@@ -128,6 +130,29 @@ def cleanup_workspace(item_id: str) -> bool:
     if removed:
         log.info("removed the workspace of item %s", item_id)
     return removed
+
+
+@celery_app.task(name="harness.remove_workspaces", time_limit=1800)
+def remove_workspaces(ids: list[str], include_failed: bool = False) -> dict[str, str]:
+    """Delete workspaces from the volume the worker owns (see app.workspaces); the API only reads it."""
+    from . import workspaces
+
+    removed = asyncio.run(_with_engine(lambda engine, _store: workspaces.remove(engine, ids, include_failed=include_failed)))
+    log.info("workspaces: %s", removed)
+    return removed
+
+
+@celery_app.task(name="harness.prune_workspaces", time_limit=1800)
+def prune_workspaces() -> dict[str, str]:
+    """Beat, when workspace_ttl_hours is set: finished and orphaned workspaces past the TTL."""
+    from . import workspaces
+
+    async def run(engine, _store):
+        rows = await workspaces.describe(engine, await asyncio.to_thread(workspaces.scan, False))
+        ids = [r["id"] for r in workspaces.prunable(rows, older_than_hours=settings.workspace_ttl_hours)]
+        return await workspaces.remove(engine, ids) if ids else {}
+
+    return asyncio.run(_with_engine(run))
 
 
 @celery_app.task(name="harness.reconcile")

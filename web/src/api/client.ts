@@ -18,8 +18,9 @@ import type {
   SchedulerStatus,
   TaskEvent,
   TaskInfo,
-  WorkspaceOut,
+  WorkspaceList,
   WorkspacePhase,
+  WorkspaceQueued,
 } from "./types";
 
 export class ApiError extends Error {
@@ -145,9 +146,9 @@ export function createClient(
       if (f.size === false) q.set("size", "false");
       if (f.phase) q.set("phase", f.phase);
       if (f.project) q.set("project", f.project);
-      return api<WorkspaceOut[]>(`/workspaces${q.size ? `?${q}` : ""}`);
+      return api<WorkspaceList>(`/workspaces${q.size ? `?${q}` : ""}`);
     },
-    deleteWorkspace: (id: string) => api<void>(`/workspaces/${seg(id)}`, "DELETE"),
+    deleteWorkspace: (id: string) => api<WorkspaceQueued>(`/workspaces/${seg(id)}`, "DELETE"),
     pruneWorkspaces: (body: PruneIn) => api<PruneResult>("/workspaces/prune", "POST", body),
     githubApp: () => api<GithubApp>("/github/app"),
     installationRepositories: (id: number) => api<Repository[]>(`/github/installations/${seg(id)}/repositories`),

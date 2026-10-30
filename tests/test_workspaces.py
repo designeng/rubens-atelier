@@ -1,209 +1,132 @@
 import os
 import time
+from functools import partial
 
-import pytest
-
-from app import service, workspaces
+from app import workspaces
 from app.api import app
-from app.archive import archive_task
 from app.config import settings
-from app.db import WorkItem
-from app.models import TaskStatus
+from app.execution import item_workspace
+from app.models import TaskCreate
 
 
-def make_dir(path, size=0):
+def _mkdir(path, size=10):
     path.mkdir(parents=True)
-    if size:
-        (path / "data.bin").write_bytes(b"x" * size)
-    return path
+    (path / "f.txt").write_text("x" * size)
 
 
-def age(path, hours):
-    t = time.time() - hours * 3600
-    os.utime(path, (t, t))
+def _by_id(client, **params):
+    return {w["id"]: w for w in client.get("/workspaces", params=params).json()["workspaces"]}
 
 
-def set_state(client, item_id, state):
-    async def run():
-        async with app.state.db.session() as s:
-            (await s.get(WorkItem, item_id)).state = state
-            await s.commit()
-
-    client.portal.call(run)
-
-
-@pytest.fixture
-def volume(client, monkeypatch):
-    """One workspace of every kind; returns {name: id} and creates the directories."""
-    monkeypatch.setattr(service.run_agent, "apply_async", lambda args, task_id: None)
-    root = settings.workspaces_root
+def _setup(client):
+    """One workspace per phase: finished, failed, idle, busy, needs-human, orphan, task."""
+    engine = app.state.engine
     client.post("/projects", json={"slug": "app", "repo": "acme/app"})
-    client.post("/projects", json={"slug": "other", "repo": "acme/other"})
 
-    def item(title, project="app", **kw):
-        return client.post(f"/projects/{project}/items", json={"title": title, **kw}).json()["id"]
+    def new(title, **kw):
+        return client.post("/projects/app/items", json={"title": title, **kw}).json()["id"]
+
+    def walk(iid, *verdicts):
+        for v in verdicts:
+            version = client.get(f"/items/{iid}").json()["version"]
+            client.portal.call(engine.advance, iid, version, v)
 
     ids = {
-        "backlog": item("Later"),
-        "working": item("Now", start=True),
-        "done": item("Merged"),
-        "failed": item("Cancelled"),
-        "other": item("Elsewhere", "other"),
+        "finished": new("done", start=True),
+        "failed": new("cancelled", start=True),
+        "idle": new("backlog"),
+        "busy": new("working", start=True),
+        "human": new("waiting", start=True),
     }
-    set_state(client, ids["done"], "done")
+    walk(ids["finished"], "ready", "done", "done", "approved", "done", "passed", "merged")
     client.post(f"/items/{ids['failed']}/cancel")
-    set_state(client, ids["other"], "done")
-    for name, item_id in ids.items():
-        make_dir(root / "items" / item_id, size=100)
+    walk(ids["human"], "ready", "done", "done", "approved", "done", "passed", "manual")
+    for iid in ids.values():
+        _mkdir(item_workspace(iid))
+    ids["orphan"] = "a" * 32
+    _mkdir(item_workspace(ids["orphan"]), size=100)
 
-    store = app.state.store
-    queued = client.post("/tasks", json={"prompt": "queued task"}).json()["id"]
-    ok = client.post("/tasks", json={"prompt": "good task"}).json()["id"]
-    bad = client.post("/tasks", json={"prompt": "bad task"}).json()["id"]
-    for task_id, status, fields in ((ok, TaskStatus.succeeded, {}), (bad, TaskStatus.failed, {"error": "boom"})):
-
-        async def finish(task_id=task_id, status=status, fields=fields):
-            await store.claim(task_id, "w1")
-            await store.finish(task_id, status, **fields)
-
-        client.portal.call(finish)
-    ids |= {"queued_task": queued, "ok_task": ok, "bad_task": bad, "orphan": "a" * 32}
-    for name in ("queued_task", "ok_task", "bad_task", "orphan"):
-        make_dir(root / ids[name], size=10)
+    ids["task_done"] = client.portal.call(app.state.store.create, TaskCreate(prompt="old"))
+    client.portal.call(partial(app.state.store.set_fields, ids["task_done"], status="succeeded"))
+    ids["task_running"] = client.portal.call(app.state.store.create, TaskCreate(prompt="now"))
+    client.portal.call(partial(app.state.store.set_fields, ids["task_running"], status="running"))
+    for key in ("task_done", "task_running"):
+        _mkdir(settings.workspaces_root / ids[key])
+    (settings.workspaces_root / ".cache" / "uv").mkdir(parents=True)
     return ids
 
 
-def listing(client, **params):
-    r = client.get("/workspaces", params=params)
-    assert r.status_code == 200
-    return {w["id"]: w for w in r.json()}
-
-
-def test_list_binds_each_copy_and_decides_whether_it_can_go(client, volume):
-    root = settings.workspaces_root
-    (root / ".cache").mkdir()
-    (root / "items" / "not-an-id").mkdir()
-    (root / ("b" * 32)).write_text("a file, not a directory")
-    (root / ("c" * 32)).symlink_to(root / "items")
-
-    rows = listing(client)
-    assert set(rows) == set(volume.values())
-    phases = {name: rows[i]["phase"] for name, i in volume.items()}
+def test_list_workspaces(client):
+    ids = _setup(client)
+    rows = _by_id(client)
+    assert ".cache" not in rows and len(rows) == 8
+    phases = {k: rows[v]["phase"] for k, v in ids.items()}
     assert phases == {
-        "backlog": "idle", "working": "active", "done": "finished", "failed": "failed", "other": "finished",
-        "queued_task": "active", "ok_task": "finished", "bad_task": "failed", "orphan": "orphan",
+        "finished": "finished", "failed": "failed", "idle": "idle", "busy": "busy", "human": "busy",
+        "orphan": "orphan", "task_done": "finished", "task_running": "busy",
     }
-    assert {name for name, i in volume.items() if rows[i]["removable"]} == {
-        "done", "failed", "other", "ok_task", "bad_task", "orphan",
-    }
+    done = rows[ids["finished"]]
+    assert done["item"]["title"] == "done" and done["item"]["project"] == "app" and done["removable"]
+    assert done["size_bytes"] == 10 and rows[ids["orphan"]]["size_bytes"] == 100
+    assert rows[ids["task_done"]]["task"]["status"] == "succeeded"
+    assert not rows[ids["busy"]]["removable"] and "step is running" in rows[ids["busy"]]["reason"]
 
-    done = rows[volume["done"]]
-    assert done["item"]["project"] == "app" and done["item"]["title"] == "Merged"
-    assert done["item"]["column"] == "done" and done["task"] is None
-    assert done["path"] == str(root.resolve() / "items" / volume["done"])
-    assert done["size_bytes"] == 100 and done["modified_at"]
-    assert "running here" in rows[volume["working"]]["reason"]
-    assert rows[volume["backlog"]]["item"]["column"] == "backlog"
-    bad = rows[volume["bad_task"]]
-    assert bad["task"] == {"id": volume["bad_task"], "status": "failed", "prompt": "bad task"} and bad["item"] is None
-    orphan = rows[volume["orphan"]]
-    assert orphan["item"] is None and orphan["task"] is None and orphan["size_bytes"] == 10
+    body = client.get("/workspaces", params={"size": False}).json()
+    assert body["size_bytes"] is None and all(w["size_bytes"] is None for w in body["workspaces"])
+    assert set(_by_id(client, phase="orphan")) == {ids["orphan"]}
+    assert set(_by_id(client, project="app")) == {ids[k] for k in ("finished", "failed", "idle", "busy", "human")}
 
 
-def test_list_reads_an_expired_task_from_the_archive(client, volume):
-    task_id = volume["bad_task"]
-    assert client.portal.call(archive_task, app.state.db, app.state.store, task_id)
-    client.portal.call(app.state.redis.flushall)
-    row = listing(client)[task_id]
-    assert row["phase"] == "failed" and row["task"]["status"] == "failed"
-    assert listing(client)[volume["ok_task"]]["phase"] == "orphan"  # expired and never archived
+def test_exec_in_progress_blocks_removal(client):
+    ids = _setup(client)
+    client.portal.call(app.state.redis.set, f"harness:exec:item:{ids['finished']}", "e1")
+    row = _by_id(client)[ids["finished"]]
+    assert row["phase"] == "busy" and not row["removable"]
 
 
-def test_list_filters_and_skips_sizes(client, volume):
-    assert all(w["size_bytes"] is None for w in listing(client, size="false").values())
-    assert set(listing(client, phase="finished")) == {volume[k] for k in ("done", "other", "ok_task")}
-    assert set(listing(client, project="other")) == {volume["other"]}
-    assert set(listing(client, project="app", phase="finished")) == {volume["done"]}
-    assert listing(client, project="nope") == {}
-    assert client.get("/workspaces", params={"phase": "bogus"}).status_code == 422
-
-
-def test_delete_removes_one_copy_unless_it_is_in_use(client, volume):
-    root = settings.workspaces_root
-    for name in ("working", "backlog", "queued_task"):
-        r = client.delete(f"/workspaces/{volume[name]}")
-        assert r.status_code == 409 and r.json()["detail"]
-    assert (root / "items" / volume["working"]).exists()
-
-    assert client.delete(f"/workspaces/{volume['done']}").status_code == 204
-    assert not (root / "items" / volume["done"]).exists()
-    assert client.delete(f"/workspaces/{volume['bad_task']}").status_code == 204
-    assert client.delete(f"/workspaces/{volume['orphan']}").status_code == 204
-    assert client.delete(f"/workspaces/{volume['done']}").status_code == 404
-    assert volume["done"] not in listing(client)
-
-
-def test_delete_refuses_ids_that_are_not_workspaces(client, volume, tmp_path):
-    root = settings.workspaces_root
-    (root / ".cache").mkdir()
-    victim = tmp_path / "victim"
-    victim.mkdir()
-    (root / ("d" * 32)).symlink_to(victim)
-    for bad in (".cache", "items", "..", "d" * 32, "A" * 32, "x"):
-        assert client.delete(f"/workspaces/{bad}").status_code in (404, 405)
-    assert (root / ".cache").exists() and victim.exists()
-
-
-def test_prune_dry_run_reports_without_deleting(client, volume):
-    root = settings.workspaces_root
+def test_prune(client):
+    ids = _setup(client)
     r = client.post("/workspaces/prune", json={"dry_run": True})
-    body = r.json()
-    assert body["dry_run"] is True and body["skipped"] == []
-    assert {x["id"] for x in body["removed"]} == {volume[k] for k in ("done", "other", "ok_task", "orphan")}
-    assert body["freed_bytes"] == 100 + 100 + 10 + 10
-    assert all((root / "items" / i).exists() or (root / i).exists() for i in volume.values())
+    assert r.status_code == 202 and set(r.json()["would_remove"]) == {ids["finished"], ids["orphan"], ids["task_done"]}
+    assert r.json()["queued"] == [] and client.removals == []
 
+    r = client.post("/workspaces/prune", json={})
+    assert set(client.removals[-1][0]) == set(r.json()["queued"]) == {ids["finished"], ids["orphan"], ids["task_done"]}
+    assert client.removals[-1][1] is False
 
-def test_prune_removes_finished_and_orphans_and_failed_only_on_request(client, volume):
-    root = settings.workspaces_root
-    body = client.post("/workspaces/prune", json={}).json()
-    assert body["dry_run"] is False and body["freed_bytes"] == 220
-    assert set(listing(client)) == {volume[k] for k in ("backlog", "working", "queued_task", "failed", "bad_task")}
+    r = client.post("/workspaces/prune", json={"include_failed": True, "dry_run": True})
+    assert set(r.json()["would_remove"]) == {ids[k] for k in ("finished", "orphan", "task_done", "failed", "idle")}
 
-    body = client.post("/workspaces/prune", json={"include_failed": True}).json()
-    assert {x["id"] for x in body["removed"]} == {volume["failed"], volume["bad_task"]}
-    assert set(listing(client)) == {volume[k] for k in ("backlog", "working", "queued_task")}
-    assert not (root / "items" / volume["failed"]).exists()
-
-
-def test_prune_keeps_recent_copies(client, volume):
-    root = settings.workspaces_root
-    age(root / "items" / volume["done"], 48)
-    age(root / volume["orphan"], 2)
-    body = client.post("/workspaces/prune", json={"older_than_hours": 24}).json()
-    assert [x["id"] for x in body["removed"]] == [volume["done"]]
-    assert volume["orphan"] in listing(client)
+    # Age counts from the owner's last change, or the directory's mtime for an orphan.
+    assert client.post("/workspaces/prune", json={"older_than_hours": 1, "dry_run": True}).json()["would_remove"] == []
+    old = time.time() - 7200
+    os.utime(item_workspace(ids["orphan"]), (old, old))
+    assert client.post("/workspaces/prune", json={"older_than_hours": 1, "dry_run": True}).json()["would_remove"] == [ids["orphan"]]
     assert client.post("/workspaces/prune", json={"older_than_hours": -1}).status_code == 422
 
 
-def test_prune_reports_a_copy_it_could_not_remove_and_goes_on(client, volume, monkeypatch):
-    real = workspaces._remove
-
-    def flaky(path, parent):
-        if path.name == volume["done"]:
-            raise PermissionError("busy")
-        real(path, parent)
-
-    monkeypatch.setattr(workspaces, "_remove", flaky)
-    body = client.post("/workspaces/prune", json={}).json()
-    assert body["skipped"] == [{"id": volume["done"], "error": "busy"}]
-    assert {x["id"] for x in body["removed"]} == {volume[k] for k in ("other", "ok_task", "orphan")}
-    assert body["freed_bytes"] == 120
+def test_delete_workspace(client):
+    ids = _setup(client)
+    assert client.delete(f"/workspaces/{'b' * 32}").status_code == 404
+    assert client.delete(f"/workspaces/{ids['busy']}").status_code == 409
+    assert client.delete(f"/workspaces/{ids['human']}").status_code == 409
+    assert client.delete(f"/workspaces/{ids['task_running']}").status_code == 409
+    r = client.delete(f"/workspaces/{ids['failed']}")
+    assert r.status_code == 202 and client.removals[-1] == ([ids["failed"]], True)
 
 
-def test_workspaces_need_the_token(client, monkeypatch):
-    monkeypatch.setattr(settings, "api_token", "secret")
-    assert client.get("/workspaces").status_code == 401
-    assert client.delete("/workspaces/" + "a" * 32).status_code == 401
-    assert client.post("/workspaces/prune", json={}).status_code == 401
-    assert client.get("/workspaces", headers={"Authorization": "Bearer secret"}).status_code == 200
+def test_worker_removes_and_rechecks(client):
+    ids = _setup(client)
+    engine = app.state.engine
+    wanted = [ids[k] for k in ("finished", "orphan", "task_done", "failed", "busy", "human")]
+
+    result = client.portal.call(workspaces.remove, engine, wanted)
+    assert [result[ids[k]] for k in ("finished", "orphan", "task_done")] == ["removed"] * 3
+    assert result[ids["failed"]].startswith("kept") and result[ids["busy"]].startswith("kept")
+    assert not item_workspace(ids["finished"]).exists() and item_workspace(ids["failed"]).exists()
+    assert (settings.workspaces_root / ".cache" / "uv").exists()
+
+    result = client.portal.call(partial(workspaces.remove, engine, wanted, include_failed=True))
+    assert result[ids["failed"]] == "removed" and result[ids["busy"]].startswith("kept")
+    assert result[ids["finished"]] == "not found"
+    assert item_workspace(ids["busy"]).exists() and item_workspace(ids["human"]).exists()

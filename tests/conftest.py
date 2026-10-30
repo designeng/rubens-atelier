@@ -60,6 +60,12 @@ def client(redis):
             c.execs.append(exec_id)
 
         app.state.exec_enqueue = exec_enqueue
+        c.removals = []
+
+        async def workspaces_enqueue(ids, include_failed):
+            c.removals.append((ids, include_failed))
+
+        app.state.workspaces_enqueue = workspaces_enqueue
         c.checks_enqueued = []
 
         async def checks_enqueue(item_ids):

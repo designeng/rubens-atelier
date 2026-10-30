@@ -261,7 +261,13 @@ async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: Sta
 async def latest_artifacts(engine: Engine, item_id: str) -> dict[str, str]:
     async with engine.db.session() as s:
         rows = await s.scalars(select(Artifact).where(Artifact.item_id == item_id).order_by(Artifact.created_at))
-        return {a.name: a.content for a in rows}  # later rows overwrite earlier ones
+        rows = list(rows)
+    latest = {a.name: a.content for a in rows}  # later rows overwrite earlier ones
+    # An error is only news until something else is produced after it; a retry that
+    # succeeded has fixed it, and later steps must not review a problem that is gone.
+    if rows and rows[-1].name != "error":
+        latest.pop("error", None)
+    return latest
 
 
 async def _artifact(engine: Engine, item_id: str, name: str, content: str) -> None:

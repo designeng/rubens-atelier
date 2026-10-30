@@ -38,7 +38,7 @@ describe("createClient", () => {
   });
 
   it("lists workspaces with only the filters that are set", async () => {
-    const f = fakeFetch(() => json([]));
+    const f = fakeFetch(() => json({ root: "/w", count: 0, size_bytes: null, workspaces: [] }));
     const api = createClient(() => "t", f.impl);
     await api.listWorkspaces();
     await api.listWorkspaces({ size: false, phase: "failed", project: "my app" });
@@ -47,7 +47,7 @@ describe("createClient", () => {
   });
 
   it("deletes and prunes workspaces", async () => {
-    const f = fakeFetch(() => json({ dry_run: true, removed: [], freed_bytes: 0, skipped: [] }));
+    const f = fakeFetch(() => json({ dry_run: true, queued: [], would_remove: [], size_bytes: 0 }));
     const api = createClient(() => "t", f.impl);
     await api.deleteWorkspace("a/b");
     const body = { older_than_hours: 24, include_failed: false, dry_run: true };

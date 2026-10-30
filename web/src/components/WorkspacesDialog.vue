@@ -4,7 +4,7 @@ import type { PruneResult, WorkspaceOut, WorkspacePhase } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
 import { elapsed, formatBytes } from "../format";
 
-const PHASES: WorkspacePhase[] = ["active", "idle", "finished", "failed", "orphan"];
+const PHASES: WorkspacePhase[] = ["orphan", "finished", "failed", "idle", "busy"];
 
 const b = useBoardStore();
 const dlg = ref<HTMLDialogElement>();
@@ -19,6 +19,7 @@ const busy = ref(false);
 let loads = 0;
 
 const total = computed(() => rows.value.reduce((n, r) => n + (r.size_bytes ?? 0), 0));
+const note = ref("");
 const measured = computed(() => rows.value.every((r) => r.size_bytes !== null));
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const pruneBody = (dry_run: boolean) => ({
@@ -34,10 +35,10 @@ async function load() {
   try {
     const quick = await b.api.listWorkspaces({ ...filter, size: false });
     if (mine !== loads) return;
-    rows.value = quick;
+    rows.value = quick.workspaces;
     err.value = "";
     const sized = await b.api.listWorkspaces(filter);
-    if (mine === loads) rows.value = sized;
+    if (mine === loads) rows.value = sized.workspaces;
   } catch (e) {
     if (mine === loads) err.value = message(e);
   }
@@ -46,6 +47,7 @@ async function load() {
 function open() {
   preview.value = null;
   err.value = "";
+  note.value = "";
   dlg.value?.showModal();
   load();
 }
@@ -67,8 +69,18 @@ function remove(w: WorkspaceOut) {
   return guarded(async () => {
     await b.api.deleteWorkspace(w.id);
     preview.value = null;
-    await load();
+    await settle("Deleting…");
   });
+}
+
+// The worker owns the volume and deletes after the request returned: show the list again once it had a moment.
+async function settle(text: string) {
+  note.value = text;
+  await load();
+  setTimeout(async () => {
+    await load();
+    note.value = "";
+  }, 2000);
 }
 
 const check = () =>
@@ -77,12 +89,12 @@ const check = () =>
   });
 
 function prune() {
-  if (!preview.value || !confirm(`Delete ${preview.value.removed.length} working copies?`)) return;
+  const n = preview.value?.would_remove?.length ?? 0;
+  if (!n || !confirm(`Delete ${n} working copies?`)) return;
   return guarded(async () => {
-    const done = await b.api.pruneWorkspaces(pruneBody(false));
+    await b.api.pruneWorkspaces(pruneBody(false));
     preview.value = null;
-    await load();
-    if (done.skipped.length) err.value = `Not removed: ${done.skipped.map((s) => `${s.id}: ${s.error}`).join("; ")}`;
+    await settle(`Deleting ${n} copies…`);
   });
 }
 
@@ -144,14 +156,15 @@ defineExpose({ open });
         also failed and cancelled
       </label>
       <button :disabled="busy" @click="check">Preview</button>
-      <button class="primary" :disabled="busy || !preview || !preview.removed.length" @click="prune">Prune</button>
+      <button class="primary" :disabled="busy || !preview || !preview.would_remove?.length" @click="prune">Prune</button>
     </div>
     <div v-if="preview" class="muted">
-      {{ preview.removed.length }} copies to remove, {{ formatBytes(preview.freed_bytes) }} to free. Finished and orphaned
-      copies go<template v-if="includeFailed">, failed ones too</template>.
+      {{ preview.would_remove?.length ?? 0 }} copies to remove, {{ formatBytes(preview.size_bytes) }} to free. Finished and
+      orphaned copies go<template v-if="includeFailed">, failed and backlog ones too</template>.
     </div>
     <div class="row" style="margin-top: 14px">
       <button @click="dlg?.close()">Close</button>
+      <span class="muted">{{ note }}</span>
       <span class="err">{{ err }}</span>
     </div>
   </dialog>
