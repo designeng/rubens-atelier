@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -176,6 +176,10 @@ class Database:
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessions() as s:
             yield s
+
+    async def ping(self) -> None:
+        async with self.engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
 
     async def dispose(self) -> None:
         await self.engine.dispose()

@@ -61,6 +61,8 @@ On the board, **Session** (in a story's "Now" block and next to each run) shows 
 | `POST` | `/tasks/{id}/cancel` | Cancel: a queued task is removed at once, a running one stops within about 2 seconds |
 | `GET` | `/tasks?status=` | Task list |
 
+Observability. `GET /healthz` (no token) pings Redis and Postgres, each with a 2-second timeout: it answers `200 {"ok": true, "redis": true, "postgres": true}`, or `503` with the failing dependency set to `false`. `GET /metrics` (bearer token) is Prometheus text computed on each scrape: `harness_queue_depth` (messages in the Celery queue), `harness_tasks{status}` (the newest 200 tasks in Redis), and, from the Postgres `runs` of the last 24 hours, `harness_runs{status}`, `harness_run_cost_usd_sum`, `harness_run_duration_seconds_sum` / `_count` (finished runs) and `harness_run_success_ratio` (succeeded / (succeeded + failed), 0 when there are none). They are gauges over the window, not counters.
+
 Follow-up: `POST /tasks {"prompt": "...", "parent_task_id": "<id>"}` continues the same Claude session in the same workspace. For an issue task it pushes to the same branch, and the PR updates.
 
 ```bash

@@ -56,6 +56,8 @@ Docker-образ собирает доску сам, в отдельной Node
 | `POST` | `/tasks/{id}/cancel` | Отмена: задача из очереди снимается сразу, работающая останавливается в течение примерно 2 секунд |
 | `GET` | `/tasks?status=` | Список задач |
 
+Наблюдаемость. `GET /healthz` (без токена) проверяет Redis и Postgres, у каждого таймаут 2 секунды: отвечает `200 {"ok": true, "redis": true, "postgres": true}` или `503`, где упавшая зависимость равна `false`. `GET /metrics` (bearer-токен) отдаёт текст в формате Prometheus, считается при каждом запросе: `harness_queue_depth` (сообщений в очереди Celery), `harness_tasks{status}` (200 новейших задач в Redis) и, по `runs` в Postgres за последние 24 часа, `harness_runs{status}`, `harness_run_cost_usd_sum`, `harness_run_duration_seconds_sum` / `_count` (завершённые run'ы) и `harness_run_success_ratio` (succeeded / (succeeded + failed), 0 если их нет). Это gauge'и за окно, а не счётчики.
+
 Follow-up: `POST /tasks {"prompt": "...", "parent_task_id": "<id>"}` продолжает ту же Claude-сессию в том же workspace. Для issue-задачи он пушит в ту же ветку, и PR обновляется.
 
 ```bash

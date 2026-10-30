@@ -1,16 +1,18 @@
+import asyncio
 import json
 import secrets
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
 
-from . import board_api, checks, terminal, webhooks, workspaces
+from . import board_api, checks, metrics, terminal, webhooks, workspaces
 from .archive import events_after, load_transcript
 from .config import settings
 from .db import Database
@@ -22,6 +24,7 @@ from .store import TaskStore
 from .workflow import load_workflows
 
 SSE_BLOCK_MS = 15_000
+HEALTH_TIMEOUT = 2.0
 
 
 @asynccontextmanager
@@ -97,10 +100,27 @@ async def _archived_events(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"invalid event id {after!r}") from None
 
 
+async def _healthy(check: Awaitable[object]) -> bool:
+    try:
+        await asyncio.wait_for(check, HEALTH_TIMEOUT)
+    except Exception:
+        return False
+    return True
+
+
 @app.get("/healthz")
-async def healthz(store: Store) -> dict:
-    await store.r.ping()
-    return {"ok": True}
+async def healthz(store: Store, db: Db) -> JSONResponse:
+    redis_ok, postgres_ok = await asyncio.gather(_healthy(store.r.ping()), _healthy(db.ping()))
+    ok = redis_ok and postgres_ok
+    return JSONResponse(
+        {"ok": ok, "redis": redis_ok, "postgres": postgres_ok},
+        status_code=status.HTTP_200_OK if ok else status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+@app.get("/metrics", dependencies=[Depends(require_token)])
+async def get_metrics(store: Store, db: Db) -> PlainTextResponse:
+    return PlainTextResponse(await metrics.collect(store, db), media_type="text/plain; version=0.0.4")
 
 
 @app.post("/tasks", status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_token)])
