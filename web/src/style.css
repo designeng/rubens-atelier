@@ -49,6 +49,7 @@ dialog input, dialog select { width:100%; }
 dialog textarea { width:100%; }
 .err { color:var(--bad); }
 #detail.wide { width:min(960px, 100%); }
+button.more { width:100%; margin-top:6px; color:var(--muted); }
 button.link { border:none; background:none; padding:0 4px; color:var(--accent); font-size:12px; }
 .session .log { max-height:70vh; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:8px; }
 .session .follow { float:right; font-size:12px; } .session .follow input { vertical-align:-2px; }

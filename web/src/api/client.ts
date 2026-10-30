@@ -77,7 +77,7 @@ export function createClient(
   fetchImpl: typeof fetch = (...a) => fetch(...a),
   onOk: () => void = () => {},
 ) {
-  async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  async function api<T>(path: string, method = "GET", body?: unknown, onHeaders?: (h: Headers) => void): Promise<T> {
     const res = await fetchImpl(path, {
       method,
       headers: { "content-type": "application/json", authorization: `Bearer ${getToken()}` },
@@ -85,6 +85,7 @@ export function createClient(
     });
     if (!res.ok) throw await apiError(res);
     const data = (res.status === 204 ? undefined : await res.json()) as T;
+    onHeaders?.(res.headers);
     onOk();
     return data;
   }
@@ -120,7 +121,14 @@ export function createClient(
     listProjects: () => api<ProjectOut[]>("/projects"),
     createProject: (p: ProjectIn) => api<ProjectOut>("/projects", "POST", p),
     updateProject: (slug: string, patch: ProjectPatch) => api<ProjectOut>(`/projects/${seg(slug)}`, "PATCH", patch),
-    getBoard: (slug: string) => api<Board>(`/projects/${seg(slug)}/board`),
+    // The done column holds the `doneLimit` newest items; `doneTotal` is how many there are in all.
+    getBoard: async (slug: string, doneLimit: number): Promise<{ board: Board; doneTotal: number }> => {
+      let doneTotal = 0;
+      const board = await api<Board>(`/projects/${seg(slug)}/board?done_limit=${doneLimit}`, "GET", undefined, (h) => {
+        doneTotal = Number(h.get("x-done-total") ?? 0);
+      });
+      return { board, doneTotal };
+    },
     createItem: (slug: string, item: ItemIn) => api<ItemOut>(`/projects/${seg(slug)}/items`, "POST", item),
     importIssues: (slug: string) => api<ImportResult>(`/projects/${seg(slug)}/import-issues`, "POST"),
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),

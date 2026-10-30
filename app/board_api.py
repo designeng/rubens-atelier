@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from . import github_app, gitops, terminal, workspaces
@@ -220,21 +220,31 @@ def _item_out(engine: Engine, item: WorkItem) -> ItemOut:
     )
 
 
-async def _progress(engine: Engine, s, item: WorkItem) -> dict[str, Any] | None:
+async def _progress(
+    engine: Engine,
+    s,
+    item: WorkItem,
+    runs: dict[tuple[str, int], Run] | None = None,
+    live: dict[str, dict[str, Any] | None] | None = None,
+) -> dict[str, Any] | None:
     """Agent step: its live run (turn, activity, todos) or that it waits for a scheduler slot.
-    Action and check steps: just which one is running."""
+    Action and check steps: just which one is running. `runs` (by item id and version) and
+    `live` (store progress by task id) are preloaded by the board; without them they are read here."""
     wf = engine.workflows.get(item.workflow)
     st = wf.states.get(item.state) if wf and item.state else None
     if st is None or not (st.agent or st.action or st.check):
         return None
     if not st.agent:
         return {"step": st.action or st.check, "kind": st.kind}
-    run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
+    if runs is None:
+        run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
+    else:
+        run = runs.get((item.id, item.version))
     if run is None:
         queued = bool(engine.scheduler and await engine.scheduler.is_pending(item.id, item.version))
         return {"step": st.agent, "kind": "agent", "queued": queued}
-    live = await engine.store.progress(run.task_id) or {}
-    return {"step": st.agent, "kind": "agent", "task_id": run.task_id, **live}
+    progress = await engine.store.progress(run.task_id) if live is None else live.get(run.task_id)
+    return {"step": st.agent, "kind": "agent", "task_id": run.task_id, **(progress or {})}
 
 
 _OPEN_QUESTIONS = re.compile(r"^#{1,6}\s*open questions\s*:?\s*$", re.I | re.M)
@@ -298,16 +308,22 @@ async def _dependents(s, project_id: str) -> dict[str, list[str]]:
 
 
 async def _item_with_progress(
-    engine: Engine, s, item: WorkItem, dependents: dict[str, list[str]] | None = None
+    engine: Engine,
+    s,
+    item: WorkItem,
+    dependents: dict[str, list[str]] | None = None,
+    blockers: dict[str, WorkItem] | None = None,
+    runs: dict[tuple[str, int], Run] | None = None,
+    live: dict[str, dict[str, Any] | None] | None = None,
 ) -> ItemOut:
     out = _item_out(engine, item)
     if dependents is None:
         dependents = await _dependents(s, item.project_id)
     out.blocking = dependents.get(item.id, [])
     if out.column == "backlog":
-        out.blocked = await engine.unfinished_blockers(s, item)
+        out.blocked = await engine.unfinished_blockers(s, item, blockers)
     if out.column == "working":
-        out.progress = await _progress(engine, s, item)
+        out.progress = await _progress(engine, s, item, runs, live)
     elif out.column == "needs_human":
         out.attention = await _attention(engine, s, item)
     return out
@@ -498,19 +514,67 @@ async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
         return ImportResult(imported=[_item_out(engine, i) for i in new], skipped=len(issues) - len(new))
 
 
+DONE_LIMIT_DEFAULT = 50
+DONE_LIMIT_MAX = 500
+
+
 @router.get("/projects/{slug}/board")
-async def board(slug: str, db: Db, engine: Eng) -> dict[Column, list[ItemOut]]:
+async def board(
+    slug: str,
+    response: Response,
+    db: Db,
+    engine: Eng,
+    done_limit: Annotated[int, Query(ge=1, le=DONE_LIMIT_MAX)] = DONE_LIMIT_DEFAULT,
+) -> dict[Column, list[ItemOut]]:
+    """The items of the project by column. The done column holds only the `done_limit` most
+    recently updated items; how many there are in total is in the `X-Done-Total` header."""
     project = await _project(db, slug)
     columns: dict[Column, list[ItemOut]] = {c: [] for c in Column.__args__}
+    in_project = WorkItem.project_id == project.id
+    done_cond = engine.states_where(lambda st: st.terminal == "succeeded")
     async with db.session() as s:
-        items = await s.scalars(
-            select(WorkItem).where(WorkItem.project_id == project.id).order_by(WorkItem.updated_at.desc())
-        )
+        if done_cond is None:
+            open_query = select(WorkItem).where(in_project)
+            done_items, done_total = [], 0
+        else:
+            open_query = select(WorkItem).where(in_project, or_(WorkItem.state.is_(None), not_(done_cond)))
+            done_total = await s.scalar(select(func.count()).select_from(WorkItem).where(in_project, done_cond))
+            done_items = (
+                await s.scalars(
+                    select(WorkItem).where(in_project, done_cond).order_by(WorkItem.updated_at.desc()).limit(done_limit)
+                )
+            ).all()
+        open_items = (await s.scalars(open_query.order_by(WorkItem.updated_at.desc()))).all()
         dependents = await _dependents(s, project.id)
-        for item in items.all():
-            out = await _item_with_progress(engine, s, item, dependents)
+        blockers = await engine.load_blockers(s, (i for i in open_items if i.state is None))
+        runs, live = await _preload_runs(engine, s, open_items)
+        for item in [*open_items, *done_items]:
+            out = await _item_with_progress(engine, s, item, dependents, blockers, runs, live)
             columns[out.column].append(out)
+    columns["done"].sort(key=lambda o: o.updated_at, reverse=True)
+    response.headers["X-Done-Total"] = str(done_total)
     return columns
+
+
+async def _preload_runs(
+    engine: Engine, s, items: list[WorkItem]
+) -> tuple[dict[tuple[str, int], Run], dict[str, dict[str, Any] | None]]:
+    """The runs of the items' current versions, and their live progress, for the agent steps
+    among `items`: one query and concurrent store reads instead of a round trip per item."""
+    ids = []
+    for item in items:
+        wf = engine.workflows.get(item.workflow)
+        st = wf.states.get(item.state) if wf and item.state else None
+        if st is not None and st.agent and not st.terminal and not st.human:
+            ids.append(item.id)
+    if not ids:
+        return {}, {}
+    versions = {i.id: i.version for i in items}
+    rows = await s.scalars(select(Run).where(Run.item_id.in_(ids)))
+    runs = {(r.item_id, r.version): r for r in rows if versions[r.item_id] == r.version}
+    task_ids = [r.task_id for r in runs.values()]
+    progress = await asyncio.gather(*(engine.store.progress(t) for t in task_ids))
+    return runs, dict(zip(task_ids, progress))
 
 
 @router.get("/projects/{slug}/inbox")
