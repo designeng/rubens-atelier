@@ -118,10 +118,10 @@ describe("createClient", () => {
     const f = fakeFetch(() => json({ advanced: true }));
     const api = createClient(() => "t", f.impl);
     await expect(api.answerRequest("r1", "approve", "looks good")).resolves.toEqual({ advanced: true });
-    await api.createItem("app", { title: "x", body: "y", start: true });
+    await api.createItem("app", { title: "x", body: "y", priority: 50, start: true });
     expect(f.calls.map((c) => [c.url, c.init.method, JSON.parse(c.init.body as string)])).toEqual([
       ["/requests/r1/answer", "POST", { option: "approve", comment: "looks good" }],
-      ["/projects/app/items", "POST", { title: "x", body: "y", start: true }],
+      ["/projects/app/items", "POST", { title: "x", body: "y", priority: 50, start: true }],
     ]);
     expect((f.calls[0].init.headers as Record<string, string>)["content-type"]).toBe("application/json");
   });

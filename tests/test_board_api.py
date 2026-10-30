@@ -129,6 +129,14 @@ def test_import_issues_errors(client, monkeypatch):
     assert client.get("/projects/app/board").json()["backlog"] == []
 
 
+def test_create_item_with_priority(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    assert client.post("/projects/app/items", json={"title": "Plain"}).json()["priority"] == 0
+    urgent = client.post("/projects/app/items", json={"title": "Hot", "priority": 50}).json()
+    assert urgent["priority"] == 50
+    assert client.get(f"/items/{urgent['id']}").json()["priority"] == 50
+
+
 def test_validation_and_scoping(client):
     assert client.post("/projects", json={"slug": "Bad Slug", "repo": "acme/app"}).status_code == 422
     assert client.get("/projects/missing/board").status_code == 404

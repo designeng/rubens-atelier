@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useBoardStore } from "../composables/useBoard";
+import { DEFAULT_URGENCY, URGENCY_LEVELS } from "../urgency";
 
 const emit = defineEmits<{ created: [] }>();
 const b = useBoardStore();
@@ -8,6 +9,7 @@ const dlg = ref<HTMLDialogElement>();
 const title = ref("");
 const body = ref("");
 const budget = ref("");
+const urgency = ref(DEFAULT_URGENCY);
 const err = ref("");
 const busy = ref(false);
 
@@ -15,6 +17,7 @@ function open(initialTitle = "") {
   title.value = initialTitle;
   body.value = "";
   budget.value = "";
+  urgency.value = DEFAULT_URGENCY;
   err.value = "";
   dlg.value?.showModal();
 }
@@ -31,6 +34,7 @@ async function create() {
       title: t,
       body: body.value,
       budget_usd: budget.value.trim() === "" ? null : Number(budget.value),
+      priority: urgency.value,
       start: true,
     });
     dlg.value?.close();
@@ -53,6 +57,10 @@ defineExpose({ open });
     <textarea id="iBody" v-model="body" rows="8"></textarea>
     <label for="iBudget">Budget, $ (empty: no limit)</label>
     <input id="iBudget" v-model="budget" type="number" min="0.01" step="any" />
+    <label for="iUrgency">Urgency (more urgent work is picked up first)</label>
+    <select id="iUrgency" v-model.number="urgency">
+      <option v-for="l in URGENCY_LEVELS" :key="l.value" :value="l.value">{{ l.label }}</option>
+    </select>
     <div class="row" style="margin-top: 14px">
       <button class="primary" :disabled="busy" @click="create">Create &amp; start</button>
       <button @click="dlg?.close()">Cancel</button>
