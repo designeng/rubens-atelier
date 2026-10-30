@@ -229,3 +229,55 @@ export interface TaskEvent {
   type: string;
   data: Record<string, unknown>;
 }
+
+// GET /workspaces (app/workspaces.py): a working copy on the volume and what it belongs to.
+export type WorkspacePhase = "orphan" | "finished" | "failed" | "idle" | "busy";
+
+export interface WorkspaceOut {
+  id: string;
+  kind: "item" | "task" | string;
+  path: string;
+  size_bytes: number | null;
+  modified_at: string;
+  item: {
+    id: string;
+    project: string;
+    kind: string;
+    title: string;
+    state: string | null;
+    column: string;
+    branch: string | null;
+    pr_url: string | null;
+    updated_at: string;
+  } | null;
+  task: { id: string; status: TaskStatus; prompt: string; finished_at: string | null } | null;
+  phase: WorkspacePhase;
+  reason: string;
+  removable: boolean;
+}
+
+export interface WorkspaceList {
+  root: string;
+  count: number;
+  size_bytes: number | null;
+  workspaces: WorkspaceOut[];
+}
+
+export interface PruneIn {
+  older_than_hours: number;
+  include_failed: boolean;
+  dry_run: boolean;
+}
+
+// The worker deletes, so a real prune only reports what it queued.
+export interface PruneResult {
+  dry_run: boolean;
+  queued: string[];
+  would_remove: string[] | null;
+  size_bytes: number;
+}
+
+export interface WorkspaceQueued {
+  queued: string[];
+  phase: WorkspacePhase;
+}

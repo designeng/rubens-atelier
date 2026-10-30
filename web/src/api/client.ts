@@ -11,11 +11,16 @@ import type {
   ItemPatch,
   Models,
   ProjectPatch,
+  PruneIn,
+  PruneResult,
   Repository,
   SchedulerLimits,
   SchedulerStatus,
   TaskEvent,
   TaskInfo,
+  WorkspaceList,
+  WorkspacePhase,
+  WorkspaceQueued,
 } from "./types";
 
 export class ApiError extends Error {
@@ -135,6 +140,16 @@ export function createClient(
     resumeScheduler: () => api<SchedulerStatus>("/scheduler/resume", "POST", {}),
     setSchedulerLimits: (limits: Partial<SchedulerLimits>) =>
       api<SchedulerStatus>("/scheduler/limits", "PATCH", limits),
+    // size=false skips measuring the copies on disk; empty filters are left out of the query.
+    listWorkspaces: (f: { size?: boolean; phase?: WorkspacePhase | ""; project?: string } = {}) => {
+      const q = new URLSearchParams();
+      if (f.size === false) q.set("size", "false");
+      if (f.phase) q.set("phase", f.phase);
+      if (f.project) q.set("project", f.project);
+      return api<WorkspaceList>(`/workspaces${q.size ? `?${q}` : ""}`);
+    },
+    deleteWorkspace: (id: string) => api<WorkspaceQueued>(`/workspaces/${seg(id)}`, "DELETE"),
+    pruneWorkspaces: (body: PruneIn) => api<PruneResult>("/workspaces/prune", "POST", body),
     githubApp: () => api<GithubApp>("/github/app"),
     installationRepositories: (id: number) => api<Repository[]>(`/github/installations/${seg(id)}/repositories`),
   };

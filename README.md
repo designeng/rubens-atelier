@@ -118,6 +118,8 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `PATCH` | `/scheduler/limits` | `{max_agents?, max_agents_per_project?, force?}`: change the slot limits without a restart; `DELETE` returns to the settings |
 | `POST` | `/github/webhook` | GitHub events (signed with `HARNESS_GITHUB_WEBHOOK_SECRET`, not the bearer token): re-check the items waiting on that commit or PR, see [GitHub webhook](#github-webhook) |
 
+The board's **Workspaces** button shows the list and runs the cleanup with a preview first.
+
 Project settings can also be edited on the board (**Settings**). A changed `verify_command` applies from the next agent step of every story, including running ones. A changed `base_branch` applies only to stories that have not created their workspace yet; started ones keep their base.
 
 **Scheduler.** Agent steps do not go to Celery right away; they wait in a priority queue: higher item `priority` first, FIFO on ties. A step is handed out only when a slot is free: at most `HARNESS_MAX_AGENTS` in total and at most `HARNESS_MAX_AGENTS_PER_PROJECT` per project. Both limits can be changed on the fly, in the board header (**slots**, **per project**) or via `PATCH /scheduler/limits`; the override lives in Redis and applies to every dispatcher. A raised limit hands out waiting steps right away; agents above a lowered one finish their step. The pace follows the subscription windows that Claude Code reports through `rate_limit` events (status, utilization, reset time):
