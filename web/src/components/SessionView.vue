@@ -3,6 +3,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { ApiError } from "../api/client";
 import type { TaskEvent, TaskInfo } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
+import { formatUsd } from "../format";
 import { transcript } from "../session";
 
 // The full agent session of one run, live: replays the task's event log over SSE and keeps
@@ -128,7 +129,7 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
       <span v-if="live" class="spin"></span>
       <template v-if="task">{{ task.status }}</template>
       · {{ turns }} turns
-      <template v-if="task?.cost_usd != null"> · ${{ task.cost_usd.toFixed(2) }}</template>
+      <template v-if="task?.cost_usd != null"> · {{ formatUsd(task.cost_usd) }}</template>
       <template v-if="task?.session_id"> · session {{ task.session_id }}</template>
       <label class="follow"><input v-model="follow" type="checkbox" /> follow</label>
     </p>

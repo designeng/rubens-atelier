@@ -59,6 +59,8 @@ class Project(Base):
     installation_id: Mapped[int | None] = mapped_column(BigInteger)
     # Merge a story's PR once it is reviewed and CI passed, instead of waiting for a human.
     auto_merge: Mapped[bool] = mapped_column(default=False)
+    # Most the project's agent runs may cost in total; None = unlimited (see budget.py).
+    budget_usd: Mapped[float | None]
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
@@ -84,6 +86,8 @@ class WorkItem(Base):
     priority: Mapped[int] = mapped_column(default=0)  # higher runs first
     # Model for every agent step of this item; None = the workflow state's or the default model.
     model: Mapped[str | None] = mapped_column(String(100))
+    # Most the item's runs and those of its descendants may cost; None = unlimited.
+    budget_usd: Mapped[float | None]
     # Ids of items that must succeed before this one can be started.
     blocked_by: Mapped[list[str]] = mapped_column(default=list)
     # Claude session per role, so a role can resume its own context on the next visit.

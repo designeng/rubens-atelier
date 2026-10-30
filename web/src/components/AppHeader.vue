@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useBoardStore } from "../composables/useBoard";
+import { overBudget, spendText } from "../format";
 import { loadTheme, saveTheme, THEMES, type Theme } from "../theme";
 
 const emit = defineEmits<{ settings: []; workspaces: []; github: []; "new-project": []; "new-item": [title: string] }>();
@@ -16,6 +17,8 @@ const githubLabel = computed(() =>
       ? `GitHub ✓ ${liveInstallations.value.map((i) => i.account).join(", ")}`
       : "Connect GitHub",
 );
+const current = computed(() => b.projects.value.find((p) => p.slug === b.slug.value));
+const projectMoney = computed(() => (current.value ? spendText(current.value.spent_usd, current.value.budget_usd) : null));
 const schedulerText = computed(() => {
   const sc = b.scheduler.value;
   if (!sc) return "";
@@ -69,6 +72,14 @@ defineExpose({ clearTitle: () => (title.value = "") });
     <select :value="b.slug.value" @change="onProject">
       <option v-for="p in b.projects.value" :key="p.id" :value="p.slug">{{ p.slug }}</option>
     </select>
+    <span
+      v-if="projectMoney"
+      class="muted"
+      :class="{ err: current && overBudget(current.spent_usd, current.budget_usd) }"
+      title="Spent on agent runs / project budget"
+    >
+      {{ projectMoney }}
+    </span>
     <button title="Project settings" :disabled="!b.slug.value" @click="emit('settings')">Settings</button>
     <button title="Working copies on disk: see them and clear the finished ones" @click="emit('workspaces')">
       Workspaces

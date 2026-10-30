@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { ArtifactOut, GitSnapshot } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
-import { rerunReasons, todoMark } from "../format";
+import { formatUsd, overBudget, rerunReasons, todoMark } from "../format";
 import ProgressBlock from "./ProgressBlock.vue";
 import SessionView from "./SessionView.vue";
 import TerminalBlock from "./TerminalBlock.vue";
@@ -137,6 +137,21 @@ async function setModel(value: string): Promise<void> {
   }
 }
 
+// The budget saves on change; empty removes the limit. The server refuses zero and negatives.
+const budgetError = ref("");
+async function setBudget(e: Event): Promise<void> {
+  const i = it.value;
+  const input = e.target as HTMLInputElement;
+  if (!i) return;
+  budgetError.value = "";
+  try {
+    await b.updateItem(i.id, { budget_usd: input.value.trim() === "" ? null : input.valueAsNumber });
+  } catch (err) {
+    budgetError.value = err instanceof Error ? err.message : String(err);
+    input.value = i.budget_usd == null ? "" : String(i.budget_usd);
+  }
+}
+
 function confirmDelete(id: string, title: string): void {
   if (window.confirm(`Delete “${title}”? This can't be undone.`)) void b.deleteItem(id);
 }
@@ -210,6 +225,25 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
         <span v-if="it.progress?.task_id" class="muted">the running step keeps its model; the next one uses this</span>
         <span class="err">{{ modelError }}</span>
       </div>
+      <div class="row budget">
+        <label for="iBudget">Budget, $</label>
+        <input
+          id="iBudget"
+          type="number"
+          min="0.01"
+          step="any"
+          class="num"
+          placeholder="none"
+          :value="it.budget_usd ?? ''"
+          :disabled="!editable"
+          :title="it.kind === 'epic' ? 'Covers the epic and everything below it' : 'Covers this item and its children'"
+          @change="setBudget"
+        />
+        <span :class="overBudget(it.spent_usd, it.budget_usd) ? 'err' : 'muted'">
+          spent {{ formatUsd(it.spent_usd) }}<template v-if="overBudget(it.spent_usd, it.budget_usd)"> · limit reached: raise it, then retry</template>
+        </span>
+        <span class="err">{{ budgetError }}</span>
+      </div>
       <template v-if="it.progress">
         <h4>Now</h4>
         <ProgressBlock :progress="it.progress" :paused="b.isPaused()" />
@@ -274,7 +308,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <h4>Runs</h4>
       <div v-for="r in it.runs" :key="r.id">
         {{ r.state }}<span v-if="reruns.get(r.id)" class="muted"> ← {{ reruns.get(r.id) }}</span> · {{ r.role }} · {{ r.status }}<template v-if="r.verdict"> · result: {{ r.verdict }}</template>
-        <template v-if="r.cost_usd != null"> · ${{ r.cost_usd.toFixed(2) }}</template>
+        <template v-if="r.cost_usd != null"> · {{ formatUsd(r.cost_usd) }}</template>
         <span class="muted">task {{ r.task_id.slice(0, 8) }}</span>
         <button class="link" @click="toggleSession(r.task_id)">
           {{ sessionTask === r.task_id ? "hide session" : "session" }}

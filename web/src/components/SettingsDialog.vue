@@ -7,6 +7,7 @@ const dlg = ref<HTMLDialogElement>();
 const base = ref("");
 const verify = ref("");
 const autoMerge = ref(false);
+const budget = ref("");
 const err = ref("");
 const busy = ref(false);
 
@@ -21,6 +22,7 @@ function open() {
   base.value = p.base_branch || "";
   verify.value = p.verify_command || "";
   autoMerge.value = p.auto_merge;
+  budget.value = p.budget_usd == null ? "" : String(p.budget_usd);
   err.value = "";
   dlg.value?.showModal();
 }
@@ -33,6 +35,7 @@ async function save() {
       base_branch: base.value.trim() || null,
       verify_command: verify.value.trim() || null,
       auto_merge: autoMerge.value,
+      budget_usd: budget.value.trim() === "" ? null : Number(budget.value),
     });
     dlg.value?.close();
   } catch (e) {
@@ -52,6 +55,11 @@ defineExpose({ open });
     <label for="sBase">Base branch (empty: the repository's default branch; applies to new stories only)</label>
     <input id="sBase" v-model="base" />
     <label for="sVerify">Verify command (empty: no harness checks)</label><input id="sVerify" v-model="verify" />
+    <label for="sBudget">
+      Budget, $ (empty: no limit). Once the project's runs have cost this much, no new agent run starts; the
+      story waits in Needs you until you raise it.
+    </label>
+    <input id="sBudget" v-model="budget" type="number" min="0.01" step="any" />
     <label style="margin-top: 10px">
       <input v-model="autoMerge" type="checkbox" />
       Automerge: merge a story's PR once the reviewer approved it and CI passed. Off, or when GitHub

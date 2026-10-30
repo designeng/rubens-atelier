@@ -28,6 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from . import gitops
 from .actions import ACTIONS, ActionContext
 from .archive import archive_task
+from .budget import remaining
 from .config import settings
 from .db import Artifact, Project, Run, WorkItem, utcnow
 from .engine import Engine
@@ -140,6 +141,14 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
     async with db.session() as s:
         run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
         if run is None:
+            left, limit = await remaining(s, item, project)
+            if left is not None and left <= 0:
+                content = f"{st.agent} not started: the budget of the {limit} is used up. Raise it, then retry."
+                s.add(Artifact(item_id=item.id, name="error", content=content))
+                await s.commit()
+                log.warning("item %s: %s", item.id, content)
+                return FailureReason.budget.value
+            cap = settings.default_max_budget_usd if left is None else min(left, settings.default_max_budget_usd)
             interrupted = await store.r.hget(restarts_key(item.id, item.version), "session")
             spec = TaskCreate(
                 prompt=CONTINUE if interrupted else await build_prompt(engine, item, project, st),
@@ -149,6 +158,7 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 output_schema=verdict_schema(st.verdicts) if st.verdicts else None,
                 model=item.model or st.model,
                 effort=st.effort,
+                max_budget_usd=cap,
                 disallowed_tools=st.disallowed_tools or None,
                 metadata={"project": project.slug, "item_id": item.id, "state": item.state},
             )

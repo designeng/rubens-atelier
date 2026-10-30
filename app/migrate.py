@@ -15,6 +15,8 @@ from .config import ROOT, settings
 from .db import Base
 
 PRE_ALEMBIC_REVISION = "0001"
+# Columns that migrations after PRE_ALEMBIC_REVISION add: a pre-Alembic database cannot have them yet.
+ADDED_LATER = {"projects.budget_usd", "work_items.budget_usd"}
 
 
 def alembic_config() -> Config:
@@ -41,7 +43,7 @@ def _missing(schema: dict[str, set[str]]) -> list[str]:
         f"{t.name}.{c.name}"
         for t in Base.metadata.sorted_tables
         for c in t.columns
-        if c.name not in schema.get(t.name, set())
+        if c.name not in schema.get(t.name, set()) and f"{t.name}.{c.name}" not in ADDED_LATER
     ]
 
 

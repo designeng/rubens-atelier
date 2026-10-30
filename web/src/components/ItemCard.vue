@@ -2,12 +2,13 @@
 import { computed } from "vue";
 import type { ItemOut } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
-import { attentionBadge, canRunNow } from "../format";
+import { attentionBadge, canRunNow, overBudget, spendText } from "../format";
 import ProgressBlock from "./ProgressBlock.vue";
 
 const props = defineProps<{ item: ItemOut }>();
 const b = useBoardStore();
 const badge = computed(() => (props.item.attention ? attentionBadge(props.item.attention) : null));
+const money = computed(() => spendText(props.item.spent_usd, props.item.budget_usd));
 </script>
 
 <template>
@@ -18,6 +19,9 @@ const badge = computed(() => (props.item.attention ? attentionBadge(props.item.a
       {{ item.title }}
     </div>
     <div class="meta">{{ item.kind }} · {{ item.state || "backlog" }}{{ item.pr_url ? " · PR" : "" }}{{ item.issue ? ` · #${item.issue}` : "" }}</div>
+    <div v-if="money" class="meta" :class="{ err: overBudget(item.spent_usd, item.budget_usd) }" title="Spent / budget, children included">
+      {{ money }}
+    </div>
     <ProgressBlock v-if="item.progress" :progress="item.progress" :paused="b.isPaused()" />
     <button
       v-if="item.progress && canRunNow(item.progress)"

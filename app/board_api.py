@@ -14,6 +14,7 @@ from sqlalchemy import func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from . import github_app, gitops, terminal, workspaces
+from .budget import Spending, project_spending
 from .config import settings
 from .execution import item_workspace
 from .github import GitHub
@@ -62,6 +63,7 @@ class ProjectIn(BaseModel):
     verify_command: str | None = None
     installation_id: int | None = Field(default=None, description="GitHub App installation granting access to repo")
     auto_merge: bool = False
+    budget_usd: float | None = Field(default=None, gt=0, description="Most the project's agent runs may cost")
 
 
 class ProjectPatch(BaseModel):
@@ -74,6 +76,7 @@ class ProjectPatch(BaseModel):
     # Blank is rejected rather than stored: send null to clear.
     verify_command: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
     auto_merge: bool = False  # left out = unchanged; null is rejected
+    budget_usd: float | None = Field(default=None, gt=0)  # null removes the limit
 
 
 class ProjectOut(Orm):
@@ -84,6 +87,8 @@ class ProjectOut(Orm):
     verify_command: str | None
     installation_id: int | None
     auto_merge: bool
+    budget_usd: float | None
+    spent_usd: float = 0.0
 
 
 class ItemIn(BaseModel):
@@ -95,6 +100,7 @@ class ItemIn(BaseModel):
     issue: int | None = Field(default=None, ge=1, description="GitHub issue the PR should close")
     priority: int = Field(default=0, ge=-100, le=100, description="Higher is scheduled first")
     model: ModelName | None = None
+    budget_usd: float | None = Field(default=None, gt=0, description="Most the item and its children may cost")
     blocked_by: list[str] = Field(
         default_factory=list, max_length=MAX_BLOCKERS, description="Items that must succeed first"
     )
@@ -109,6 +115,7 @@ class ItemPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: ModelName | None = None
+    budget_usd: float | None = Field(default=None, gt=0)  # null removes the limit
     priority: int = Field(default=None, ge=-100, le=100)
     title: str = Field(default=None, min_length=1, max_length=300)
     body: str = Field(default=None)
@@ -128,6 +135,9 @@ class ItemOut(Orm):
     pr_url: str | None
     priority: int
     model: str | None
+    budget_usd: float | None = None
+    # What the item's runs and its descendants' runs have cost so far.
+    spent_usd: float = 0.0
     blocked_by: list[str] = []
     updated_at: datetime
     column: Column = "backlog"
@@ -317,8 +327,12 @@ async def _item_with_progress(
     blockers: dict[str, WorkItem] | None = None,
     runs: dict[tuple[str, int], Run] | None = None,
     live: dict[str, dict[str, Any] | None] | None = None,
+    spending: Spending | None = None,
 ) -> ItemOut:
     out = _item_out(engine, item)
+    if spending is None:
+        spending = await project_spending(s, item.project_id)
+    out.spent_usd = spending.item(item.id)
     if dependents is None:
         dependents = await _dependents(s, item.project_id)
     out.blocking = dependents.get(item.id, [])
@@ -329,6 +343,18 @@ async def _item_with_progress(
     elif out.column == "needs_human":
         out.attention = await _attention(engine, s, item)
     return out
+
+
+async def _project_out(s, project: Project) -> ProjectOut:
+    spent = (
+        await s.scalar(
+            select(func.coalesce(func.sum(Run.cost_usd), 0.0))
+            .join(WorkItem, WorkItem.id == Run.item_id)
+            .where(WorkItem.project_id == project.id)
+        )
+        or 0.0
+    )
+    return ProjectOut.model_validate(project).model_copy(update={"spent_usd": float(spent)})
 
 
 async def _project(db: Database, slug: str) -> Project:
@@ -388,7 +414,7 @@ async def create_project(body: ProjectIn, db: Db) -> ProjectOut:
             await s.commit()
         except IntegrityError:
             raise HTTPException(status.HTTP_409_CONFLICT, "project slug already exists") from None
-        return ProjectOut.model_validate(project)
+        return await _project_out(s, project)
 
 
 @router.get("/github/app")
@@ -422,16 +448,17 @@ async def list_models() -> dict:
 @router.get("/projects")
 async def list_projects(db: Db) -> list[ProjectOut]:
     async with db.session() as s:
-        return [ProjectOut.model_validate(p) for p in await s.scalars(select(Project).order_by(Project.slug))]
+        return [await _project_out(s, p) for p in await s.scalars(select(Project).order_by(Project.slug))]
 
 
 @router.patch("/projects/{slug}")
 async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
-    """Change base_branch / verify_command / auto_merge. slug, repo and installation_id are immutable.
+    """Change base_branch / verify_command / auto_merge / budget_usd. slug, repo and installation_id are immutable.
 
     verify_command applies from the next agent step of every story, running ones included.
     auto_merge applies to every story that reaches its merge step from now on.
     base_branch only affects stories that have no workspace yet: started ones keep their base.
+    budget_usd is checked before each new agent run (see budget.py); null removes the limit.
     """
     async with db.session() as s:
         project = await s.scalar(select(Project).where(Project.slug == slug))
@@ -440,7 +467,7 @@ async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
         for field, value in body.model_dump(exclude_unset=True).items():
             setattr(project, field, value)
         await s.commit()
-        return ProjectOut.model_validate(project)
+        return await _project_out(s, project)
 
 
 @router.post("/projects/{slug}/items", status_code=status.HTTP_201_CREATED)
@@ -465,6 +492,7 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
             workflow=body.workflow,
             priority=body.priority,
             model=body.model,
+            budget_usd=body.budget_usd,
             blocked_by=blocked_by,
             source={"issue": body.issue} if body.issue else {},
         )
@@ -552,8 +580,9 @@ async def board(
         dependents = await _dependents(s, project.id)
         blockers = await engine.load_blockers(s, (i for i in open_items if i.state is None))
         runs, live = await _preload_runs(engine, s, open_items)
+        spending = await project_spending(s, project.id)
         for item in [*open_items, *done_items]:
-            out = await _item_with_progress(engine, s, item, dependents, blockers, runs, live)
+            out = await _item_with_progress(engine, s, item, dependents, blockers, runs, live, spending)
             columns[out.column].append(out)
     columns["done"].sort(key=lambda o: o.updated_at, reverse=True)
     response.headers["X-Done-Total"] = str(done_total)
