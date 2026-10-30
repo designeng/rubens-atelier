@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     terminal_timeout_seconds: int = 120
 
     workspaces_root: Path = Path("./workspaces")
+    # Hourly, remove the workspaces of finished stories and tasks (and of deleted ones) that are
+    # older than this many hours. 0 = never; failed and cancelled ones are always left alone.
+    workspace_ttl_hours: float = 0
     worker_concurrency: int = 2
     # Worker refreshes the lease every lease_ttl/3 seconds; a task whose lease
     # expired is considered orphaned (worker crashed) and gets marked failed.

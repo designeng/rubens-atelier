@@ -104,6 +104,9 @@ Agent-прогон, закончившийся без результата, от
 | `GET` | `/models` | Модели для выбора в борде (`HARNESS_MODELS`) и `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Выполнить shell-команду в рабочей копии задачи (терминал доски). По умолчанию выключено: нужны `HARNESS_TERMINAL_ENABLED=true` и `HARNESS_API_TOKEN`; отказ, пока там работает агент; выполняется на воркере без `HARNESS_*` в окружении, убивается через `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
+| `GET` | `/workspaces?size=&phase=&project=` | Все рабочие копии на томе: чья задача или история, размер, `phase` (`orphan`, `finished`, `failed`, `idle`, `busy`) и можно ли удалить (`removable`). `size=false` не считает размер на диске |
+| `DELETE` | `/workspaces/{id}` | Удалить одну рабочую копию (id истории или задачи). 409, пока ей пользуется агент, действие или команда терминала или в ней должен продолжить человек; у упавшей истории пропадут непушнутые коммиты. Удаляет воркер (том API read-only), поэтому результат виден в повторном списке |
+| `POST` | `/workspaces/prune` | `{older_than_hours?, include_failed?, dry_run?}`: удалить копии завершённых и удалённых историй и задач; `include_failed` добавляет упавшие, отменённые и из бэклога. `HARNESS_WORKSPACE_TTL_HOURS` делает первую часть раз в час автоматически |
 | `POST` | `/items/{id}/open-pr` | Запушить ветку и открыть (или обновить) PR сразу, минуя review и CI; работающий агент отменяется |
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; комментарий становится артефактом для следующего агента |
 | `GET` | `/scheduler` | Занятые слоты, очередь, ёмкость и её причина, состояние окон подписки |

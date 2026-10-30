@@ -108,6 +108,9 @@ Steps pass **artifacts** to each other: the implementer's summary, the review, h
 | `GET` | `/models` | The models offered by the board's picker (`HARNESS_MODELS`) and `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Run a shell command in the story's workspace (board terminal). Off by default: needs `HARNESS_TERMINAL_ENABLED=true` and `HARNESS_API_TOKEN`; refused while an agent works there; runs on the worker, without `HARNESS_*` in its environment, killed after `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
+| `GET` | `/workspaces?size=&phase=&project=` | Every workspace on the volume: the story or task that owns it, size, `phase` (`orphan`, `finished`, `failed`, `idle`, `busy`) and whether it is `removable`. `size=false` skips the disk usage |
+| `DELETE` | `/workspaces/{id}` | Remove one workspace (story or task id). 409 while an agent, an action or a terminal command uses it or a person is about to continue in it; a failed story loses unpushed commits. The worker deletes it (the API's volume is read-only), so list again to see the result |
+| `POST` | `/workspaces/prune` | `{older_than_hours?, include_failed?, dry_run?}`: remove the workspaces of finished and deleted stories and tasks; `include_failed` adds failed, cancelled and backlog ones. Set `HARNESS_WORKSPACE_TTL_HOURS` to do the first part hourly by itself |
 | `POST` | `/items/{id}/open-pr` | Push the branch and open (or update) the PR now, skipping review and CI; a running agent is cancelled |
 | `POST` | `/requests/{id}/answer` | `{option, comment?}`; the comment becomes an artifact for the next agent |
 | `GET` | `/scheduler` | Busy slots, queue, capacity and its reason, subscription window state |
