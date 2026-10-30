@@ -52,6 +52,7 @@ export interface ItemPatch {
   body?: string;
   priority?: number;
   model?: string | null;
+  lean_context?: boolean | null; // null goes back to the harness default
   budget_usd?: number | null; // null removes the limit
   blocked_by?: string[];
 }
@@ -72,6 +73,7 @@ export interface Progress {
   started_at?: string | null;
   turn?: number | null;
   max_turns?: number;
+  context_tokens?: number | null; // what the model read on its latest request
   activity?: string | null;
   todos?: Todo[] | null;
 }
@@ -89,6 +91,7 @@ export interface ItemOut {
   pr_url: string | null;
   priority: number;
   model: string | null;
+  lean_context: boolean | null;
   budget_usd: number | null;
   spent_usd: number; // the item's runs and those of its descendants
   blocked_by: string[];
@@ -167,6 +170,7 @@ export interface ItemDetail extends ItemOut {
 export interface Models {
   default: string;
   models: string[];
+  lean_context: boolean; // the harness default for stories that don't set it
 }
 
 export interface GitSnapshot {

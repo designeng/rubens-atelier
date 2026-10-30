@@ -86,6 +86,8 @@ class WorkItem(Base):
     priority: Mapped[int] = mapped_column(default=0)  # higher runs first
     # Model for every agent step of this item; None = the workflow state's or the default model.
     model: Mapped[str | None] = mapped_column(String(100))
+    # Lean context for its agent steps (see settings.lean_context); None = the harness default.
+    lean_context: Mapped[bool | None]
     # Most the item's runs and those of its descendants may cost; None = unlimited.
     budget_usd: Mapped[float | None]
     # Ids of items that must succeed before this one can be started.

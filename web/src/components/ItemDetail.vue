@@ -127,6 +127,20 @@ const modelOptions = computed(() => {
   return current && !list.includes(current) ? [current, ...list] : list;
 });
 const modelError = ref("");
+// Lean context saves right away too; "" is the harness default (HARNESS_LEAN_CONTEXT).
+const contextValue = computed(() => (it.value?.lean_context == null ? "" : it.value.lean_context ? "lean" : "full"));
+const contextError = ref("");
+async function setContext(value: string): Promise<void> {
+  const i = it.value;
+  if (!i) return;
+  contextError.value = "";
+  try {
+    await b.updateItem(i.id, { lean_context: value ? value === "lean" : null });
+  } catch (e) {
+    contextError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 async function setModel(value: string): Promise<void> {
   const i = it.value;
   if (!i) return;
@@ -226,6 +240,18 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
         </select>
         <span v-if="it.progress?.task_id" class="muted">the running step keeps its model; the next one uses this</span>
         <span class="err">{{ modelError }}</span>
+      </div>
+      <div class="row model">
+        <label for="iContext">Context</label>
+        <select id="iContext" :value="contextValue" :disabled="!editable" @change="setContext(($event.target as HTMLSelectElement).value)">
+          <option value="">default<template v-if="b.models.value"> ({{ b.models.value.lean_context ? "lean" : "full" }})</template></option>
+          <option value="full">full</option>
+          <option value="lean">lean</option>
+        </select>
+        <span class="muted" title="Lean: a short system prompt, only the allowed tools, no CLAUDE.md preloaded, and each step starts a new session from the artifacts">
+          lean = minimal prompt, new session per step
+        </span>
+        <span class="err">{{ contextError }}</span>
       </div>
       <div class="row budget">
         <label for="iBudget">Budget, $</label>

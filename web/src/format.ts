@@ -8,6 +8,11 @@ export function elapsed(iso: string | null | undefined, now = Date.now()): strin
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
+// 17312 -> "17.3k tokens"; the size of an agent's context.
+export function formatTokens(n: number): string {
+  return n < 1000 ? `${n} tokens` : `${(n / 1000).toFixed(1)}k tokens`;
+}
+
 // p: the item's `progress` from the API (only set while the item is in the working column);
 // paused: the scheduler's queue is paused, so a queued step waits for the operator, not a slot.
 export function progressSummary(p: Progress, now = Date.now(), paused = false): string {
@@ -19,7 +24,8 @@ export function progressSummary(p: Progress, now = Date.now(), paused = false): 
   }
   if (p.status === "queued") return `${p.step} · waiting for a worker`;
   const todos = p.todos ? `todos ${p.todos.filter((t) => t.status === "completed").length}/${p.todos.length}` : null;
-  return [p.step, p.turn != null ? `turn ${p.turn}/${p.max_turns}` : null, todos, elapsed(p.started_at, now)]
+  const context = p.context_tokens != null ? `context ${formatTokens(p.context_tokens)}` : null;
+  return [p.step, p.turn != null ? `turn ${p.turn}/${p.max_turns}` : null, context, todos, elapsed(p.started_at, now)]
     .filter(Boolean)
     .join(" · ");
 }

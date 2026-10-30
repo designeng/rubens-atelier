@@ -149,15 +149,30 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 log.warning("item %s: %s", item.id, content)
                 return FailureReason.budget.value
             cap = settings.default_max_budget_usd if left is None else min(left, settings.default_max_budget_usd)
-            interrupted = await store.r.hget(restarts_key(item.id, item.version), "session")
+            key = restarts_key(item.id, item.version)
+            interrupted = await store.r.hget(key, "session")
+            lean = item.lean_context if item.lean_context is not None else settings.lean_context
+            previous = await s.scalar(
+                select(Run).where(Run.item_id == item.id, Run.role == st.agent).order_by(Run.created_at.desc()).limit(1)
+            )
+            # Lean starts each visit afresh from the artifacts, except to finish work that was cut
+            # short: out of turns, or a subscription limit (whose session `paused` holds).
+            if lean:
+                cut = previous is not None and previous.verdict == FailureReason.turn_limit.value
+                session = await store.r.hget(key, "paused") or (item.sessions.get(st.agent) if cut else None)
+            else:
+                session = item.sessions.get(st.agent) if st.resume else None
             spec = TaskCreate(
-                prompt=CONTINUE if interrupted else await build_prompt(engine, item, project, st),
+                prompt=CONTINUE
+                if interrupted
+                else await build_prompt(engine, item, project, st, since=previous if session else None),
                 workspace_key=item.id,
-                resume_session=interrupted or (item.sessions.get(st.agent) if st.resume else None),
+                resume_session=interrupted or session,
                 verify_command=project.verify_command if st.verify else None,
                 output_schema=verdict_schema(st.verdicts) if st.verdicts else None,
                 model=item.model or st.model,
                 effort=st.effort,
+                lean_context=lean,
                 max_budget_usd=cap,
                 disallowed_tools=st.disallowed_tools or None,
                 metadata={"project": project.slug, "item_id": item.id, "state": item.state},
@@ -185,6 +200,10 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 sessions = {**item.sessions, st.agent: info.session_id}
                 await s.execute(update(WorkItem).where(WorkItem.id == item.id).values(sessions=sessions))
             await s.commit()
+        if info.session_id:  # a lean retry resumes it too, instead of starting afresh
+            key = restarts_key(item.id, item.version)
+            await store.r.hset(key, "paused", info.session_id)
+            await store.r.expire(key, settings.result_ttl_seconds)
         log.warning("item %s: %s hit a subscription limit, requeued", item.id, st.agent)
         return RATE_LIMITED
 
@@ -252,7 +271,10 @@ async def _action(item, project, st: State, cwd, engine, gh) -> str:
     return verdict if verdict in (st.verdicts or [DONE]) else ERROR
 
 
-async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: State) -> str:
+async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: State, since: Run | None = None) -> str:
+    """`since` is the role's previous run when its session is resumed: the session already holds
+    what came before it, so only the artifacts produced after it are added (its own result is
+    left out, its error kept: the session never saw why the harness stopped it)."""
     fields = dict(
         kind=item.kind,
         title=item.title,
@@ -263,16 +285,24 @@ async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: Sta
     )
     template = (settings.prompts_dir / f"{st.agent}.md").read_text()
     prompt = Template(template).safe_substitute(fields) + Template(CONTEXT).safe_substitute(fields)
-    for name, content in (await latest_artifacts(engine, item.id)).items():
-        prompt += f'\n<artifact name="{name}">\n{content[-ARTIFACT_LIMIT:]}\n</artifact>\n'
+    rows = (await latest_artifact_rows(engine, item.id)).values()
+    if since:
+        rows = [a for a in rows if a.created_at > since.created_at and (a.run_id != since.id or a.name == "error")]
+        prompt += "\nArtifacts you have already seen earlier in this session are left out.\n"
+    for a in rows:
+        prompt += f'\n<artifact name="{a.name}">\n{a.content[-ARTIFACT_LIMIT:]}\n</artifact>\n'
     return prompt
 
 
 async def latest_artifacts(engine: Engine, item_id: str) -> dict[str, str]:
+    return {name: a.content for name, a in (await latest_artifact_rows(engine, item_id)).items()}
+
+
+async def latest_artifact_rows(engine: Engine, item_id: str) -> dict[str, Artifact]:
     async with engine.db.session() as s:
         rows = await s.scalars(select(Artifact).where(Artifact.item_id == item_id).order_by(Artifact.created_at))
         rows = list(rows)
-    latest = {a.name: a.content for a in rows}  # later rows overwrite earlier ones
+    latest = {a.name: a for a in rows}  # later rows overwrite earlier ones
     # An error is only news until something else is produced after it; a retry that
     # succeeded has fixed it, and later steps must not review a problem that is gone.
     # Human comments are not progress: a retry comment must not hide the error it answers.

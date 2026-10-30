@@ -180,6 +180,7 @@ async def test_progress_tracks_turn_activity_and_todos(store):
         await emit("turn", {"turn": 1})
         await emit("tool_use", {"id": "t1", "name": "Bash", "input": {"command": "uv run pytest -q\necho done"}})
         await emit("turn", {"turn": 2})
+        await emit("context", {"tokens": 18_250})
         todos = [
             {"content": "Add endpoint", "status": "completed", "activeForm": "x"},
             {"content": "Add tests", "status": "in_progress"},
@@ -192,7 +193,7 @@ async def test_progress_tracks_turn_activity_and_todos(store):
     await execute_task(task_id, store, "w1", runner=runner)
 
     assert seen["status"] == "running" and seen["turn"] == 2 and seen["max_turns"] == 30
-    assert seen["activity"] == "TodoWrite"
+    assert seen["activity"] == "TodoWrite" and seen["context_tokens"] == 18_250
     assert seen["todos"] == [
         {"content": "Add endpoint", "status": "completed"},
         {"content": "Add tests", "status": "in_progress"},
@@ -266,6 +267,17 @@ def test_lean_context(monkeypatch):
 
     monkeypatch.setattr(settings, "lean_context", True)
     assert build_options(TaskCreate(prompt="x", lean_context=False), Path("."), None).tools is None
+
+
+def test_context_tokens_counts_cached_input_too():
+    from app.runner import context_tokens
+
+    usage = {
+        "input_tokens": 12, "cache_read_input_tokens": 15_000,
+        "cache_creation_input_tokens": 2_300, "output_tokens": 90,
+    }
+    assert context_tokens(usage) == 17_312
+    assert context_tokens(None) is None
 
 
 def test_agent_env_hides_harness_config(monkeypatch):

@@ -1,4 +1,5 @@
 import type { TaskEvent } from "./api/types";
+import { formatTokens } from "./format";
 
 // The agent session as the board shows it, built from the task's event log: each tool call
 // carries its result, everything else is one entry per event in order.
@@ -42,9 +43,19 @@ function resultSummary(d: Record<string, unknown>): string {
   return parts.join(" · ");
 }
 
+// The session's context size now: what the model read on its latest request.
+export function contextTokens(events: TaskEvent[]): number | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === "context") return Number(events[i].data.tokens);
+  }
+  return null;
+}
+
 export function transcript(events: TaskEvent[]): Entry[] {
   const out: Entry[] = [];
   const tools = new Map<string, Extract<Entry, { kind: "tool" }>>();
+  // The first request after a session (re)starts shows what it begins with; later ones are in the header.
+  let opening: "start" | "resume" | null = null;
   for (const { type, data: d } of events) {
     switch (type) {
       case "text":
@@ -84,7 +95,15 @@ export function transcript(events: TaskEvent[]): Entry[] {
         out.push({ kind: "note", text: `status: ${str(d.status)}${d.error ? ` · ${str(d.error)}` : ""}` });
         break;
       case "session":
-        out.push({ kind: "note", text: `session ${str(d.session_id)}${d.model ? ` · ${str(d.model)}` : ""}` });
+        opening = d.resumed ? "resume" : "start";
+        out.push({
+          kind: "note",
+          text: `session ${str(d.session_id)}${d.resumed ? " (resumed)" : ""}${d.model ? ` · ${str(d.model)}` : ""}`,
+        });
+        break;
+      case "context":
+        if (opening) out.push({ kind: "note", text: `context on ${opening}: ${formatTokens(Number(d.tokens))}` });
+        opening = null;
         break;
       case "rate_limit":
         out.push({

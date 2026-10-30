@@ -100,6 +100,7 @@ class ItemIn(BaseModel):
     issue: int | None = Field(default=None, ge=1, description="GitHub issue the PR should close")
     priority: int = Field(default=0, ge=-100, le=100, description="Higher is scheduled first")
     model: ModelName | None = None
+    lean_context: bool | None = Field(default=None, description="null = the harness default")
     budget_usd: float | None = Field(default=None, gt=0, description="Most the item and its children may cost")
     blocked_by: list[str] = Field(
         default_factory=list, max_length=MAX_BLOCKERS, description="Items that must succeed first"
@@ -115,6 +116,7 @@ class ItemPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: ModelName | None = None
+    lean_context: bool | None = None
     budget_usd: float | None = Field(default=None, gt=0)  # null removes the limit
     priority: int = Field(default=None, ge=-100, le=100)
     title: str = Field(default=None, min_length=1, max_length=300)
@@ -135,6 +137,7 @@ class ItemOut(Orm):
     pr_url: str | None
     priority: int
     model: str | None
+    lean_context: bool | None = None
     budget_usd: float | None = None
     # What the item's runs and its descendants' runs have cost so far.
     spent_usd: float = 0.0
@@ -444,8 +447,9 @@ async def installation_repositories(installation_id: int) -> list[dict]:
 
 @router.get("/models")
 async def list_models() -> dict:
-    """Models the board offers for a story, and the one used when a story and its step set none."""
-    return {"default": settings.default_model, "models": settings.models}
+    """Models the board offers for a story, and the one used when a story and its step set none;
+    also whether agents run with lean context when the story doesn't say."""
+    return {"default": settings.default_model, "models": settings.models, "lean_context": settings.lean_context}
 
 
 @router.get("/projects")
@@ -495,6 +499,7 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
             workflow=body.workflow,
             priority=body.priority,
             model=body.model,
+            lean_context=body.lean_context,
             budget_usd=body.budget_usd,
             blocked_by=blocked_by,
             source={"issue": body.issue} if body.issue else {},

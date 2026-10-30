@@ -223,3 +223,19 @@ async def test_rate_limited_step_waits_for_the_reset_and_resumes(db, store, redi
 
     assert (await f.item(item_id)).state == "awaiting_merge"
     assert f.runner.of("implement")[1]["resume"] == "implement-cut"
+
+
+async def test_lean_rate_limited_step_resumes_the_cut_session(db, store, redis, origin):
+    f = Factory(db, store, CIGitHub(origin), RateLimitedOnce())
+    f.engine.scheduler = Scheduler(redis, f.enqueue)
+    item_id = await f.new_item(lean_context=True)
+    await f.engine.start(item_id)
+    await f.drain()
+
+    info = json.loads(await redis.hget(QUOTA, "five_hour")) | {"resets_at": time.time() - 1}
+    await redis.hset(QUOTA, "five_hour", json.dumps(info))
+    await f.engine.scheduler.dispatch()
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    assert f.runner.of("implement")[1]["resume"] == "implement-cut"

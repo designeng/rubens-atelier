@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskEvent } from "../api/types";
-import { describeTool, resultText, transcript } from "../session";
+import { contextTokens, describeTool, resultText, transcript } from "../session";
 
 let n = 0;
 const ev = (type: string, data: Record<string, unknown>): TaskEvent => ({ id: `${++n}-0`, type, data });
@@ -43,5 +43,25 @@ describe("helpers", () => {
   it("joins content blocks", () => {
     expect(resultText([{ type: "text", text: "a" }, { type: "image" }])).toBe('a\n{\n  "type": "image"\n}');
     expect(resultText(null)).toBe("");
+  });
+});
+
+describe("context size", () => {
+  it("shows what a session starts and resumes with, and the latest size", () => {
+    const events = [
+      ev("session", { session_id: "s1" }),
+      ev("context", { tokens: 5571 }),
+      ev("context", { tokens: 9000 }),
+      ev("session", { session_id: "s1", resumed: true }),
+      ev("context", { tokens: 21400 }),
+    ];
+    expect(transcript(events)).toEqual([
+      { kind: "note", text: "session s1" },
+      { kind: "note", text: "context on start: 5.6k tokens" },
+      { kind: "note", text: "session s1 (resumed)" },
+      { kind: "note", text: "context on resume: 21.4k tokens" },
+    ]);
+    expect(contextTokens(events)).toBe(21400);
+    expect(contextTokens([])).toBeNull();
   });
 });

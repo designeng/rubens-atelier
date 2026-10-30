@@ -49,6 +49,7 @@ def _create_pre_alembic(conn, *, drop: str | None = None) -> None:
     legacy.tables["work_items"].c.blocked_by.nullable = True
     for name in ("projects", "work_items"):
         legacy.tables[name]._columns.remove(legacy.tables[name].c.budget_usd)  # added by migration 0003
+    legacy.tables["work_items"]._columns.remove(legacy.tables["work_items"].c.lean_context)  # migration 0004
     legacy.create_all(conn)
     if drop:
         conn.execute(text(f"ALTER TABLE work_items DROP COLUMN {drop}"))

@@ -234,6 +234,23 @@ async def test_review_feedback_loops_back_to_the_same_implementer_session(make_f
     second_impl = f.runner.of("implement")[1]
     assert second_impl["resume"] == "implement-0"
     assert "Review 0: changes_requested" in second_impl["prompt"]
+    # The resumed session already has the plan and its own summary: only the review is new.
+    assert '<artifact name="planner">' not in second_impl["prompt"]
+    assert '<artifact name="implementer">' not in second_impl["prompt"]
+    assert second_impl["spec"].lean_context is False
+
+
+async def test_lean_story_starts_each_visit_afresh(make_factory):
+    f = make_factory(ScriptedRunner(reviews=["changes_requested", "approved"]))
+    item_id = await f.new_item(lean_context=True)
+    await f.engine.start(item_id)
+    await f.drain()
+
+    first, second = f.runner.of("implement")
+    assert first["spec"].lean_context and second["spec"].lean_context
+    assert second["resume"] is None  # a new session, carried by the artifacts instead
+    for part in ('<artifact name="planner">', '<artifact name="implementer">', "Review 0: changes_requested"):
+        assert part in second["prompt"]
 
 
 async def test_endless_review_ping_pong_is_cut_off_and_escalated(make_factory):
@@ -367,6 +384,15 @@ async def test_implementer_out_of_turns_continues_its_session(make_factory):
     async with f.db.session() as s:
         verdicts = (await s.scalars(select(Run.verdict).where(Run.state == "implement").order_by(Run.version))).all()
     assert verdicts == ["turn_limit", "done"]
+
+
+async def test_lean_story_still_continues_a_session_cut_by_the_turn_limit(make_factory):
+    f = make_factory(OutOfTurnsOnce())
+    item_id = await f.new_item(lean_context=True)
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert f.runner.of("implement")[1]["resume"] == "implement-long"
 
 
 async def test_duplicate_and_stale_steps_are_no_ops(make_factory):

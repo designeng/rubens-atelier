@@ -167,6 +167,8 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
             await store.set_fields(task_id, session_id=data["session_id"])
         if type_ == "turn":
             await store.set_fields(task_id, turn=str(data["turn"]))
+        if type_ == "context":
+            await store.set_fields(task_id, context_tokens=str(data["tokens"]))
         if type_ == "tool_use":
             fields = {"activity": describe_tool(data["name"], data.get("input") or {})}
             if data["name"] == "TodoWrite" and isinstance(data.get("input", {}).get("todos"), list):

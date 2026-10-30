@@ -168,7 +168,7 @@ class TaskStore:
         await self.r.hset(task_key(task_id), mapping=fields)
 
     async def progress(self, task_id: str) -> dict[str, Any] | None:
-        """Live view of a run for the board: turn, current activity, the agent's todo list."""
+        """Live view of a run for the board: turn, context size, current activity, the agent's todo list."""
         raw = await self.get_raw(task_id)
         if raw is None:
             return None
@@ -186,6 +186,8 @@ class TaskStore:
             "started_at": raw.get("started_at"),
             "turn": int(raw["turn"]) if raw.get("turn") else None,
             "max_turns": spec.max_turns or settings.default_max_turns,
+            # Tokens the model read on its latest request: the session's context right now.
+            "context_tokens": int(raw["context_tokens"]) if raw.get("context_tokens") else None,
             "activity": activity,
             "todos": json.loads(raw["todos"]) if raw.get("todos") else None,
         }

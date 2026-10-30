@@ -175,6 +175,14 @@ def failure_reason(result: ResultMessage) -> FailureReason:
     return FailureReason.model_error
 
 
+def context_tokens(usage: dict[str, Any] | None) -> int | None:
+    """What the model read for this request: everything in the context window, cached or not."""
+    if not usage:
+        return None
+    keys = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    return sum(int(usage.get(k) or 0) for k in keys)
+
+
 def _failure(call: dict[str, Any] | None, content: Any) -> str:
     text = content if isinstance(content, str) else str(content)
     what = call["name"] + " " + str(call["input"].get("command") or call["input"]) if call else "tool call"
@@ -189,15 +197,21 @@ async def run_claude(
     turns = 0
     calls: dict[str, dict[str, Any]] = {}
     last_failure: str | None = None
+    last_message: str | None = None
 
     async for msg in query(prompt=spec.prompt, options=build_options(spec, cwd, resume)):
         match msg:
             case SystemMessage(subtype="init", data=data):
                 session_id = data.get("session_id", session_id)
-                await emit("session", {"session_id": session_id, "model": data.get("model")})
+                await emit("session", {"session_id": session_id, "model": data.get("model"), "resumed": bool(resume)})
             case AssistantMessage(content=blocks):
                 turns += 1
                 await emit("turn", {"turn": turns})
+                # One API response arrives as several messages (one per block) with the same usage.
+                tokens = context_tokens(msg.usage)
+                if tokens is not None and msg.message_id != last_message:
+                    last_message = msg.message_id
+                    await emit("context", {"tokens": tokens})
                 for block in blocks:
                     match block:
                         case TextBlock(text=text):

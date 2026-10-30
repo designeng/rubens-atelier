@@ -64,6 +64,11 @@ describe("progressSummary", () => {
     expect(progressSummary(p, now)).toBe("implement · turn 12/80 · todos 1/3 · 2m 5s");
   });
 
+  it("adds the context size once the agent has made a request", () => {
+    const p: Progress = { step: "implement", kind: "agent", task_id: "t1", turn: 3, max_turns: 50, context_tokens: 17312 };
+    expect(progressSummary(p, now)).toBe("implement · turn 3/50 · context 17.3k tokens");
+  });
+
   it("skips the parts a fresh run does not have yet", () => {
     expect(progressSummary({ step: "plan", kind: "agent", task_id: "t1", turn: null, started_at: null }, now)).toBe(
       "plan",
