@@ -68,6 +68,7 @@ export function useBoard() {
       if (openItemId.value === id) item.value = it;
     }
     scheduler.value = await api.getScheduler();
+    projects.value = await api.listProjects(); // the header shows what the project has spent
   }
 
   function refresh(): Promise<void> {

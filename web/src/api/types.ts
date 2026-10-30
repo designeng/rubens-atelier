@@ -10,6 +10,7 @@ export interface ProjectIn {
   verify_command?: string | null;
   installation_id?: number | null;
   auto_merge?: boolean;
+  budget_usd?: number | null;
 }
 
 // PATCH /projects/{slug}: fields left out stay as they are, null clears them.
@@ -17,6 +18,7 @@ export interface ProjectPatch {
   base_branch?: string | null;
   verify_command?: string | null;
   auto_merge?: boolean;
+  budget_usd?: number | null;
 }
 
 export interface ProjectOut {
@@ -27,6 +29,8 @@ export interface ProjectOut {
   verify_command: string | null;
   installation_id: number | null;
   auto_merge: boolean;
+  budget_usd: number | null;
+  spent_usd: number; // what all the project's runs have cost
 }
 
 export interface ItemIn {
@@ -37,6 +41,7 @@ export interface ItemIn {
   parent_id?: string | null;
   issue?: number | null;
   priority?: number;
+  budget_usd?: number | null;
   blocked_by?: string[];
   start?: boolean;
 }
@@ -47,6 +52,7 @@ export interface ItemPatch {
   body?: string;
   priority?: number;
   model?: string | null;
+  budget_usd?: number | null; // null removes the limit
   blocked_by?: string[];
 }
 
@@ -83,6 +89,8 @@ export interface ItemOut {
   pr_url: string | null;
   priority: number;
   model: string | null;
+  budget_usd: number | null;
+  spent_usd: number; // the item's runs and those of its descendants
   blocked_by: string[];
   updated_at: string;
   column: Column;

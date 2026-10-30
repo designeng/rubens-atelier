@@ -43,6 +43,19 @@ export function formatBytes(n: number): string {
   return `${i === 0 || n >= 10 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
 }
 
+// 1.5 -> "$1.50"
+export const formatUsd = (n: number): string => `$${n.toFixed(2)}`;
+
+// "$1.25 / $5.00" with a limit, "$1.25" without; null when nothing is spent and nothing is limited.
+export function spendText(spent: number, budget: number | null | undefined): string | null {
+  if (budget == null) return spent > 0 ? formatUsd(spent) : null;
+  return `${formatUsd(spent)} / ${formatUsd(budget)}`;
+}
+
+// The limit is used up: no new agent run starts until it is raised.
+export const overBudget = (spent: number, budget: number | null | undefined): boolean =>
+  budget != null && spent >= budget;
+
 export type Tone = "ok" | "bad" | "warn" | "info" | "muted";
 
 const BADGES: Record<string, [string, Tone]> = {

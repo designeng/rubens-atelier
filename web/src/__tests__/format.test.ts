@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { EventOut, Progress, RunOut } from "../api/types";
-import { attentionBadge, canRunNow, elapsed, formatBytes, isRunning, progressSummary, rerunReasons, todoMark, turnPercent } from "../format";
+import {
+  attentionBadge,
+  canRunNow,
+  elapsed,
+  formatBytes,
+  formatUsd,
+  isRunning,
+  overBudget,
+  progressSummary,
+  rerunReasons,
+  spendText,
+  todoMark,
+  turnPercent,
+} from "../format";
 
 const now = Date.parse("2026-10-29T12:00:00Z");
 const ago = (s: number) => new Date(now - s * 1000).toISOString();
@@ -140,5 +153,25 @@ describe("formatBytes", () => {
     expect(formatBytes(20 * 1024)).toBe("20 KB");
     expect(formatBytes(5 * 1024 ** 3)).toBe("5.0 GB");
     expect(formatBytes(3000 * 1024 ** 4)).toBe("3000 TB");
+  });
+});
+
+describe("money", () => {
+  it("formats dollars with cents", () => {
+    expect(formatUsd(1.5)).toBe("$1.50");
+    expect(formatUsd(0)).toBe("$0.00");
+  });
+
+  it("shows spent against the limit, or only what is spent, or nothing", () => {
+    expect(spendText(1.25, 5)).toBe("$1.25 / $5.00");
+    expect(spendText(0, 5)).toBe("$0.00 / $5.00");
+    expect(spendText(1.25, null)).toBe("$1.25");
+    expect(spendText(0, null)).toBeNull();
+  });
+
+  it("flags a used up limit", () => {
+    expect(overBudget(4.99, 5)).toBe(false);
+    expect(overBudget(5, 5)).toBe(true);
+    expect(overBudget(100, null)).toBe(false);
   });
 });
