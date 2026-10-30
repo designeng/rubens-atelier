@@ -267,3 +267,24 @@ def test_sdk_result_subtypes_map_to_failure_reasons():
     assert failure_reason(SimpleNamespace(subtype="error_max_turns")) == FailureReason.turn_limit
     assert failure_reason(SimpleNamespace(subtype="error_max_budget_usd")) == FailureReason.budget
     assert failure_reason(SimpleNamespace(subtype="error_during_execution")) == FailureReason.model_error
+
+
+async def test_expired_task_leaves_the_index(store, redis):
+    from app.store import EXPIRING, TASKS_INDEX
+
+    task_id = await store.create(TaskCreate(prompt="hello"))
+    await execute_task(task_id, store, "w1", runner=FakeRunner())
+    assert await redis.zscore(TASKS_INDEX, task_id) is not None
+    await redis.zadd(EXPIRING, {task_id: 1})  # its TTL has passed
+    await store.create(TaskCreate(prompt="next"))
+    assert await redis.zscore(TASKS_INDEX, task_id) is None
+    assert await redis.zscore(EXPIRING, task_id) is None
+
+
+async def test_prune_orphaned_index_drops_only_expired_tasks(store, redis):
+    from app.store import TASKS_INDEX
+
+    live = await store.create(TaskCreate(prompt="live"))
+    await redis.zadd(TASKS_INDEX, {"expired-long-ago": 1})
+    assert await store.prune_orphaned_index() == 1
+    assert await redis.zrange(TASKS_INDEX, 0, -1) == [live]

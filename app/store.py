@@ -9,6 +9,7 @@ Layout:
   harness:task:{id}:events   stream — agent events
   harness:task:{id}:lease    string — owning worker, TTL refreshed by the task's watchdog
   harness:tasks              zset   — all task ids scored by creation time
+  harness:tasks:expiring     zset   — finished task ids scored by when Redis drops them; swept out of the index
   harness:running            set    — ids currently in `running`, scanned by the orphan reaper
   harness:session:{id}:cost  string — a Claude session's running cost total, to price a resumed run
 """
@@ -25,6 +26,7 @@ from .config import settings
 from .models import TaskCreate, TaskInfo, TaskStatus
 
 TASKS_INDEX = "harness:tasks"
+EXPIRING = "harness:tasks:expiring"
 RUNNING = "harness:running"
 # Sessions are resumed across steps of a long-lived item (rework after review, CI, merge).
 SESSION_COST_TTL = 30 * 24 * 3600
@@ -112,6 +114,7 @@ class TaskStore:
             )
             p.zadd(TASKS_INDEX, {task_id: time.time()})
             await p.execute()
+        await self._sweep_index()
         await self.append_event(task_id, "status", {"status": TaskStatus.queued.value})
         return task_id
 
@@ -254,7 +257,25 @@ class TaskStore:
             p.srem(RUNNING, task_id)
             p.expire(task_key(task_id), ttl)
             p.expire(events_key(task_id), ttl)
+            p.zadd(EXPIRING, {task_id: time.time() + ttl})
             await p.execute()
+
+    async def _sweep_index(self) -> None:
+        """Drop ids from the index once Redis has expired their task (the keys go by TTL, the index doesn't)."""
+        gone = await self.r.zrangebyscore(EXPIRING, "-inf", time.time())
+        if gone:
+            async with self.r.pipeline(transaction=True) as p:
+                p.zrem(TASKS_INDEX, *gone)
+                p.zrem(EXPIRING, *gone)
+                await p.execute()
+
+    async def prune_orphaned_index(self) -> int:
+        """Drop index ids whose task hash is gone: the leftovers of expiries before `EXPIRING` existed."""
+        removed = 0
+        async for task_id in self.r.zscan_iter(TASKS_INDEX):
+            if not await self.r.exists(task_key(task_id[0])):
+                removed += await self.r.zrem(TASKS_INDEX, task_id[0])
+        return removed
 
     async def request_cancel(self, task_id: str) -> TaskStatus | None:
         """Queued tasks are cancelled immediately (a worker that later receives the

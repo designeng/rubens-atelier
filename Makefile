@@ -3,7 +3,7 @@
 RUN = uv run --env-file .env
 PORT ?= 8000
 
-.PHONY: help sync infra migrate revision api worker beat dev stop test lint web-build web-dev web-test
+.PHONY: help sync infra migrate revision prune-index api worker beat dev stop test lint web-build web-dev web-test
 
 help:
 	@echo "make sync   git pull --rebase, then git push; stops and lists the files on conflict"
@@ -11,6 +11,7 @@ help:
 	@echo "make infra   start redis and postgres only"
 	@echo "make migrate bring the database schema to the latest migration (make dev runs it)"
 	@echo "make revision m=\"...\"  autogenerate a migration from the models in app/db.py (review it!)"
+	@echo "make prune-index  drop expired task ids from the Redis task index (one-off cleanup)"
 	@echo "make api     uvicorn on :$(PORT) with reload (prints the board URL once started)"
 	@echo "make worker  celery worker (threads pool: prefork+spawn does not work on macOS)"
 	@echo "make beat    celery beat (orphan reaper, CI poller, issue poller)"
@@ -50,6 +51,10 @@ migrate:
 revision:
 	@test -n "$(m)" || { echo 'usage: make revision m="add foo to bar"'; exit 1; }
 	$(RUN) alembic revision --autogenerate -m "$(m)"
+
+# Ids of tasks Redis already expired; new expiries clean up after themselves.
+prune-index:
+	$(RUN) python -m app.prune_index
 
 # Reload watches app/ only: agents edit .py files under ./workspaces, which would restart the API
 # (and cut every board stream) on each save.
