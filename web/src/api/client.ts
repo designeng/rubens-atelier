@@ -1,5 +1,7 @@
 import type {
   Board,
+  ExecResult,
+  ExecStart,
   GithubApp,
   GitSnapshot,
   ImportResult,
@@ -137,6 +139,9 @@ export function createClient(
     startItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/start`, "POST"),
     reopenItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/reopen`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
+    openPr: (id: string) => api<ItemOut>(`/items/${seg(id)}/open-pr`, "POST"),
+    execCommand: (id: string, command: string) => api<ExecStart>(`/items/${seg(id)}/exec`, "POST", { command }),
+    getExec: (id: string, execId: string) => api<ExecResult>(`/items/${seg(id)}/exec/${seg(execId)}`),
     deleteItem: (id: string) => api<void>(`/items/${seg(id)}`, "DELETE"),
     runItemNow: (id: string) => api<ItemOut>(`/items/${seg(id)}/run-now`, "POST"),
     answerRequest: (id: string, option: string, comment: string) =>

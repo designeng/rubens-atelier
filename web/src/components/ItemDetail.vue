@@ -5,6 +5,7 @@ import { useBoardStore } from "../composables/useBoard";
 import { rerunReasons, todoMark } from "../format";
 import ProgressBlock from "./ProgressBlock.vue";
 import SessionView from "./SessionView.vue";
+import TerminalBlock from "./TerminalBlock.vue";
 
 const b = useBoardStore();
 const it = computed(() => b.item.value);
@@ -140,6 +141,13 @@ function confirmDelete(id: string, title: string): void {
   if (window.confirm(`Delete “${title}”? This can't be undone.`)) void b.deleteItem(id);
 }
 
+// Publishing needs a branch and a story in progress (the server answers 409 otherwise).
+const publishable = computed(() => !!it.value?.branch && it.value.state !== null && editable.value);
+function confirmOpenPr(id: string): void {
+  const msg = "Push the branch and open the PR now? A running agent is cancelled and review and CI are skipped.";
+  if (window.confirm(msg)) void b.openPr(id);
+}
+
 const reopenable = computed(() => it.value?.column === "failed");
 const cancellable = computed(() => it.value?.column === "working" || it.value?.column === "needs_human");
 </script>
@@ -161,6 +169,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
         <button v-if="reopenable" @click="b.reopenItem(it.id)">Back to backlog</button>
         <button v-if="reopenable" @click="confirmDelete(it.id, it.title)">Delete</button>
         <button v-if="cancellable" @click="b.cancelItem(it.id)">Cancel</button>
+        <button v-if="publishable" @click="confirmOpenPr(it.id)">Open PR</button>
         <button v-if="editable && !editing" @click="startEdit()">Edit</button>
       </div>
       <template v-if="editing">
@@ -254,6 +263,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
             <pre>{{ git.diff }}</pre>
           </template>
         </template>
+        <TerminalBlock :item-id="it.id" />
       </template>
       <h4>Artifacts</h4>
       <template v-for="a in artifacts" :key="a.id">

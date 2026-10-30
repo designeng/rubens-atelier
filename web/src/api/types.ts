@@ -169,6 +169,19 @@ export interface GitSnapshot {
   diff?: string;
 }
 
+// POST /items/{id}/exec answers with the id to poll; GET .../exec/{id} reports the command.
+export interface ExecStart {
+  id: string;
+}
+
+export interface ExecResult {
+  id: string;
+  command: string;
+  status: "running" | "done" | "timeout";
+  exit_code: number | null;
+  output: string | null;
+}
+
 export type Board = Record<Column, ItemOut[]>;
 
 export interface SchedulerLimits {

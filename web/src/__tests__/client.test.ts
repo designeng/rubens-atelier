@@ -87,6 +87,26 @@ describe("createClient", () => {
     expect([f.calls[0].url, f.calls[0].init.method]).toEqual(["/items/i1/reopen", "POST"]);
   });
 
+  it("opens a PR with a POST", async () => {
+    const f = fakeFetch(() => json({}));
+    await createClient(() => "t", f.impl).openPr("i/1");
+    expect([f.calls[0].url, f.calls[0].init.method]).toEqual(["/items/i%2F1/open-pr", "POST"]);
+  });
+
+  it("starts a terminal command with its text and polls the result", async () => {
+    const answers = [{ id: "e1" }, { id: "e1", status: "running" }];
+    const f = fakeFetch(() => json(answers.shift()));
+    const api = createClient(() => "t", f.impl);
+    await expect(api.execCommand("i1", "ls -la")).resolves.toEqual({ id: "e1" });
+    await api.getExec("i1", "e1");
+    expect([f.calls[0].url, f.calls[0].init.method, JSON.parse(f.calls[0].init.body as string)]).toEqual([
+      "/items/i1/exec",
+      "POST",
+      { command: "ls -la" },
+    ]);
+    expect([f.calls[1].url, f.calls[1].init.method]).toEqual(["/items/i1/exec/e1", "GET"]);
+  });
+
   it("deletes a story with a DELETE and accepts the empty 204 answer", async () => {
     const f = fakeFetch(() => new Response(null, { status: 204 }));
     await expect(createClient(() => "t", f.impl).deleteItem("i/1")).resolves.toBeUndefined();
