@@ -16,6 +16,8 @@ import type {
 } from "../api/types";
 
 export const POLL_MS = 5000;
+export const MAX_DONE = 500; // the server maximum
+export const DONE_PAGE = 50; // the server default; each "show more" adds this many
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
 
 /** Board state and actions; App.vue creates it once and provides it to the components. */
@@ -24,6 +26,8 @@ export function useBoard() {
   const projects = ref<ProjectOut[]>([]);
   const slug = ref("");
   const board = ref<Board | null>(null);
+  const doneLimit = ref(DONE_PAGE);
+  const doneTotal = ref(0);
   const scheduler = ref<SchedulerStatus | null>(null);
   const openItemId = ref<string | null>(null);
   const item = ref<ItemDetail | null>(null);
@@ -50,9 +54,10 @@ export function useBoard() {
       board.value = null;
       return;
     }
-    const b = await api.getBoard(current);
+    const { board: b, doneTotal: total } = await api.getBoard(current, doneLimit.value);
     if (slug.value !== current) return;
     board.value = b;
+    doneTotal.value = total;
     const id = openItemId.value;
     if (id) {
       const it = await api.getItem(id);
@@ -101,6 +106,7 @@ export function useBoard() {
 
   function selectProject(value: string): void {
     slug.value = value;
+    doneLimit.value = DONE_PAGE;
     storage.set("project", value);
     closeItem();
     refresh().catch(fail);
@@ -128,6 +134,11 @@ export function useBoard() {
     if (hashId()) history.pushState(null, "", location.pathname + location.search);
     openItemId.value = null;
     item.value = null;
+  }
+
+  function showMoreDone(): void {
+    doneLimit.value = Math.min(doneLimit.value + DONE_PAGE, MAX_DONE);
+    refresh().catch(fail);
   }
 
   // Board actions report failures in the header error line and refresh on success.
@@ -185,11 +196,22 @@ export function useBoard() {
     if (t && t.isConnected && !t.closest("#detail, .card, dialog, header")) closeItem();
   };
   const onFocus = () => refreshGithub(); // back from github.com after installing the app
+  // A hidden tab doesn't poll; coming back refreshes at once.
+  const onVisibility = () => {
+    if (document.hidden) {
+      clearInterval(timer);
+      timer = undefined;
+    } else if (timer === undefined) {
+      refresh().catch(fail);
+      timer = setInterval(() => refresh().catch(fail), POLL_MS);
+    }
+  };
 
   onMounted(() => {
     loadProjects().catch(fail);
     refreshGithub();
-    timer = setInterval(() => refresh().catch(fail), POLL_MS);
+    if (!document.hidden) timer = setInterval(() => refresh().catch(fail), POLL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
     window.addEventListener("hashchange", syncFromHash);
     window.addEventListener("popstate", syncFromHash);
@@ -197,6 +219,7 @@ export function useBoard() {
   });
   onUnmounted(() => {
     clearInterval(timer);
+    document.removeEventListener("visibilitychange", onVisibility);
     window.removeEventListener("focus", onFocus);
     window.removeEventListener("hashchange", syncFromHash);
     window.removeEventListener("popstate", syncFromHash);
@@ -209,6 +232,7 @@ export function useBoard() {
     projects,
     slug,
     board,
+    doneTotal,
     scheduler,
     openItemId,
     item,
@@ -217,6 +241,7 @@ export function useBoard() {
     error,
     fail,
     refresh,
+    showMoreDone,
     refreshGithub,
     setToken,
     selectProject,

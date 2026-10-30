@@ -13,16 +13,16 @@ inbox; `answer` closes it and advances with the chosen option.
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
 
 from .config import settings
 from .db import Artifact, Database, HumanRequest, ItemEvent, Run, TaskTranscript, WorkItem, aware, utcnow
 from .scheduler import Scheduler
 from .store import TaskStore
-from .workflow import Workflow
+from .workflow import State, Workflow
 
 log = logging.getLogger(__name__)
 
@@ -81,16 +81,34 @@ class Engine:
                 raise EngineError(f"blocked by: {', '.join(waiting)}")
             return await self._enter(s, item, wf, wf.initial, None, actor)
 
-    async def unfinished_blockers(self, s, item: WorkItem) -> list[str]:
-        """Titles (or ids, for blockers that no longer exist) of the blockers that have not succeeded."""
+    def states_where(self, pred: Callable[[State], bool]) -> ColumnElement[bool] | None:
+        """SQL condition: the item's (workflow, state) is a state of its workflow that satisfies
+        `pred`. None if there is no such state. Items of unknown workflows or states never match."""
+        clauses = [
+            and_(WorkItem.workflow == wf.name, WorkItem.state.in_(names))
+            for wf in self.workflows.values()
+            if (names := [n for n, st in wf.states.items() if pred(st)])
+        ]
+        return or_(*clauses) if clauses else None
+
+    async def unfinished_blockers(self, s, item: WorkItem, known: dict[str, WorkItem] | None = None) -> list[str]:
+        """Titles (or ids, for blockers that no longer exist) of the blockers that have not succeeded.
+        `known` holds already loaded blockers by id (see `load_blockers`) and saves a query per blocker."""
         waiting = []
         for blocker_id in item.blocked_by or []:
-            blocker = await s.get(WorkItem, blocker_id)
+            blocker = known.get(blocker_id) if known is not None else await s.get(WorkItem, blocker_id)
             wf = self.workflows.get(blocker.workflow) if blocker else None
             st = wf.states.get(blocker.state) if wf and blocker.state else None
             if st is None or st.terminal != "succeeded":
                 waiting.append(f"{blocker.title} ({blocker_id})" if blocker else blocker_id)
         return waiting
+
+    async def load_blockers(self, s, items: Iterable[WorkItem]) -> dict[str, WorkItem]:
+        """The blockers of all `items`, by id, in one query."""
+        ids = {b for item in items for b in item.blocked_by or []}
+        if not ids:
+            return {}
+        return {b.id: b for b in await s.scalars(select(WorkItem).where(WorkItem.id.in_(ids)))}
 
     async def advance(self, item_id: str, version: int, verdict: str, actor: str = "engine") -> bool:
         """Leave the item's current state with `verdict`. False if the item has moved on."""
@@ -200,7 +218,10 @@ class Engine:
         cutoff = utcnow() - timedelta(seconds=settings.step_stale_seconds)
         requeued = []
         async with self.db.session() as s:
-            items = (await s.scalars(select(WorkItem).where(WorkItem.state.is_not(None)))).all()
+            active = self.states_where(lambda st: not st.terminal and st.runs_on_worker)
+            if active is None:
+                return requeued
+            items = (await s.scalars(select(WorkItem).where(active))).all()
             for item in items:
                 wf = self.workflows.get(item.workflow)
                 st = wf.states[item.state] if wf else None

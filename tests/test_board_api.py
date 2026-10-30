@@ -1,8 +1,10 @@
 import httpx
+from sqlalchemy import event, update
 
 from app import board_api
 from app.api import app
 from app.config import settings
+from app.db import WorkItem
 from app.github import GitHub
 
 
