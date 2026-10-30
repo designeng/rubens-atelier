@@ -91,6 +91,8 @@ export interface ItemOut {
   attention?: Attention | null;
   // Backlog items only: the blockers that have not succeeded yet ("title (id)").
   blocked: string[];
+  // Backlog items only: had blockers and all of them succeeded, so it can be started.
+  ready: boolean;
   // Ids of the backlog items waiting for this one.
   blocking: string[];
 }

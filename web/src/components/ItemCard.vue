@@ -15,6 +15,7 @@ const badge = computed(() => (props.item.attention ? attentionBadge(props.item.a
     <div>
       <span v-if="badge" class="badge" :class="badge.tone" :title="item.attention?.text || undefined">{{ badge.label }}</span>
       <span v-if="item.blocked.length" class="badge muted" :title="`Blocked by ${item.blocked.join(', ')}`">BLOCKED</span>
+      <span v-if="item.ready" class="badge ok" title="All blockers succeeded; ready to start">READY</span>
       {{ item.title }}
     </div>
     <div class="meta">{{ item.kind }} · {{ item.state || "backlog" }}{{ item.pr_url ? " · PR" : "" }}{{ item.issue ? ` · #${item.issue}` : "" }}</div>
