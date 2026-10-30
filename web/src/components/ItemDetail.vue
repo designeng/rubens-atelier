@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import type { ArtifactOut, GitSnapshot } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
 import { formatUsd, overBudget, rerunReasons, todoMark } from "../format";
+import { urgencyLabel } from "../urgency";
 import ProgressBlock from "./ProgressBlock.vue";
 import SessionView from "./SessionView.vue";
 import TerminalBlock from "./TerminalBlock.vue";
@@ -211,7 +212,7 @@ const cancellable = computed(() => it.value?.column === "working" || it.value?.c
       <h3 v-else>{{ it.title }}</h3>
       <p class="muted">
         {{ it.kind }} · {{ it.workflow }} · state <b>{{ it.state || "backlog" }}</b>
-        <template v-if="it.priority"> · priority {{ it.priority }}</template>
+        <template v-if="it.priority"> · {{ urgencyLabel(it.priority) }}</template>
         <template v-if="it.blocked.length"> · blocked by {{ it.blocked.join(", ") }}</template>
         <template v-if="it.ready"> · <b>ready to start</b> (blockers done)</template>
         <template v-if="it.branch"> · {{ it.branch }}</template>
