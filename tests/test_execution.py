@@ -243,6 +243,7 @@ def test_sandbox_is_on_by_default(monkeypatch):
     monkeypatch.setattr(settings, "sandbox", Settings(_env_file=None).sandbox)
     opts = build_options(TaskCreate(prompt="x"), Path("."), None)
     assert opts.sandbox["enabled"] and not opts.sandbox["allowUnsandboxedCommands"]
+    assert opts.sandbox["failIfUnavailable"] is True
 
 
 def test_agent_env_hides_harness_config(monkeypatch):
