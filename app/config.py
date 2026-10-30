@@ -6,7 +6,11 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="HARNESS_", env_file=".env", extra="ignore")
+    # The runner blanks HARNESS_* for agents (the SDK can only override env vars, not delete
+    # them), so an empty variable must behave as unset.
+    model_config = SettingsConfigDict(
+        env_prefix="HARNESS_", env_file=".env", extra="ignore", env_ignore_empty=True
+    )
 
     redis_url: str = "redis://localhost:6379/0"
     # Durable factory state: projects, work items, runs, artifacts, human requests.
