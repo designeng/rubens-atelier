@@ -106,16 +106,26 @@ describe("createClient", () => {
     expect((f.calls[0].init.headers as Record<string, string>)["content-type"]).toBe("application/json");
   });
 
+  it("reads the size of the done column from the board response", async () => {
+    const empty = { backlog: [], working: [], needs_human: [], done: [], failed: [] };
+    const f = fakeFetch(
+      () => new Response(JSON.stringify(empty), { status: 200, headers: { "x-done-total": "123" } }),
+    );
+    const api = createClient(() => "t", f.impl);
+    expect(await api.getBoard("app", 50)).toEqual({ board: empty, doneTotal: 123 });
+    expect(f.calls[0].url).toBe("/projects/app/board?done_limit=50");
+  });
+
   it("encodes path segments", async () => {
     const f = fakeFetch(() => json({}));
     const api = createClient(() => "t", f.impl);
-    await api.getBoard("a/b?c");
+    await api.getBoard("a/b?c", 100);
     await api.getItem("../x");
     await api.installationRepositories(42);
     await api.updateProject("my proj", { verify_command: null });
     await api.importIssues("a/b");
     expect(f.calls.map((c) => c.url)).toEqual([
-      "/projects/a%2Fb%3Fc/board",
+      "/projects/a%2Fb%3Fc/board?done_limit=100",
       "/items/..%2Fx",
       "/github/installations/42/repositories",
       "/projects/my%20proj",

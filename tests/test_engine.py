@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import httpx
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 
 from app import steps
 from app.archive import archive_task
@@ -249,6 +249,20 @@ async def test_endless_review_ping_pong_is_cut_off_and_escalated(make_factory):
 
     await f.engine.answer(req.id, "abandon", comment="not worth it")
     assert (await f.item(item_id)).state == "cancelled"
+
+
+async def test_retry_after_the_loop_limit_gives_the_step_a_fresh_budget(make_factory):
+    f = make_factory(ScriptedRunner(reviews=["changes_requested"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "needs_human"
+
+    await f.engine.answer((await f.open_request(item_id)).id, "retry", comment="lock refreshed")
+    assert (await f.item(item_id)).state == "implement"
+    await f.drain()
+    path = await f.path(item_id)
+    assert path.count("implement") == 8 and path[-1] == "needs_human"
 
 
 async def test_agent_failure_escalates_with_the_error(make_factory):
@@ -828,3 +842,28 @@ async def test_without_automerge_the_pr_is_not_merged(make_factory, origin):
 
     assert (await f.path(item_id))[-2:] == ["merge", "awaiting_merge"]
     assert f.gh.merges == []
+
+
+async def test_reconcile_loads_only_steps_a_worker_can_be_running(make_factory):
+    f = make_factory(ScriptedRunner())
+    working = await f.new_item()
+    await f.engine.start(working)
+    await f.new_item()  # stays in the backlog
+    finished = [await f.new_item() for _ in range(3)]
+    async with f.db.session() as s:
+        for item_id, state in zip(finished, ("awaiting_merge", "done", "failed")):
+            await s.execute(update(WorkItem).where(WorkItem.id == item_id).values(state=state))
+        await s.execute(update(WorkItem).where(WorkItem.id == finished[0]).values(workflow="gone"))
+        await s.commit()
+
+    loaded = []
+
+    def on_load(target, _ctx):
+        loaded.append(target.id)
+
+    event.listen(WorkItem, "load", on_load)
+    try:
+        await f.engine.reconcile()
+    finally:
+        event.remove(WorkItem, "load", on_load)
+    assert loaded == [working]
