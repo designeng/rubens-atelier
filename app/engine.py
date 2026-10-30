@@ -29,10 +29,17 @@ log = logging.getLogger(__name__)
 BACKLOG = "backlog"  # to_state of the event that returns an item to the backlog
 
 Enqueue = Callable[[str, int], Awaitable[None]]
+Cleanup = Callable[[str], Awaitable[None]]
 
 
 class EngineError(ValueError):
     pass
+
+
+async def celery_cleanup(item_id: str) -> None:
+    from .celery_app import cleanup_workspace
+
+    await asyncio.to_thread(cleanup_workspace.apply_async, args=[item_id])
 
 
 async def celery_enqueue(item_id: str, version: int) -> None:
@@ -49,12 +56,14 @@ class Engine:
         store: TaskStore,
         enqueue: Enqueue = celery_enqueue,
         scheduler: Scheduler | None = None,
+        cleanup: Cleanup = celery_cleanup,
     ):
         self.db = db
         self.workflows = workflows
         self.store = store
         self.enqueue = enqueue
         self.scheduler = scheduler
+        self.cleanup = cleanup
 
     def workflow(self, name: str) -> Workflow:
         try:
@@ -256,7 +265,23 @@ class Engine:
             await self.scheduler.forget(item.id, version)
         if st.runs_on_worker:
             await self._schedule(item, st, version + 1)
+        elif st.terminal == "succeeded":
+            # The work is merged. Failed and cancelled items keep their workspace: reopen reuses it.
+            await self._cleanup(item.id)
         return True
+
+    async def is_succeeded(self, item_id: str) -> bool:
+        async with self.db.session() as s:
+            item = await s.get(WorkItem, item_id)
+        wf = self.workflows.get(item.workflow) if item else None
+        st = wf.states.get(item.state) if wf and item.state else None
+        return st is not None and st.terminal == "succeeded"
+
+    async def _cleanup(self, item_id: str) -> None:
+        try:
+            await self.cleanup(item_id)
+        except Exception:
+            log.exception("could not enqueue the workspace cleanup of item %s", item_id)
 
     async def _schedule(self, item: WorkItem, st, version: int) -> None:
         if st.agent and self.scheduler:

@@ -93,7 +93,7 @@ The planner writes a `planner` artifact: approach, files, test plan, risks. The 
 
 **CI gate.** `check: ci` looks at GitHub check runs and commit statuses on the PR's pushed head commit when a webhook reports a finished check (see [GitHub webhook](#github-webhook)), and in any case every `HARNESS_CHECKS_POLL_SECONDS` (`HARNESS_CHECKS_FALLBACK_POLL_SECONDS` with webhooks on). If something fails, the item goes back to `implement`. The `ci` artifact contains the names of the failed checks, links and the tail of the GitHub Actions log. After the fix, the same push updates the PR. If no checks appear within `grace_seconds`, the result is `no_checks`: in a story, such an item goes straight to merge. If there is no result within `timeout_seconds`, the item goes to a human.
 
-Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps.
+Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps. When the item reaches a `succeeded` terminal state (the PR is merged), the engine enqueues `harness.cleanup_workspace` and the worker deletes the workspace. Failed and cancelled items keep it, because reopening them reuses it.
 
 | Method | Path | |
 |---|---|---|

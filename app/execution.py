@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,15 @@ class Workspace:
 
 def item_workspace(key: str) -> Path:
     return (settings.workspaces_root / "items" / key).resolve()
+
+
+def remove_item_workspace(key: str) -> bool:
+    """Delete an item's workspace. False if there was none (already removed, or on another host)."""
+    cwd = item_workspace(key)
+    if not cwd.exists():
+        return False
+    shutil.rmtree(cwd)
+    return True
 
 
 async def prepare_workspace(
