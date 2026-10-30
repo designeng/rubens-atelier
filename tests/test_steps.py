@@ -23,3 +23,17 @@ async def test_error_is_kept_for_the_retry_that_follows_it(db):
     assert await latest_artifacts(SimpleNamespace(db=db), "i1") == {
         "plan": "p", "implement": "v1", "error": "review: boom",
     }
+
+
+async def test_error_is_kept_when_a_human_comment_follows_it(db):
+    await _add(db, ("plan", "p"), ("implement", "v1"), ("error", "review: boom"), ("human:needs_human", "try again"))
+    assert await latest_artifacts(SimpleNamespace(db=db), "i1") == {
+        "plan": "p", "implement": "v1", "error": "review: boom", "human:needs_human": "try again",
+    }
+
+
+async def test_error_is_dropped_when_real_artifact_follows_a_human_comment(db):
+    await _add(db, ("error", "boom"), ("human:needs_human", "try again"), ("implement", "fixed"))
+    assert await latest_artifacts(SimpleNamespace(db=db), "i1") == {
+        "human:needs_human": "try again", "implement": "fixed",
+    }
