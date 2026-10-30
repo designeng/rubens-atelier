@@ -144,7 +144,8 @@ async def poll_checks(
         query = query.where(WorkItem.id.in_(item_ids))
     async with engine.db.session() as s:
         items = (await s.scalars(query)).all()
-        projects = {p.id: p for p in await s.scalars(select(Project).where(Project.id.in_({i.project_id for i in items})))}
+        project_ids = {i.project_id for i in items}
+        projects = {p.id: p for p in await s.scalars(select(Project).where(Project.id.in_(project_ids)))}
     if not items:
         return []
 
@@ -166,7 +167,8 @@ async def poll_checks(
                     project = projects[item.project_id]
                     if project.installation_id not in clients:
                         clients[project.installation_id] = github_factory(project)
-                    verdict, details = await check(CheckContext(clients[project.installation_id], project, item, st, waited))
+                    context = CheckContext(clients[project.installation_id], project, item, st, waited)
+                    verdict, details = await check(context)
                 except Exception:
                     # Transient (GitHub hiccup) until proven otherwise: try again next poll.
                     log.exception("check %s for item %s failed", name, item.id)

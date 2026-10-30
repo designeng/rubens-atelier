@@ -256,7 +256,9 @@ class Engine:
             .execution_options(synchronize_session=False)
         )
         if st.human:
-            s.add(HumanRequest(item_id=item.id, version=version + 1, state=target, question=st.human, options=st.options))
+            s.add(
+                HumanRequest(item_id=item.id, version=version + 1, state=target, question=st.human, options=st.options)
+            )
         await s.commit()
         item.state, item.version = target, version + 1
         log.info("item %s: %s -[%s]-> %s", item.id, from_state, verdict, target)

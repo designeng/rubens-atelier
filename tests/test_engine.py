@@ -16,7 +16,9 @@ from app.models import FailureReason
 from app.runner import AgentOutcome
 from app.steps import run_step
 from app.workflow import load_workflows
-from tests.test_issue_flow import FakeGitHub, git, origin  # noqa: F401  (origin is a fixture)
+from tests.conftest import FakeGitHub, git
+
+HAPPY_PATH = ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
 
 
 class CIGitHub(FakeGitHub):
@@ -24,7 +26,9 @@ class CIGitHub(FakeGitHub):
 
     def __init__(self, origin):
         super().__init__(origin)
-        self.checks = [{"id": 1, "name": "test", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}}]
+        self.checks = [
+            {"id": 1, "name": "test", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}}
+        ]
         self.statuses: list[dict] = []
         self.pr_state: dict = {"state": "open", "merged_at": None}
         self.logs = {1: "collected 3 items\nFAILED test_hello.py::test_says_hi - AssertionError\n"}
@@ -47,7 +51,8 @@ class CIGitHub(FakeGitHub):
         self.merges.append({"number": number, "method": method, "sha": sha})
         if self.merge_refusal:
             request = httpx.Request("PUT", f"https://api.github.com/repos/{repo}/pulls/{number}/merge")
-            response = httpx.Response(self.merge_refusal, json={"message": "Pull Request is not mergeable"}, request=request)
+            body = {"message": "Pull Request is not mergeable"}
+            response = httpx.Response(self.merge_refusal, json=body, request=request)
             raise httpx.HTTPStatusError("refused", request=request, response=response)
         self.pr_state = {"state": "closed", "merged_at": "2026-10-30T00:00:00Z"}
         return {"merged": True}
@@ -106,7 +111,9 @@ class Factory:
         async with self.db.session() as s:
             project = await s.scalar(select(Project).where(Project.slug == "app"))
             if project is None:
-                project = Project(slug="app", repo="acme/app", verify_command="test -f hello.txt", auto_merge=auto_merge)
+                project = Project(
+                    slug="app", repo="acme/app", verify_command="test -f hello.txt", auto_merge=auto_merge
+                )
                 s.add(project)
                 await s.flush()
             item = WorkItem(project_id=project.id, kind="story", title="Add greeting",
@@ -150,21 +157,21 @@ class ScriptedRunner:
 
 
 @pytest.fixture
-def make_factory(db, store, origin):  # noqa: F811
+def make_factory(db, store, origin):
     def make(runner):
         return Factory(db, store, CIGitHub(origin), runner)
 
     return make
 
 
-async def test_story_happy_path(make_factory, origin):  # noqa: F811
+async def test_story_happy_path(make_factory, origin):
     f = make_factory(ScriptedRunner())
     item_id = await f.new_item(source={"issue": 7})
 
     assert await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    assert await f.path(item_id) == HAPPY_PATH
     item = await f.item(item_id)
     assert item.head_sha == git(origin, "rev-parse", item.branch).strip()
     assert item.branch == f"agent/story-{item_id[:8]}"
@@ -181,7 +188,8 @@ async def test_story_happy_path(make_factory, origin):  # noqa: F811
     assert plan["spec"].output_schema["properties"]["verdict"]["enum"] == ["ready", "needs_clarification", "too_big"]
     assert '<artifact name="planner">' in f.runner.of("implement")[0]["prompt"]
     (review,) = f.runner.of("review")
-    assert review["spec"].output_schema["properties"]["verdict"]["enum"] == ["approved", "changes_requested", "needs_human"]
+    verdicts = review["spec"].output_schema["properties"]["verdict"]["enum"]
+    assert verdicts == ["approved", "changes_requested", "needs_human"]
     assert review["spec"].disallowed_tools == ["Write", "Edit"]
     assert review["resume"] is None  # fresh context: the reviewer did not write the code
     assert '<artifact name="implementer">' in review["prompt"] and '<artifact name="planner">' in review["prompt"]
@@ -222,7 +230,7 @@ async def test_review_feedback_loops_back_to_the_same_implementer_session(make_f
     await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    assert await f.path(item_id) == [*HAPPY_PATH[:4], "implement", "sync_base", "review", *HAPPY_PATH[4:]]
     second_impl = f.runner.of("implement")[1]
     assert second_impl["resume"] == "implement-0"
     assert "Review 0: changes_requested" in second_impl["prompt"]
@@ -299,7 +307,7 @@ async def test_a_lost_worker_restarts_the_step_resuming_its_session(make_factory
     await f.drain()
 
     assert (await f.item(item_id)).state == "awaiting_merge"
-    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    assert await f.path(item_id) == HAPPY_PATH
     cut, resumed = f.runner.of("implement")
     assert resumed["resume"] == "implement-cut-0" and resumed["prompt"] == steps.CONTINUE
     async with f.db.session() as s:
@@ -472,7 +480,7 @@ async def test_reconcile_requeues_a_lost_step_once(make_factory):
     assert (await f.item(item_id)).state == "awaiting_merge"
 
 
-async def test_red_ci_sends_the_story_back_with_the_failing_log(make_factory, origin):  # noqa: F811
+async def test_red_ci_sends_the_story_back_with_the_failing_log(make_factory, origin):
     f = make_factory(ScriptedRunner())
     f.gh.checks[0]["conclusion"] = "failure"
     item_id = await f.new_item()
@@ -589,15 +597,13 @@ class ConflictingMerge(ScriptedRunner):
         return out
 
 
-async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, origin, tmp_path):  # noqa: F811
+async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, origin, tmp_path):
     f = make_factory(ConflictingMerge(origin, tmp_path))
     item_id = await f.new_item()
     await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == [
-        "plan", "implement", "sync_base", "implement", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge",
-    ]
+    assert await f.path(item_id) == [*HAPPY_PATH[:3], "implement", "sync_base", *HAPPY_PATH[3:]]
     resolve = f.runner.of("implement")[1]
     assert resolve["resume"] == "implement-0"
     assert "conflicts in:\n- hello.txt" in resolve["prompt"] and "Do not abort the merge" in resolve["prompt"]
@@ -610,7 +616,7 @@ async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, 
     assert subprocess.run(["git", "merge-base", "--is-ancestor", "main", branch], cwd=origin).returncode == 0
 
 
-async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_path):  # noqa: F811
+async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_path):
     f = make_factory(ScriptedRunner())
     item_id = await f.new_item()
     await f.engine.start(item_id)
@@ -621,7 +627,8 @@ async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_pat
     await f.engine.answer(req.id, "update")
     await f.drain()
 
-    assert (await f.path(item_id))[-7:] == ["awaiting_merge", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    tail = ["awaiting_merge", "sync_base", "review", "publish", "ci", "merge", "awaiting_merge"]
+    assert (await f.path(item_id))[-7:] == tail
     assert len(f.runner.of("implement")) == 1  # a clean merge needs no agent to fix anything
     branch = (await f.item(item_id)).branch
     assert git(origin, "show", f"{branch}:docs.md") == "# docs\n"
@@ -630,7 +637,7 @@ async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_pat
     assert report[0] == "Up to date with origin/main." and report[-1].startswith("Merged origin/main cleanly")
 
 
-async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, origin, tmp_path):  # noqa: F811
+async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, origin, tmp_path):
     class LeavesMarkers(ConflictingMerge):
         async def __call__(self, spec, *, cwd, resume, emit):
             if spec.metadata["state"] == "implement" and len(self.of("implement")) == 1:
@@ -781,7 +788,7 @@ async def test_start_waits_for_blockers_to_succeed(make_factory):
     assert await f.engine.start(dependent_id)
 
 
-async def test_automerge_merges_the_reviewed_green_pr(make_factory, origin):  # noqa: F811
+async def test_automerge_merges_the_reviewed_green_pr(make_factory, origin):
     f = make_factory(ScriptedRunner())
     item_id = await f.new_item(auto_merge=True)
 
@@ -797,7 +804,7 @@ async def test_automerge_merges_the_reviewed_green_pr(make_factory, origin):  # 
     assert report == "Automerge: merged PR #1 (squash)."
 
 
-async def test_refused_automerge_leaves_the_pr_to_a_human(make_factory, origin):  # noqa: F811
+async def test_refused_automerge_leaves_the_pr_to_a_human(make_factory, origin):
     f = make_factory(ScriptedRunner())
     f.gh.merge_refusal = 405
     item_id = await f.new_item(auto_merge=True)
@@ -812,7 +819,7 @@ async def test_refused_automerge_leaves_the_pr_to_a_human(make_factory, origin):
     assert report == "Automerge: GitHub refused to merge PR #1 (405): Pull Request is not mergeable"
 
 
-async def test_without_automerge_the_pr_is_not_merged(make_factory, origin):  # noqa: F811
+async def test_without_automerge_the_pr_is_not_merged(make_factory, origin):
     f = make_factory(ScriptedRunner())
     item_id = await f.new_item()
 

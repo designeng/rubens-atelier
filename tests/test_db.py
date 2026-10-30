@@ -70,10 +70,16 @@ def test_downgrade_to_base_drops_every_table():
 def test_pre_alembic_database_is_stamped_and_upgraded():
     def setup(conn):
         _create_pre_alembic(conn)
-        conn.execute(text("INSERT INTO projects (id, slug, repo, auto_merge, created_at) VALUES ('p', 'p', 'o/r', false, '2026-01-01')"))
+        conn.execute(
+            text(
+                "INSERT INTO projects (id, slug, repo, auto_merge, created_at)"
+                " VALUES ('p', 'p', 'o/r', false, '2026-01-01')"
+            )
+        )
         conn.execute(text(
             "INSERT INTO work_items (id, project_id, kind, title, body, workflow, version, priority, sessions, source,"
-            " created_at, updated_at) VALUES ('old', 'p', 'story', 't', '', 'story', 0, 0, '{}', '{}', '2026-01-01', '2026-01-01')"
+            " created_at, updated_at)"
+            " VALUES ('old', 'p', 'story', 't', '', 'story', 0, 0, '{}', '{}', '2026-01-01', '2026-01-01')"
         ))
 
     _run(setup)

@@ -41,7 +41,11 @@ celery_app.conf.update(
         # With webhooks on, GitHub events trigger the checks and polling is only a fallback.
         "poll-checks": {
             "task": "harness.poll_checks",
-            "schedule": settings.checks_fallback_poll_seconds if settings.github_webhook_secret else settings.checks_poll_seconds,
+            "schedule": (
+                settings.checks_fallback_poll_seconds
+                if settings.github_webhook_secret
+                else settings.checks_poll_seconds
+            ),
         },
     },
 )
@@ -108,7 +112,11 @@ def step(item_id: str, version: int) -> None:
     from .steps import run_step
 
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
-    asyncio.run(_with_engine(lambda engine, store: run_step(item_id, version, engine=engine, store=store, worker_id=worker_id)))
+    asyncio.run(
+        _with_engine(
+            lambda engine, store: run_step(item_id, version, engine=engine, store=store, worker_id=worker_id)
+        )
+    )
 
 
 @celery_app.task(name="harness.exec", time_limit=settings.terminal_timeout_seconds + 60)
@@ -137,7 +145,9 @@ def remove_workspaces(ids: list[str], include_failed: bool = False) -> dict[str,
     """Delete workspaces from the volume the worker owns (see app.workspaces); the API only reads it."""
     from . import workspaces
 
-    removed = asyncio.run(_with_engine(lambda engine, _store: workspaces.remove(engine, ids, include_failed=include_failed)))
+    removed = asyncio.run(
+        _with_engine(lambda engine, _store: workspaces.remove(engine, ids, include_failed=include_failed))
+    )
     log.info("workspaces: %s", removed)
     return removed
 

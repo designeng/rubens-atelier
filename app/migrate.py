@@ -38,7 +38,10 @@ async def _schema() -> dict[str, set[str]]:
 def _missing(schema: dict[str, set[str]]) -> list[str]:
     """Columns of the models that a pre-Alembic database lacks (it never ran the last startup)."""
     return [
-        f"{t.name}.{c.name}" for t in Base.metadata.sorted_tables for c in t.columns if c.name not in schema.get(t.name, set())
+        f"{t.name}.{c.name}"
+        for t in Base.metadata.sorted_tables
+        for c in t.columns
+        if c.name not in schema.get(t.name, set())
     ]
 
 
@@ -47,7 +50,8 @@ def migrate() -> None:
     schema = asyncio.run(_schema())
     if "projects" in schema and "alembic_version" not in schema:
         if missing := _missing(schema):
-            raise SystemExit(f"pre-Alembic database lacks {', '.join(missing)}: not stamping it at {PRE_ALEMBIC_REVISION}")
+            lacks = ", ".join(missing)
+            raise SystemExit(f"pre-Alembic database lacks {lacks}: not stamping it at {PRE_ALEMBIC_REVISION}")
         command.stamp(config, PRE_ALEMBIC_REVISION)
     command.upgrade(config, "head")
 

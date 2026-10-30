@@ -3,7 +3,7 @@
 RUN = uv run --env-file .env
 PORT ?= 8000
 
-.PHONY: help sync infra migrate revision api worker beat dev stop test web-build web-dev web-test
+.PHONY: help sync infra migrate revision api worker beat dev stop test lint web-build web-dev web-test
 
 help:
 	@echo "make sync   git pull --rebase, then git push; stops and lists the files on conflict"
@@ -16,6 +16,7 @@ help:
 	@echo "make beat    celery beat (orphan reaper, CI poller, issue poller)"
 	@echo "make stop    stop redis and postgres"
 	@echo "make test    run the test suite"
+	@echo "make lint    ruff check and pyright (config in pyproject.toml)"
 	@echo "make web-build  build the board (web/, Vue + Vite) into app/static/dist (needs Node 22 and pnpm)"
 	@echo "make web-dev    Vite dev server for the board on :5173/board/, API proxied to :$(PORT) (run make api too)"
 	@echo "make web-test   type check and unit tests of the board"
@@ -72,6 +73,10 @@ stop:
 
 test:
 	uv run pytest
+
+lint:
+	uv run ruff check .
+	uv run pyright
 
 web-build:
 	cd web && pnpm install --frozen-lockfile && pnpm build

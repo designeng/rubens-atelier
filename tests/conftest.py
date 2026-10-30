@@ -1,3 +1,6 @@
+import subprocess
+from pathlib import Path
+
 import pytest
 from fakeredis import FakeAsyncRedis
 
@@ -20,6 +23,66 @@ def _settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "github_token", "test-token")
     monkeypatch.setattr(settings, "issue_verify_command", "")
     monkeypatch.setattr(execution, "WATCHDOG_INTERVAL", 0.05)
+
+
+def git(cwd, *args):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+@pytest.fixture
+def origin(tmp_path) -> Path:
+    """Bare repo with one commit on `main`, standing in for github.com/acme/app."""
+    bare = tmp_path / "origin.git"
+    seed = tmp_path / "seed"
+    git(tmp_path, "init", "--bare", "-b", "main", str(bare))
+    git(tmp_path, "init", "-b", "main", str(seed))
+    (seed / "README.md").write_text("# app\n")
+    git(seed, "add", ".")
+    git(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init")
+    git(seed, "push", str(bare), "main")
+    return bare
+
+
+class FakeGitHub:
+    def __init__(self, origin: Path):
+        self.origin = origin
+        self.token = "test-token"
+        self.labels: set[str] = {"agent"}
+        self.comments: list[str] = []
+        self.prs: list[dict] = []
+
+    def clone_url(self, repo):
+        return str(self.origin)
+
+    async def aclose(self):
+        pass
+
+    async def git_token(self):
+        return self.token
+
+    async def get_repo(self, repo):
+        return {"default_branch": "main"}
+
+    async def get_issue(self, repo, number):
+        return {"title": "Add greeting", "body": "Create hello.txt saying hi.", "comments": 1}
+
+    async def get_issue_comments(self, repo, number):
+        return [{"user": {"login": "alice"}, "body": "Lowercase please."}]
+
+    async def set_labels(self, repo, number, add=(), remove=()):
+        self.labels = (self.labels - set(remove)) | set(add)
+
+    async def comment(self, repo, number, body):
+        self.comments.append(body)
+
+    async def find_open_pr(self, repo, branch):
+        return next((p for p in self.prs if p["head"] == branch), None)
+
+    async def create_pr(self, repo, *, head, base, title, body):
+        number = len(self.prs) + 1
+        pr = {"head": head, "base": base, "title": title, "body": body, "html_url": f"https://gh/pull/{number}"}
+        self.prs.append(pr)
+        return pr
 
 
 @pytest.fixture
