@@ -11,6 +11,7 @@ from app.checks import poll_checks
 from app.config import settings
 from app.db import Artifact, HumanRequest, ItemEvent, Project, Run, TaskTranscript, WorkItem, utcnow
 from app.engine import Engine, EngineError
+from app.execution import item_workspace, remove_item_workspace
 from app.models import FailureReason
 from app.runner import AgentOutcome
 from app.steps import run_step
@@ -64,7 +65,13 @@ class Factory:
             self.queue.append((item_id, version))
 
         self.enqueue = enqueue
-        self.engine = Engine(db, load_workflows(settings.workflows_dir), store, enqueue, scheduler)
+        self.cleaned: list[str] = []
+
+        async def cleanup(item_id):
+            self.cleaned.append(item_id)
+            remove_item_workspace(item_id)
+
+        self.engine = Engine(db, load_workflows(settings.workflows_dir), store, enqueue, scheduler, cleanup)
         self.db = db
 
     async def step(self, item_id, version):
@@ -666,6 +673,64 @@ async def test_pr_closed_without_merge_abandons_the_story(make_factory):
     f.gh.pr_state = {"state": "closed", "merged_at": None}
     await f.drain()
     assert (await f.item(item_id)).state == "cancelled"
+
+
+async def test_workspace_is_removed_once_the_story_is_merged(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert item_workspace(item_id).is_dir()
+    assert f.cleaned == []
+
+    f.gh.pr_state = {"state": "closed", "merged_at": "2026-10-29T10:00:00Z"}
+    await f.drain()
+    assert (await f.item(item_id)).state == "done"
+    assert f.cleaned == [item_id]
+    assert not item_workspace(item_id).exists()
+
+
+async def test_workspace_is_kept_when_the_story_is_cancelled_so_it_can_be_reopened(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.engine.cancel(item_id)
+    assert f.cleaned == []
+    assert item_workspace(item_id).is_dir()
+
+
+async def test_failing_cleanup_does_not_block_the_transition(make_factory):
+    f = make_factory(ScriptedRunner())
+
+    async def broken(item_id):
+        raise ConnectionError("broker is down")
+
+    f.engine.cleanup = broken
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    f.gh.pr_state = {"state": "closed", "merged_at": "2026-10-29T10:00:00Z"}
+    await f.drain()
+    assert (await f.item(item_id)).state == "done"
+
+
+async def test_is_succeeded_tells_merged_stories_from_the_rest(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    assert not await f.engine.is_succeeded(item_id)
+    await f.engine.start(item_id)
+    await f.drain()
+    assert not await f.engine.is_succeeded(item_id)
+    f.gh.pr_state = {"state": "closed", "merged_at": "2026-10-29T10:00:00Z"}
+    await f.drain()
+    assert await f.engine.is_succeeded(item_id)
+    assert not await f.engine.is_succeeded("missing")
+
+
+def test_removing_a_missing_workspace_is_a_no_op():
+    assert remove_item_workspace("nope") is False
 
 
 async def test_poll_checks_can_be_limited_to_some_items(make_factory):

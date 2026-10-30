@@ -117,6 +117,19 @@ def exec_command(exec_id: str) -> None:
     asyncio.run(_with_store(lambda store: terminal.run(store.r, exec_id)))
 
 
+@celery_app.task(name="harness.cleanup_workspace")
+def cleanup_workspace(item_id: str) -> bool:
+    """Delete the workspace of a story that has been merged (and is still in a succeeded state)."""
+    from .execution import remove_item_workspace
+
+    if not asyncio.run(_with_engine(lambda engine, _store: engine.is_succeeded(item_id))):
+        return False
+    removed = remove_item_workspace(item_id)
+    if removed:
+        log.info("removed the workspace of item %s", item_id)
+    return removed
+
+
 @celery_app.task(name="harness.reconcile")
 def reconcile() -> list[str]:
     requeued = asyncio.run(_with_engine(lambda engine, _store: engine.reconcile()))
