@@ -232,6 +232,19 @@ def test_bash_allowlist_and_sandbox(monkeypatch):
     assert f"Read(/{ROOT / '.env'})" in deny
 
 
+def test_sandbox_is_on_by_default(monkeypatch):
+    from app.config import Settings, settings
+    from app.models import TaskCreate
+    from app.runner import build_options
+
+    monkeypatch.delenv("HARNESS_SANDBOX", raising=False)
+    assert Settings(_env_file=None).sandbox is True
+
+    monkeypatch.setattr(settings, "sandbox", Settings(_env_file=None).sandbox)
+    opts = build_options(TaskCreate(prompt="x"), Path("."), None)
+    assert opts.sandbox["enabled"] and not opts.sandbox["allowUnsandboxedCommands"]
+
+
 def test_agent_env_hides_harness_config(monkeypatch):
     from app.runner import agent_env, uv_cache_dir
 
