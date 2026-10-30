@@ -425,6 +425,7 @@ def test_blocked_item_cannot_start_until_blocker_succeeds(client):
     assert board["Second"]["blocked"] == [f"First ({first['id']})"]
     assert board["First"]["blocking"] == [second["id"]] and board["First"]["blocked"] == []
     assert client.get(f"/items/{second['id']}").json()["blocked"] == board["Second"]["blocked"]
+    assert board["Second"]["ready"] is False and board["First"]["ready"] is False
 
     r = client.post(f"/items/{second['id']}/start")
     assert r.status_code == 409 and first["id"] in r.json()["detail"]
@@ -433,12 +434,20 @@ def test_blocked_item_cannot_start_until_blocker_succeeds(client):
     # A cancelled blocker still blocks; only a succeeded one lets the item go.
     client.post(f"/items/{first['id']}/cancel")
     assert client.post(f"/items/{second['id']}/start").status_code == 409
+    assert client.get(f"/items/{second['id']}").json()["ready"] is False
 
     client.post(f"/items/{first['id']}/reopen")
     client.post(f"/items/{first['id']}/start")
     _finish(client, first["id"])
     assert client.get(f"/items/{first['id']}").json()["column"] == "done"
+
+    # Dependents are not auto-started, but the board flags them as ready.
+    assert client.get(f"/items/{second['id']}").json()["ready"] is True
+    board = {i["title"]: i for i in client.get("/projects/app/board").json()["backlog"]}
+    assert board["Second"]["ready"] is True and board["Second"]["blocked"] == []
+
     assert client.post(f"/items/{second['id']}/start").status_code == 202
+    assert client.get(f"/items/{second['id']}").json()["ready"] is False
 
 
 def test_create_with_start_and_unfinished_blocker_is_refused_and_stores_nothing(client):
