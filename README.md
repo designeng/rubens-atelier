@@ -2,6 +2,9 @@
 
 **English** · [Русский](docs/readme.ru.md)
 
+<img width="1511" height="660" alt="Screenshot 2026-10-30 at 14 46 42" src="https://github.com/user-attachments/assets/6350c987-bc51-4bfa-b940-9d22e0b72d0e" />
+
+
 A software factory in the spirit of Rubens' workshop. Claude Code agents work as apprentices: they plan, implement, pass CI and open the PR. You are the master who reviews it and signs off with a merge. It works on GitHub issues and on projects built from scratch.
 
 Under the hood it is an HTTP service that runs Claude Code ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)) as long-running background tasks on FastAPI, Celery and Redis.
