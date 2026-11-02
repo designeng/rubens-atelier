@@ -126,25 +126,28 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
 
 <template>
   <div class="session">
-    <p class="muted">
-      <span v-if="live" class="spin"></span>
-      <template v-if="task">{{ task.status }}</template>
-      · {{ turns }} turns
-      <template v-if="context != null"> · context {{ formatTokens(context) }}</template>
-      <template v-if="task?.cost_usd != null"> · {{ formatUsd(task.cost_usd) }}</template>
-      <template v-if="task?.session_id"> · session {{ task.session_id }}</template>
-      <label class="follow"><input v-model="follow" type="checkbox" /> follow</label>
-    </p>
+    <div class="s-head">
+      <span v-if="live" class="spin" aria-label="live"></span>
+      <span v-if="task" class="chip" :class="task.status === 'succeeded' ? 'ok' : task.status === 'failed' ? 'bad' : task.status === 'running' ? 'accent' : ''">{{
+        task.status
+      }}</span>
+      <span>{{ turns }} turns</span>
+      <span v-if="context != null">context {{ formatTokens(context) }}</span>
+      <span v-if="task?.cost_usd != null">{{ formatUsd(task.cost_usd) }}</span>
+      <span v-if="task?.session_id" class="mono subtle sid" :title="`session ${task.session_id}`">{{ task.session_id.slice(0, 8) }}</span>
+      <span class="spacer"></span>
+      <label class="check follow" title="Keep the newest entry in view"><input v-model="follow" type="checkbox" /> Follow</label>
+    </div>
     <p v-if="error" class="err">{{ error }}</p>
     <div ref="log" class="log" @scroll="onScroll">
-      <details v-if="task?.prompt" class="s-tool">
-        <summary>prompt</summary>
+      <details v-if="task?.prompt" class="s-tool s-prompt">
+        <summary>Prompt</summary>
         <pre>{{ task.prompt }}</pre>
       </details>
       <template v-for="(e, n) in entries" :key="n">
         <div v-if="e.kind === 'text'" class="s-text">{{ e.text }}</div>
         <details v-else-if="e.kind === 'thinking'" class="s-thinking">
-          <summary>thinking</summary>
+          <summary>Thinking</summary>
           <div class="s-text">{{ e.text }}</div>
         </details>
         <details v-else-if="e.kind === 'tool'" class="s-tool" :class="{ bad: e.result?.isError }">
@@ -159,12 +162,84 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
           <pre>{{ e.output }}</pre>
         </details>
         <div v-else-if="e.kind === 'result'" class="s-result" :class="{ bad: e.isError }">
-          <b>result</b> · {{ e.summary }}
+          <b>Result</b> · {{ e.summary }}
           <div v-if="e.text" class="s-text">{{ e.text }}</div>
         </div>
         <div v-else class="s-note">{{ e.text }}</div>
       </template>
-      <p v-if="!entries.length && !error" class="muted">{{ live ? "waiting for events…" : "no events" }}</p>
+      <p v-if="!entries.length && !error" class="subtle">{{ live ? "Waiting for events…" : "No events" }}</p>
     </div>
   </div>
 </template>
+
+<style scoped>
+.s-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1) var(--s3);
+  margin-bottom: var(--s2);
+  font-size: var(--fs-md);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.follow {
+  font-size: var(--fs-sm);
+}
+.log {
+  max-height: 65vh;
+  overflow: auto;
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: var(--fs-md);
+}
+.s-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: var(--s2) 0;
+  line-height: 1.55;
+}
+.s-thinking,
+.s-note {
+  color: var(--text-subtle);
+  font-size: var(--fs-sm);
+  margin: 2px 0;
+}
+.s-thinking .s-text {
+  font-style: italic;
+}
+.s-tool {
+  margin: 2px 0;
+  font: var(--fs-sm) / 1.45 var(--font-mono);
+}
+.s-tool summary,
+.s-thinking summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.s-tool summary:hover,
+.s-thinking summary:hover {
+  background: var(--surface-hover);
+}
+.s-tool pre {
+  margin: 4px 0 6px;
+  background: var(--surface);
+}
+.s-prompt summary {
+  font-family: var(--font-ui);
+  font-weight: 600;
+}
+.s-tool.bad summary,
+.s-result.bad {
+  color: var(--danger);
+}
+.s-result {
+  border-top: 1px solid var(--border);
+  margin-top: var(--s3);
+  padding-top: var(--s2);
+}
+</style>

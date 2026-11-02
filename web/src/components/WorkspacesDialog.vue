@@ -3,11 +3,14 @@ import { computed, ref } from "vue";
 import type { PruneResult, WorkspaceOut, WorkspacePhase } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
 import { elapsed, formatBytes } from "../format";
+import AppDialog from "./ui/AppDialog.vue";
+import Icon from "./ui/Icon.vue";
 
 const PHASES: WorkspacePhase[] = ["orphan", "finished", "failed", "idle", "busy"];
+const PHASE_TONE: Record<string, string> = { orphan: "warn", finished: "ok", failed: "bad", idle: "", busy: "accent" };
 
 const b = useBoardStore();
-const dlg = ref<HTMLDialogElement>();
+const dlg = ref<InstanceType<typeof AppDialog>>();
 const rows = ref<WorkspaceOut[]>([]);
 const phase = ref<WorkspacePhase | "">("");
 const project = ref("");
@@ -102,27 +105,35 @@ defineExpose({ open });
 </script>
 
 <template>
-  <dialog ref="dlg" class="workspaces" @close="loads++">
-    <h3 style="margin-top: 0">Working copies</h3>
-    <div class="row">
+  <AppDialog ref="dlg" title="Working copies" size="lg" @close="loads++">
+    <div class="row toolbar">
       <select v-model="phase" aria-label="Phase" @change="load">
-        <option value="">any phase</option>
+        <option value="">Any phase</option>
         <option v-for="p in PHASES" :key="p" :value="p">{{ p }}</option>
       </select>
       <select v-model="project" aria-label="Project" @change="load">
-        <option value="">any project</option>
+        <option value="">Any project</option>
         <option v-for="p in b.projects.value" :key="p.id" :value="p.slug">{{ p.slug }}</option>
       </select>
-      <button :disabled="busy" @click="load">Refresh</button>
-      <span class="muted">
-        {{ rows.length }} copies<template v-if="measured">, {{ formatBytes(total) }}</template>
-        <template v-else>, measuring…</template>
+      <button type="button" class="icon-btn" :disabled="busy" aria-label="Refresh" title="Refresh" @click="load">
+        <Icon name="refresh" />
+      </button>
+      <span class="spacer"></span>
+      <span class="muted summary">
+        {{ rows.length }} {{ rows.length === 1 ? "copy" : "copies" }}<template v-if="measured"> · {{ formatBytes(total) }}</template>
+        <template v-else> · measuring…</template>
       </span>
     </div>
     <div class="ws-scroll">
-      <table>
+      <table class="table">
         <thead>
-          <tr><th>Belongs to</th><th>Phase</th><th>Size</th><th>Changed</th><th></th></tr>
+          <tr>
+            <th>Belongs to</th>
+            <th>Phase</th>
+            <th class="num">Size</th>
+            <th class="num">Changed</th>
+            <th><span class="sr-only">Actions</span></th>
+          </tr>
         </thead>
         <tbody>
           <tr v-for="w in rows" :key="w.id">
@@ -130,65 +141,95 @@ defineExpose({ open });
               <template v-if="w.item">{{ w.item.project }} · {{ w.item.title }}</template>
               <template v-else-if="w.task">task · {{ w.task.prompt.slice(0, 80) }}</template>
               <template v-else>{{ w.id }}</template>
-              <div class="muted">{{ w.reason }}</div>
+              <div class="subtle reason">{{ w.reason }}</div>
             </td>
-            <td>{{ w.phase }}</td>
-            <td>{{ w.size_bytes === null ? "…" : formatBytes(w.size_bytes) }}</td>
-            <td>{{ elapsed(w.modified_at) }} ago</td>
-            <td>
-              <button :disabled="busy || !w.removable" :title="w.removable ? 'Delete the working copy' : w.reason" @click="remove(w)">
-                Delete
+            <td><span class="chip" :class="PHASE_TONE[w.phase]">{{ w.phase }}</span></td>
+            <td class="num">{{ w.size_bytes === null ? "…" : formatBytes(w.size_bytes) }}</td>
+            <td class="num">{{ elapsed(w.modified_at) }} ago</td>
+            <td class="num">
+              <button
+                type="button"
+                class="icon-btn ghost sm del"
+                :disabled="busy || !w.removable"
+                :aria-label="w.removable ? 'Delete the working copy' : w.reason"
+                :title="w.removable ? 'Delete the working copy' : w.reason"
+                @click="remove(w)"
+              >
+                <Icon name="trash" :size="14" />
               </button>
             </td>
           </tr>
-          <tr v-if="!rows.length"><td colspan="5" class="muted">No working copies</td></tr>
+          <tr v-if="!rows.length">
+            <td colspan="5" class="subtle none">No working copies.</td>
+          </tr>
         </tbody>
       </table>
     </div>
-    <h4>Clean up</h4>
-    <div class="row">
-      <label>
-        Not changed for
-        <input v-model.number="hours" type="number" min="0" style="width: 5em" @input="preview = null" /> hours
-      </label>
-      <label>
-        <input v-model="includeFailed" type="checkbox" @change="preview = null" />
-        also failed and cancelled
-      </label>
-      <button :disabled="busy" @click="check">Preview</button>
-      <button class="primary" :disabled="busy || !preview || !preview.would_remove?.length" @click="prune">Prune</button>
-    </div>
-    <div v-if="preview" class="muted">
-      {{ preview.would_remove?.length ?? 0 }} copies to remove, {{ formatBytes(preview.size_bytes) }} to free. Finished and
-      orphaned copies go<template v-if="includeFailed">, failed and backlog ones too</template>.
-    </div>
-    <div class="row" style="margin-top: 14px">
-      <button @click="dlg?.close()">Close</button>
+    <section class="cleanup">
+      <h3 class="section-title">Clean up</h3>
+      <div class="row">
+        <label class="inline">
+          Not changed for
+          <input v-model.number="hours" type="number" min="0" class="num" @input="preview = null" /> hours
+        </label>
+        <label class="check">
+          <input v-model="includeFailed" type="checkbox" @change="preview = null" />
+          Also failed and cancelled
+        </label>
+        <span class="spacer"></span>
+        <button type="button" class="btn" :disabled="busy" @click="check">Preview</button>
+        <button type="button" class="btn danger" :disabled="busy || !preview || !preview.would_remove?.length" @click="prune">
+          <Icon name="trash" :size="14" /> Prune
+        </button>
+      </div>
+      <p v-if="preview" class="muted preview">
+        {{ preview.would_remove?.length ?? 0 }} copies to remove, {{ formatBytes(preview.size_bytes) }} to free. Finished and
+        orphaned copies go<template v-if="includeFailed">, failed and backlog ones too</template>.
+      </p>
+    </section>
+    <template #footer>
+      <span class="err" role="alert">{{ err }}</span>
       <span class="muted">{{ note }}</span>
-      <span class="err">{{ err }}</span>
-    </div>
-  </dialog>
+      <button type="button" class="btn" @click="dlg?.close()">Close</button>
+    </template>
+  </AppDialog>
 </template>
 
 <style scoped>
-.workspaces {
-  width: min(900px, 95vw);
+.toolbar {
+  margin-bottom: var(--s3);
+}
+.summary {
+  font-size: var(--fs-md);
+  font-variant-numeric: tabular-nums;
 }
 .ws-scroll {
-  max-height: 50vh;
+  max-height: 46vh;
   overflow: auto;
-  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
 }
-.ws-scroll th,
-.ws-scroll td {
-  text-align: left;
-  padding: 4px 8px;
-  vertical-align: top;
+.reason {
+  font-size: var(--fs-sm);
 }
-.row label {
-  margin: 0;
+.none {
+  text-align: center;
+  padding: var(--s5);
 }
-.row input[type="checkbox"] {
-  width: auto;
+.del:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-subtle);
+}
+.cleanup {
+  margin-top: var(--s5);
+}
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.preview {
+  margin: var(--s2) 0 0;
+  font-size: var(--fs-md);
 }
 </style>

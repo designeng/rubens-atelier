@@ -20,7 +20,7 @@ cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GI
 docker compose up -d --build  # redis, postgres, migrate (one-off), api :8000, worker, beat
 ```
 
-Board: http://localhost:8000/board (enter the `HARNESS_API_TOKEN` token in the field on the page).
+Board: http://localhost:8000/board (when the server sets `HARNESS_API_TOKEN`, the board asks for it; later it's under ⋯ → API token).
 
 The agent inside the container needs `ANTHROPIC_API_KEY`. You can set `CLAUDE_CODE_OAUTH_TOKEN` instead; `claude setup-token` issues one. The login from the host keychain does not reach the container.
 
@@ -46,7 +46,7 @@ The board is a Vue 3 + Vite + TypeScript app in `web/`. It needs Node 22 and pnp
 - `make web-dev`: Vite dev server with hot reload at http://localhost:5173/board/. API requests go to http://localhost:8000, so run `make api` (or `make dev`) next to it.
 - `make web-test`: type check (`vue-tsc --noEmit`) and unit tests (Vitest). Inside `web/`: `pnpm typecheck`, `pnpm test`.
 
-The header's theme switch (Auto, Day, Midnight) is remembered per browser. Auto follows the OS colour scheme; Day and Midnight pin the light and dark palette.
+The theme button in the top bar cycles Auto, Day and Midnight and is remembered per browser. Auto follows the OS colour scheme; Day and Midnight pin the light and dark palette.
 
 The Docker image builds the board itself in a Node stage.
 
@@ -60,7 +60,7 @@ The Docker image builds the board itself in a Node stage.
 | `GET` | `/tasks/{id}/stream` | SSE: history and live events until the task finishes, supports `Last-Event-ID` |
 | `GET` | `/tasks/{id}/events?after=` | The same events, paginated |
 
-On the board, **Session** (in a story's "Now" block and next to each run) shows an agent run's full session: prompt, text, thinking, tool calls with their results, verify output and the result. It reads `/tasks/{id}/stream` and updates live until the run ends, reconnecting from the last event if the connection drops. Event strings are clipped at 8000 characters. Factory runs stay viewable after Redis expires them, from the Postgres archive (see below).
+On the board, **Session** (in a story's "Now" block and next to each run on its Runs tab) shows an agent run's full session: prompt, text, thinking, tool calls with their results, verify output and the result. It reads `/tasks/{id}/stream` and updates live until the run ends, reconnecting from the last event if the connection drops. Event strings are clipped at 8000 characters. Factory runs stay viewable after Redis expires them, from the Postgres archive (see below).
 | `POST` | `/tasks/{id}/cancel` | Cancel: a queued task is removed at once, a running one stops within about 2 seconds |
 | `GET` | `/tasks?status=` | Task list |
 
@@ -172,7 +172,7 @@ Instead of a single PAT, the project can work through a GitHub App: access only 
 
 1. Create an App at github.com/settings/apps/new: permissions Contents, Issues, Pull requests (read/write), Checks and Actions (read), access "Only on this account". Set Setup URL to `<host>/board` and enable "Redirect on update".
 2. Generate a private key and set `HARNESS_GITHUB_APP_ID`, `HARNESS_GITHUB_APP_SLUG`, `HARNESS_GITHUB_APP_PRIVATE_KEY` (or `_FILE`).
-3. On the board, click "+ project", then "Install the app / change repositories". After installing, click "refresh", pick the installation and the repository.
+3. On the board, open the project menu → "New project…", then "Install the app or change repositories". After installing, click "Refresh", pick the installation and the repository.
 
 A token is issued for one project repository and reissued 5 minutes before it expires. The lifetime (1 hour) is set by GitHub and cannot be changed. Projects without an installation use `HARNESS_GITHUB_TOKEN`. The issue poller (`HARNESS_ISSUE_REPOS`) and `/issues/run` work only with it for now.
 

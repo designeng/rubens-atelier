@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { nextTick, ref } from "vue";
 import { useBoardStore } from "../composables/useBoard";
 import { DEFAULT_URGENCY, URGENCY_LEVELS } from "../urgency";
+import AppDialog from "./ui/AppDialog.vue";
+import Field from "./ui/Field.vue";
 
 const emit = defineEmits<{ created: [] }>();
 const b = useBoardStore();
-const dlg = ref<HTMLDialogElement>();
+const dlg = ref<InstanceType<typeof AppDialog>>();
 const title = ref("");
 const body = ref("");
 const budget = ref("");
@@ -20,12 +22,14 @@ function open(initialTitle = "") {
   urgency.value = DEFAULT_URGENCY;
   err.value = "";
   dlg.value?.showModal();
+  nextTick(() => document.getElementById("iTitle")?.focus());
 }
 
 async function create() {
   const t = title.value.trim();
   if (!t) {
-    err.value = "title is required";
+    err.value = "Title is required";
+    document.getElementById("iTitle")?.focus();
     return;
   }
   busy.value = true;
@@ -50,21 +54,31 @@ defineExpose({ open });
 </script>
 
 <template>
-  <dialog ref="dlg">
-    <h3 style="margin-top: 0">New story in {{ b.slug.value }}</h3>
-    <label for="iTitle">Title</label><input id="iTitle" v-model="title" maxlength="300" />
-    <label for="iBody">Description (what to build, acceptance criteria)</label>
-    <textarea id="iBody" v-model="body" rows="8"></textarea>
-    <label for="iBudget">Budget, $ (empty: no limit)</label>
-    <input id="iBudget" v-model="budget" type="number" min="0.01" step="any" />
-    <label for="iUrgency">Urgency (more urgent work is picked up first)</label>
-    <select id="iUrgency" v-model.number="urgency">
-      <option v-for="l in URGENCY_LEVELS" :key="l.value" :value="l.value">{{ l.label }}</option>
-    </select>
-    <div class="row" style="margin-top: 14px">
-      <button class="primary" :disabled="busy" @click="create">Create &amp; start</button>
-      <button @click="dlg?.close()">Cancel</button>
-      <span class="err">{{ err }}</span>
-    </div>
-  </dialog>
+  <AppDialog ref="dlg" :title="`New story in ${b.slug.value}`" size="md">
+    <form id="newItemForm" novalidate @submit.prevent="create">
+      <Field label="Title" for="iTitle">
+        <input id="iTitle" v-model="title" maxlength="300" required :aria-invalid="!!err && !title.trim()" />
+      </Field>
+      <Field label="Description" for="iBody" hint="What to build and how to tell it is done (acceptance criteria).">
+        <textarea id="iBody" v-model="body" rows="8" aria-describedby="iBody-hint"></textarea>
+      </Field>
+      <div class="field-row">
+        <Field label="Urgency" for="iUrgency" hint="More urgent work is picked up first.">
+          <select id="iUrgency" v-model.number="urgency" aria-describedby="iUrgency-hint">
+            <option v-for="l in URGENCY_LEVELS" :key="l.value" :value="l.value">{{ l.label }}</option>
+          </select>
+        </Field>
+        <Field label="Budget, $" for="iBudget" hint="Empty: no limit.">
+          <input id="iBudget" v-model="budget" type="number" min="0.01" step="any" placeholder="No limit" aria-describedby="iBudget-hint" />
+        </Field>
+      </div>
+    </form>
+    <template #footer>
+      <span class="err" role="alert">{{ err }}</span>
+      <button type="button" class="btn" @click="dlg?.close()">Cancel</button>
+      <button type="submit" form="newItemForm" class="btn primary" :disabled="busy">
+        <span v-if="busy" class="spin"></span>Create &amp; start
+      </button>
+    </template>
+  </AppDialog>
 </template>

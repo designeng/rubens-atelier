@@ -1,5 +1,6 @@
 import { inject, onMounted, onUnmounted, provide, ref, type InjectionKey } from "vue";
-import { createClient, storage } from "../api/client";
+import { ApiError, createClient, storage } from "../api/client";
+import { toasts } from "../toasts";
 import type {
   Board,
   GithubApp,
@@ -24,6 +25,20 @@ export const canShowMoreDone = (total: number, shown: number, limit: number): bo
   total > shown && limit < MAX_DONE;
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
 
+// The open story and its drawer tab live in the URL hash ("#item=<id>&tab=runs") so they can be shared as a link.
+export type ItemTab = "overview" | "runs" | "workspace";
+const TABS: ItemTab[] = ["overview", "runs", "workspace"];
+
+export function parseHash(hash: string): { item: string | null; tab: ItemTab } {
+  const q = new URLSearchParams(hash.replace(/^#/, ""));
+  const tab = q.get("tab") as ItemTab | null;
+  return { item: q.get("item") || null, tab: tab && TABS.includes(tab) ? tab : "overview" };
+}
+
+export function itemHash(id: string, tab: ItemTab = "overview"): string {
+  return `#item=${encodeURIComponent(id)}` + (tab === "overview" ? "" : `&tab=${tab}`);
+}
+
 /** Board state and actions; App.vue creates it once and provides it to the components. */
 export function useBoard() {
   const token = ref(storage.get("token"));
@@ -38,14 +53,24 @@ export function useBoard() {
   const github = ref<GithubApp>(NO_GITHUB);
   const models = ref<Models | null>(null);
   const error = ref("");
+  // The API refused the token: the board shows the sign-in prompt instead of an error.
+  const unauthorized = ref(false);
+  // The first project list has arrived (or failed): before that the board shows placeholders, not "no project".
+  const loaded = ref(false);
 
   const api = createClient(
     () => token.value,
     (...a) => fetch(...a),
-    () => (error.value = ""),
+    () => {
+      error.value = "";
+      unauthorized.value = false;
+    },
   );
+  // Board actions report failures as an error toast; a 401 switches to the sign-in prompt instead.
   const fail = (e: unknown) => {
     error.value = e instanceof Error ? e.message : String(e);
+    if (e instanceof ApiError && e.status === 401) unauthorized.value = true;
+    else toasts.push(error.value, "error");
   };
 
   // One refresh at a time: a poll or an action during a slow one schedules a single rerun.
@@ -90,10 +115,14 @@ export function useBoard() {
   }
 
   async function loadProjects(): Promise<void> {
-    projects.value = await api.listProjects();
-    models.value = await api.listModels();
-    const want = storage.get("project");
-    slug.value = projects.value.find((p) => p.slug === want)?.slug ?? projects.value[0]?.slug ?? "";
+    try {
+      projects.value = await api.listProjects();
+      models.value = await api.listModels();
+      const want = storage.get("project");
+      slug.value = projects.value.find((p) => p.slug === want)?.slug ?? projects.value[0]?.slug ?? "";
+    } finally {
+      loaded.value = true;
+    }
     await refresh();
     syncFromHash();
   }
@@ -117,19 +146,20 @@ export function useBoard() {
     refresh().catch(fail);
   }
 
-  const HASH = "#item=";
-  const hashId = () => (location.hash.startsWith(HASH) ? decodeURIComponent(location.hash.slice(HASH.length)) : null);
+  const itemTab = ref<ItemTab>(parseHash(location.hash).tab);
+  const hashId = () => parseHash(location.hash).item;
 
-  // The open story lives in the URL hash so it can be shared as a link.
   function syncFromHash(): void {
-    const id = hashId();
+    const { item: id, tab } = parseHash(location.hash);
+    itemTab.value = tab;
     if (id === openItemId.value) return;
-    if (id) openItem(id).catch(fail);
+    if (id) openItem(id, tab).catch(fail);
     else closeItem();
   }
 
-  async function openItem(id: string): Promise<void> {
-    if (hashId() !== id) history.pushState(null, "", HASH + encodeURIComponent(id));
+  async function openItem(id: string, tab: ItemTab = "overview"): Promise<void> {
+    if (hashId() !== id) history.pushState(null, "", itemHash(id, tab));
+    itemTab.value = tab;
     openItemId.value = id;
     const it = await api.getItem(id);
     if (openItemId.value === id) item.value = it;
@@ -139,6 +169,12 @@ export function useBoard() {
     if (hashId()) history.pushState(null, "", location.pathname + location.search);
     openItemId.value = null;
     item.value = null;
+  }
+
+  // Switching tabs replaces the history entry: back closes the story rather than stepping through tabs.
+  function setItemTab(tab: ItemTab): void {
+    itemTab.value = tab;
+    if (openItemId.value) history.replaceState(null, "", itemHash(openItemId.value, tab));
   }
 
   function showMoreDone(): void {
@@ -199,7 +235,7 @@ export function useBoard() {
   const onDocClick = (e: MouseEvent) => {
     if (!openItemId.value) return;
     const t = e.target as Element | null;
-    if (t && t.isConnected && !t.closest("#detail, .card, dialog, header")) closeItem();
+    if (t && t.isConnected && !t.closest("#detail, .card, dialog, header, .toasts")) closeItem();
   };
   const onFocus = () => refreshGithub(); // back from github.com after installing the app
   // A hidden tab doesn't poll; coming back refreshes at once.
@@ -246,6 +282,10 @@ export function useBoard() {
     github,
     models,
     error,
+    unauthorized,
+    loaded,
+    itemTab,
+    setItemTab,
     fail,
     refresh,
     showMoreDone,

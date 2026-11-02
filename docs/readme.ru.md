@@ -17,7 +17,7 @@ cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GI
 docker compose up -d --build  # redis, postgres, migrate (разовый), api :8000, worker, beat
 ```
 
-Доска: http://localhost:8000/board (токен из `HARNESS_API_TOKEN` вводится в поле на странице).
+Доска: http://localhost:8000/board (если сервер задаёт `HARNESS_API_TOKEN`, доска попросит его ввести; потом он в меню ⋯ → API token).
 
 Агенту в контейнере нужен `ANTHROPIC_API_KEY`. Вместо него можно указать `CLAUDE_CODE_OAUTH_TOKEN`, его выдаёт `claude setup-token`. Логин из keychain хоста в контейнер не попадает.
 
@@ -165,7 +165,7 @@ Push идёт в ветку с PR, а не в `main`: production-готовно�
 
 1. Создайте App на github.com/settings/apps/new: права Contents, Issues, Pull requests (read/write), Checks и Actions (read), доступ «Only on this account». В Setup URL укажите `<host>/board` и включите «Redirect on update».
 2. Сгенерируйте private key и задайте `HARNESS_GITHUB_APP_ID`, `HARNESS_GITHUB_APP_SLUG`, `HARNESS_GITHUB_APP_PRIVATE_KEY` (или `_FILE`).
-3. На доске нажмите «+ project», затем «Install the app / change repositories». После установки нажмите «refresh», выберите установку и репозиторий.
+3. На доске откройте меню проекта → «New project…», затем «Install the app or change repositories». После установки нажмите «Refresh», выберите установку и репозиторий.
 
 Токен выпускается на один репозиторий проекта и перевыпускается за 5 минут до истечения. Срок жизни (1 час) задаёт GitHub, изменить его нельзя. Проекты без установки используют `HARNESS_GITHUB_TOKEN`. Поллер issues (`HARNESS_ISSUE_REPOS`) и `/issues/run` пока работают только с ним.
 

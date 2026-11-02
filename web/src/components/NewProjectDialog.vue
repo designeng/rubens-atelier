@@ -2,9 +2,12 @@
 import { computed, ref } from "vue";
 import type { Repository } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
+import AppDialog from "./ui/AppDialog.vue";
+import Field from "./ui/Field.vue";
+import Icon from "./ui/Icon.vue";
 
 const b = useBoardStore();
-const dlg = ref<HTMLDialogElement>();
+const dlg = ref<InstanceType<typeof AppDialog>>();
 const slug = ref("");
 const installation = ref(""); // installation id, "" for the server token
 const repo = ref("");
@@ -48,7 +51,7 @@ async function create() {
   const s = slug.value.trim();
   const r = repo.value.trim();
   if (!s || !r) {
-    err.value = "slug and repository are required";
+    err.value = "Slug and repository are required";
     return;
   }
   busy.value = true;
@@ -72,33 +75,41 @@ defineExpose({ open });
 </script>
 
 <template>
-  <dialog ref="dlg">
-    <h3 style="margin-top: 0">New project</h3>
-    <label for="pSlug">Slug (a-z, 0-9, -)</label><input id="pSlug" v-model="slug" />
-    <label for="pInst">GitHub access</label>
-    <select id="pInst" v-model="installation" @change="loadRepos().catch(b.fail)">
-      <option v-for="i in live" :key="i.id" :value="String(i.id)">
-        {{ i.account }} · {{ i.repository_selection === "all" ? "all repos" : "selected repos" }}
-      </option>
-      <option value="">Server token (HARNESS_GITHUB_TOKEN)</option>
-    </select>
-    <div class="muted" style="font-size: 12px; margin-top: 4px">
-      <template v-if="gh.install_url">
-        <a :href="gh.install_url" target="_blank" rel="noopener">Install the app / change repositories ↗</a> ·
-        <a href="#" @click.prevent="reload">refresh</a>
-      </template>
-      <template v-else-if="!gh.configured">GitHub App is not configured on the server.</template>
-    </div>
-    <label for="pRepo">Repository (owner/name)</label>
-    <input id="pRepo" v-model="repo" list="pRepos" autocomplete="off" />
-    <datalist id="pRepos">
-      <option v-for="r in repos" :key="r.full_name" :value="r.full_name"></option>
-    </datalist>
-    <label for="pVerify">Verify command (optional, e.g. make test)</label><input id="pVerify" v-model="verify" />
-    <div class="row" style="margin-top: 14px">
-      <button class="primary" :disabled="busy" @click="create">Create</button>
-      <button @click="dlg?.close()">Cancel</button>
-      <span class="err">{{ err }}</span>
-    </div>
-  </dialog>
+  <AppDialog ref="dlg" title="New project">
+    <form id="newProjectForm" novalidate @submit.prevent="create">
+      <Field label="Slug" for="pSlug" hint="Lowercase letters, digits and dashes.">
+        <input id="pSlug" v-model="slug" pattern="[a-z0-9-]+" autocomplete="off" aria-describedby="pSlug-hint" />
+      </Field>
+      <Field label="GitHub access" for="pInst">
+        <select id="pInst" v-model="installation" @change="loadRepos().catch(b.fail)">
+          <option v-for="i in live" :key="i.id" :value="String(i.id)">
+            {{ i.account }} · {{ i.repository_selection === "all" ? "all repos" : "selected repos" }}
+          </option>
+          <option value="">Server token (HARNESS_GITHUB_TOKEN)</option>
+        </select>
+        <div class="hint">
+          <template v-if="gh.install_url">
+            <a :href="gh.install_url" target="_blank" rel="noopener">Install the app or change repositories <Icon name="external" :size="11" /></a>
+            ·
+            <button type="button" class="btn link" @click="reload">Refresh</button>
+          </template>
+          <template v-else-if="!gh.configured">The GitHub App is not configured on the server.</template>
+        </div>
+      </Field>
+      <Field label="Repository" for="pRepo" hint="owner/name">
+        <input id="pRepo" v-model="repo" list="pRepos" autocomplete="off" aria-describedby="pRepo-hint" />
+        <datalist id="pRepos">
+          <option v-for="r in repos" :key="r.full_name" :value="r.full_name"></option>
+        </datalist>
+      </Field>
+      <Field label="Verify command" for="pVerify" hint="Optional, e.g. make test. The harness runs it before review.">
+        <input id="pVerify" v-model="verify" class="mono" aria-describedby="pVerify-hint" />
+      </Field>
+    </form>
+    <template #footer>
+      <span class="err" role="alert">{{ err }}</span>
+      <button type="button" class="btn" @click="dlg?.close()">Cancel</button>
+      <button type="submit" form="newProjectForm" class="btn primary" :disabled="busy">Create project</button>
+    </template>
+  </AppDialog>
 </template>

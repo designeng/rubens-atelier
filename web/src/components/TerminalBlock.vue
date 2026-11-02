@@ -49,16 +49,46 @@ async function run(): Promise<void> {
 </script>
 
 <template>
-  <h4>Terminal</h4>
-  <form class="row" @submit.prevent="run()">
-    <input v-model="command" placeholder="shell command in the story's workspace" maxlength="4000" style="flex: 1" />
-    <button class="primary" type="submit" :disabled="running || !command.trim()">{{ running ? "Running…" : "Run" }}</button>
+  <form class="term" @submit.prevent="run()">
+    <label for="tCmd" class="sr-only">Shell command</label>
+    <span class="prompt" aria-hidden="true">$</span>
+    <input id="tCmd" v-model="command" placeholder="Shell command in the story's workspace" maxlength="4000" autocomplete="off" spellcheck="false" />
+    <button class="btn" type="submit" :disabled="running || !command.trim()">
+      <span v-if="running" class="spin"></span>{{ running ? "Running…" : "Run" }}
+    </button>
   </form>
   <p v-if="error" class="err">{{ error }}</p>
   <template v-if="result">
-    <p class="muted">
+    <p class="subtle mono out-head">
       $ {{ result.command }}<template v-if="execFinished(result)"> · {{ execSummary(result) }}</template>
     </p>
     <pre>{{ result.output || (execFinished(result) ? "no output" : "") }}</pre>
   </template>
 </template>
+
+<style scoped>
+.term {
+  position: relative;
+  display: flex;
+  gap: var(--s2);
+}
+.prompt {
+  position: absolute;
+  left: var(--s3);
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  color: var(--text-subtle);
+  pointer-events: none;
+}
+.term input {
+  flex: 1;
+  min-width: 0;
+  padding-left: 26px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+.out-head {
+  margin: var(--s3) 0 var(--s1);
+}
+</style>
