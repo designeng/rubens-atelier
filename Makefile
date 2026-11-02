@@ -3,7 +3,7 @@
 RUN = uv run --env-file .env
 PORT ?= 8000
 
-.PHONY: help sync infra migrate revision prune-index api worker beat dev stop test lint web-build web-dev web-test
+.PHONY: help sync infra migrate revision prune-index api worker beat dev stop test lint web-build web-dev web-test mcp
 
 help:
 	@echo "make sync   git pull --rebase, then git push; stops and lists the files on conflict"
@@ -17,6 +17,7 @@ help:
 	@echo "make beat    celery beat (orphan reaper, CI poller, issue poller)"
 	@echo "make stop    stop redis and postgres"
 	@echo "make test    run the test suite"
+	@echo "make mcp     MCP server on stdio, a client of the API at HARNESS_API_URL (run make dev too)"
 	@echo "make lint    ruff check and pyright (config in pyproject.toml)"
 	@echo "make web-build  build the board (web/, Vue + Vite) into app/static/dist (needs Node 22 and pnpm)"
 	@echo "make web-dev    Vite dev server for the board on :5173/board/, API proxied to :$(PORT) (run make api too)"
@@ -78,6 +79,10 @@ stop:
 
 test:
 	uv run pytest
+
+# Stdio: meant to be started by an MCP client (claude mcp add ...), not run in a terminal.
+mcp:
+	$(RUN) python -m app.mcp_server
 
 lint:
 	uv run ruff check .

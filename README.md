@@ -148,6 +148,21 @@ Reliability. Every transition is a compare-and-set on `work_items.version`. A wo
 
 Factory state lives in Postgres. Redis still holds the queue, agent events and leases. When an agent step finishes, its task and full event stream are archived to Postgres (`task_transcripts`, keyed by `runs.task_id`), so `/tasks/{id}`, `/tasks/{id}/events` and `/tasks/{id}/stream` keep serving a run's transcript after Redis has expired it. Ad-hoc `/tasks` runs are not archived. The schema is versioned with Alembic (`migrations/versions/`, applied revision in `alembic_version`). `python -m app.migrate` (`make migrate`, the one-off `migrate` service in compose) runs `alembic upgrade head` before the api, worker and beat start; they do not touch the schema themselves. A database created before Alembic (tables, no `alembic_version`) is stamped at revision `0001` first and then upgraded; if it lacks a column of that revision (checked against the frozen `REVISION_0001_COLUMNS` in `app/migrate.py`, not the current models), the command stops instead. Columns added in later revisions are applied by the upgrade; never add them to that constant. To change the schema: edit the models in `app/db.py`, `make migrate`, `make revision m="what changed"`, then review the generated file (autogenerate misses renames and data backfills). Tests build the schema with `create_all`; `tests/test_db.py` fails when the models and the migrations disagree.
 
+## MCP server
+
+`app/mcp_server.py` exposes the factory to any MCP client (Claude Code, Claude Desktop, …) as tools: projects (`list_projects`, `create_project`, `update_project`, `import_issues`), the board and stories (`get_board`, `get_inbox`, `get_item`, `create_item`, `update_item`, `item_action` for start / run-now / cancel / reopen / open-pr, `delete_item`, `answer_request`, `get_item_git`, `get_run_log`), the scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models`, and workspaces (`list_workspaces`, `prune_workspaces`, a dry run unless told otherwise). Read-only and destructive tools carry the matching MCP annotations; the board terminal is not exposed.
+
+It is a client of the HTTP API, not a second backend: it calls `HARNESS_API_URL` (default `http://localhost:8000`) with `HARNESS_API_TOKEN` from the environment or `.env`, so the API must be running (`make dev` or compose) and every call goes through the same checks as the board. It speaks stdio:
+
+```bash
+claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+make mcp   # the same, by hand
+```
+
+Against a remote harness, pass the address and token: `claude mcp add factory -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… -- uv run --directory … python -m app.mcp_server`.
+
+Every tool, its endpoint and what is left out: [docs/mcp-server.ru.md](docs/mcp-server.ru.md) (in Russian).
+
 ## How the issue flow works
 
 1. **Trigger.** A task is created by `POST /issues/run` or by beat, which polls `HARNESS_ISSUE_REPOS` every `HARNESS_ISSUE_POLL_SECONDS` and picks up issues labelled `agent`. Only collaborators with triage rights can set labels, so an outsider cannot point the agent at their own text.
