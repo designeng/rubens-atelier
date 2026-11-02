@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     checks_fallback_poll_seconds: int = 300
     # Optional bearer token for the HTTP API. Empty = auth disabled (local dev only).
     api_token: str = ""
+    # Where the MCP server (python -m app.mcp_server) reaches the HTTP API; it sends `api_token`.
+    api_url: str = "http://localhost:8000"
 
     # Board terminal: run shell commands in a story's workspace. Remote code execution, so it
     # is off by default and refused unless `api_token` is set.

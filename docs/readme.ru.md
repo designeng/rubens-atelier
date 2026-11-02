@@ -141,6 +141,19 @@ Agent-прогон, закончившийся без результата, от
 
 Состояние фабрики хранится в Postgres. Redis по-прежнему держит очередь, события агентов и lease. Когда agent-шаг завершается, его задача и весь поток событий архивируются в Postgres (`task_transcripts`, ключ — `runs.task_id`), поэтому `/tasks/{id}`, `/tasks/{id}/events` и `/tasks/{id}/stream` отдают транскрипт run'а и после того, как Redis его удалил. Разовые задачи `/tasks` не архивируются. Схема версионируется через Alembic (`migrations/versions/`, применённая ревизия в `alembic_version`). `python -m app.migrate` (`make migrate`, разовый сервис `migrate` в compose) выполняет `alembic upgrade head` до старта api, worker и beat; сами они схему не трогают. БД, созданная до Alembic (таблицы есть, `alembic_version` нет), сначала помечается ревизией `0001`, затем обновляется; если в ней не хватает колонки этой ревизии, команда останавливается. Как менять схему: поправить модели в `app/db.py`, `make migrate`, `make revision m="что изменилось"` и проверить сгенерированный файл (autogenerate не видит переименований и заполнения данных). Тесты строят схему через `create_all`; `tests/test_db.py` падает, если модели и миграции расходятся.
 
+## MCP-сервер
+
+`app/mcp_server.py` даёт любому MCP-клиенту (Claude Code, Claude Desktop, …) управлять фабрикой через инструменты: проекты (`list_projects`, `create_project`, `update_project`, `import_issues`), доска и истории (`get_board`, `get_inbox`, `get_item`, `create_item`, `update_item`, `item_action` для start / run-now / cancel / reopen / open-pr, `delete_item`, `answer_request`, `get_item_git`, `get_run_log`), scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models` и workspaces (`list_workspaces`, `prune_workspaces`, по умолчанию dry run). Читающие и разрушающие инструменты помечены соответствующими MCP-аннотациями; терминал доски не выставлен.
+
+Это клиент HTTP API, а не второй бэкенд: он ходит на `HARNESS_API_URL` (по умолчанию `http://localhost:8000`) с `HARNESS_API_TOKEN` из окружения или `.env`, поэтому API должен быть запущен (`make dev` или compose), и каждый вызов проходит те же проверки, что и доска. Транспорт — stdio:
+
+```bash
+claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+make mcp   # то же самое вручную
+```
+
+Для удалённого harness передайте адрес и токен: `claude mcp add factory -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… -- uv run --directory … python -m app.mcp_server`.
+
 ## Как работает issue-флоу
 
 1. **Триггер.** Задачу ставит `POST /issues/run` или beat, который раз в `HARNESS_ISSUE_POLL_SECONDS` опрашивает `HARNESS_ISSUE_REPOS` и забирает issues с меткой `agent`. Ставить метки могут только участники с правами triage, поэтому любой посторонний не сможет натравить агента на свой текст.
