@@ -161,6 +161,8 @@ make mcp   # the same, by hand
 
 Against a remote harness, pass the address and token: `claude mcp add factory -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… -- uv run --directory … python -m app.mcp_server`.
 
+Every tool, its endpoint and what is left out: [docs/mcp-server.ru.md](docs/mcp-server.ru.md) (in Russian).
+
 ## How the issue flow works
 
 1. **Trigger.** A task is created by `POST /issues/run` or by beat, which polls `HARNESS_ISSUE_REPOS` every `HARNESS_ISSUE_POLL_SECONDS` and picks up issues labelled `agent`. Only collaborators with triage rights can set labels, so an outsider cannot point the agent at their own text.

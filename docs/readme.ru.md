@@ -154,6 +154,8 @@ make mcp   # то же самое вручную
 
 Для удалённого harness передайте адрес и токен: `claude mcp add factory -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… -- uv run --directory … python -m app.mcp_server`.
 
+Все инструменты, их эндпоинты и что не выставлено: [mcp-server.ru.md](mcp-server.ru.md).
+
 ## Как работает issue-флоу
 
 1. **Триггер.** Задачу ставит `POST /issues/run` или beat, который раз в `HARNESS_ISSUE_POLL_SECONDS` опрашивает `HARNESS_ISSUE_REPOS` и забирает issues с меткой `agent`. Ставить метки могут только участники с правами triage, поэтому любой посторонний не сможет натравить агента на свой текст.
