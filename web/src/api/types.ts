@@ -41,6 +41,7 @@ export interface ItemIn {
   parent_id?: string | null;
   issue?: number | null;
   priority?: number;
+  model?: string | null;
   budget_usd?: number | null;
   blocked_by?: string[];
   start?: boolean;

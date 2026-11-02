@@ -12,6 +12,7 @@ const title = ref("");
 const body = ref("");
 const budget = ref("");
 const urgency = ref(DEFAULT_URGENCY);
+const model = ref("");
 const err = ref("");
 const busy = ref(false);
 
@@ -20,6 +21,7 @@ function open(initialTitle = "") {
   body.value = "";
   budget.value = "";
   urgency.value = DEFAULT_URGENCY;
+  model.value = "";
   err.value = "";
   dlg.value?.showModal();
   nextTick(() => document.getElementById("iTitle")?.focus());
@@ -39,6 +41,7 @@ async function create() {
       body: body.value,
       budget_usd: budget.value.trim() === "" ? null : Number(budget.value),
       priority: urgency.value,
+      model: model.value || null,
       start: true,
     });
     dlg.value?.close();
@@ -72,6 +75,12 @@ defineExpose({ open });
           <input id="iBudget" v-model="budget" type="number" min="0.01" step="any" placeholder="No limit" aria-describedby="iBudget-hint" />
         </Field>
       </div>
+      <Field label="Model" for="iModel" hint="Empty: the harness default. Can be changed later.">
+        <select id="iModel" v-model="model" aria-describedby="iModel-hint">
+          <option value="">Default<template v-if="b.models.value"> ({{ b.models.value.default }})</template></option>
+          <option v-for="m in b.models.value?.models ?? []" :key="m" :value="m">{{ m }}</option>
+        </select>
+      </Field>
     </form>
     <template #footer>
       <span class="err" role="alert">{{ err }}</span>
