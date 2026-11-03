@@ -3,8 +3,10 @@ import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { ApiError } from "../api/client";
 import type { TaskEvent, TaskInfo } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
+import { isFileEdit } from "../diff";
 import { formatTokens, formatUsd } from "../format";
 import { contextTokens, transcript } from "../session";
+import DiffBlock from "./DiffBlock.vue";
 
 // The full agent session of one run, live: replays the task's event log over SSE and keeps
 // following it until the task finishes, reconnecting from the last event after a drop.
@@ -154,7 +156,14 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
           <summary>
             <span v-if="!e.result && live" class="spin"></span>{{ e.summary }}
           </summary>
-          <pre v-if="e.input != null">{{ fmtInput(e.input) }}</pre>
+          <template v-if="isFileEdit(e.name, e.input)">
+            <DiffBlock :name="e.name" :input="e.input" />
+            <details class="s-raw">
+              <summary>raw input</summary>
+              <pre>{{ fmtInput(e.input) }}</pre>
+            </details>
+          </template>
+          <pre v-else-if="e.input != null">{{ fmtInput(e.input) }}</pre>
           <pre v-if="e.result" :class="{ error: e.result.isError }">{{ e.result.content || "(empty)" }}</pre>
         </details>
         <details v-else-if="e.kind === 'verify'" class="s-tool" :class="{ bad: e.exitCode !== 0 }">
@@ -228,6 +237,9 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
 .s-tool pre {
   margin: 4px 0 6px;
   background: var(--surface);
+}
+.s-raw summary {
+  color: var(--text-subtle);
 }
 .s-prompt summary {
   font-family: var(--font-ui);
