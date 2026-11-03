@@ -6,7 +6,9 @@ import { useBoardStore } from "../composables/useBoard";
 import { isFileEdit } from "../diff";
 import { formatTokens, formatUsd } from "../format";
 import { contextTokens, transcript } from "../session";
+import { isShell } from "../shell";
 import DiffBlock from "./DiffBlock.vue";
+import ShellBlock from "./ShellBlock.vue";
 
 // The full agent session of one run, live: replays the task's event log over SSE and keeps
 // following it until the task finishes, reconnecting from the last event after a drop.
@@ -156,8 +158,9 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
           <summary>
             <span v-if="!e.result && live" class="spin"></span>{{ e.summary }}
           </summary>
-          <template v-if="isFileEdit(e.name, e.input)">
-            <DiffBlock :name="e.name" :input="e.input" />
+          <template v-if="isFileEdit(e.name, e.input) || isShell(e.name, e.input)">
+            <DiffBlock v-if="isFileEdit(e.name, e.input)" :name="e.name" :input="e.input" />
+            <ShellBlock v-else :input="e.input" />
             <details class="s-raw">
               <summary>raw input</summary>
               <pre>{{ fmtInput(e.input) }}</pre>
@@ -237,6 +240,9 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
 .s-tool pre {
   margin: 4px 0 6px;
   background: var(--surface);
+}
+.s-raw {
+  margin-left: var(--s4);
 }
 .s-raw summary {
   color: var(--text-subtle);
