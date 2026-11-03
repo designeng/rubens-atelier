@@ -167,7 +167,7 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
             </details>
           </template>
           <pre v-else-if="e.input != null">{{ fmtInput(e.input) }}</pre>
-          <pre v-if="e.result" :class="{ error: e.result.isError }">{{ e.result.content || "(empty)" }}</pre>
+          <pre v-if="e.result" class="s-out" :class="{ error: e.result.isError }">{{ e.result.content || "(empty)" }}</pre>
         </details>
         <details v-else-if="e.kind === 'verify'" class="s-tool" :class="{ bad: e.exitCode !== 0 }">
           <summary>verify: {{ e.command }} → exit {{ e.exitCode }}</summary>
@@ -241,7 +241,9 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
   margin: 4px 0 6px;
   background: var(--surface);
 }
-.s-raw {
+/* The call's result and raw input are subsections of the call. */
+.s-raw,
+.s-tool pre.s-out {
   margin-left: var(--s4);
 }
 .s-raw summary {
