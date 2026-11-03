@@ -85,7 +85,13 @@ async def test_github_client_uses_installation_token(app_key, monkeypatch):
 
     monkeypatch.setattr(github_app, "installation_token", fake_token)
     gh = GitHub(installation_id=7, repo="acme/app")
-    gh.http._transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"auth": r.headers["authorization"]}))
+    auth = gh.http.auth
+    await gh.aclose()  # a fresh client, so proxy mounts from the environment don't bypass the mock
+    gh.http = httpx.AsyncClient(
+        base_url="https://api.github.test",
+        auth=auth,
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"auth": r.headers["authorization"]})),
+    )
     assert (await gh.get_repo("acme/app"))["auth"] == "Bearer tok-1"
     assert (await gh.get_repo("acme/app"))["auth"] == "Bearer tok-2"  # resolved per request
     assert await gh.git_token() == "tok-3" and calls[0] == (7, "acme/app")
