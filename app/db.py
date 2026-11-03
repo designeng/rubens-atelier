@@ -114,6 +114,7 @@ class Run(Base):
     status: Mapped[str] = mapped_column(String(16), default="running")
     verdict: Mapped[str | None] = mapped_column(String(64))
     cost_usd: Mapped[float | None]
+    model: Mapped[str | None] = mapped_column(String(100))  # the model the run used
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None]
 
