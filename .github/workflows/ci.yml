@@ -1,0 +1,62 @@
+# The same checks as locally (Makefile, README): every PR gets check runs, so the factory's
+# `check: ci` gate sees python, web and docker instead of no_checks.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Python comes from .python-version; the tests need no services (sqlite + fakeredis).
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: uv sync
+        run: uv sync --frozen
+      - name: ruff
+        run: uv run --frozen ruff check .
+      - name: pyright
+        run: uv run --frozen pyright
+      - name: pytest
+        run: uv run --frozen pytest
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # pnpm version from "packageManager" in web/package.json, as corepack does locally.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: web-test
+        run: make web-test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: docker build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

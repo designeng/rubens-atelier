@@ -32,7 +32,10 @@ uv run uvicorn app.api:app --reload
 uv run celery -A app.celery_app worker -l info --pool threads   # на macOS prefork+spawn не работает
 uv run celery -A app.celery_app beat -l info
 uv run pytest
+uv run ruff check . && uv run pyright                           # или: make lint
 ```
+
+CI (`.github/workflows/ci.yml`) на каждом pull request и при push в `main` запускает pytest, ruff, pyright, `make web-test` и сборку Docker-образа (без push).
 
 ### Доска (web/)
 

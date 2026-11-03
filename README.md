@@ -39,6 +39,8 @@ uv run pytest
 uv run ruff check . && uv run pyright                           # or: make lint
 ```
 
+CI (`.github/workflows/ci.yml`) runs pytest, ruff, pyright, `make web-test` and a Docker build (no push) on every pull request and on pushes to `main`.
+
 ### Board (web/)
 
 The board is a Vue 3 + Vite + TypeScript app in `web/`. It needs Node 22 and pnpm (`corepack enable` provides the version pinned in `web/package.json`). `vite build` writes it to `app/static/dist/` (not committed), and `GET /board` serves it from there. Without a build `/board` shows a page asking to run `make web-build`; the API and the Python tests do not need Node.
