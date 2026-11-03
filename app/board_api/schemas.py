@@ -109,6 +109,10 @@ class ItemOut(Orm):
     column: Column = "backlog"
     # GitHub issue the story came from or should close (item.source["issue"]).
     issue: int | None = None
+    # Login of the issue's author, and whether the story is untrusted (written by someone who is not
+    # OWNER/MEMBER/COLLABORATOR) and still awaits confirmation to start.
+    author: str | None = None
+    external: bool = False
     # Only for items in the working column: what is happening right now (see _progress).
     progress: dict[str, Any] | None = None
     # Only for items waiting for a human: why they are stuck (see _attention).

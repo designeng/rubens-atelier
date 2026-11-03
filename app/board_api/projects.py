@@ -141,6 +141,10 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
     return await _get_item_out(db, engine, item.id)
 
 
+# Issue authors whose text is trusted; anyone else (or an unknown association) is "external".
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
 @router.post("/projects/{slug}/import-issues")
 async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
     """Put every open issue of the project's repo into the backlog as a story; nothing is started.
@@ -171,7 +175,12 @@ async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
                     filter(None, [(issue.get("body") or "").strip(), f"Imported from {issue['html_url']}"])
                 ),
                 workflow="story",
-                source={"issue": issue["number"]},
+                source={
+                    "issue": issue["number"],
+                    "author": (issue.get("user") or {}).get("login"),
+                    "author_association": issue.get("author_association"),
+                    "external": issue.get("author_association") not in TRUSTED_ASSOCIATIONS,
+                },
             )
             for issue in issues
             if issue["number"] not in known

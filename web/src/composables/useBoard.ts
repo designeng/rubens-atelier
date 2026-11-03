@@ -188,7 +188,19 @@ export function useBoard() {
   // Board actions report failures in the header error line and refresh on success.
   const act = (p: Promise<unknown>): Promise<void> => p.then(() => refresh()).catch(fail);
 
-  const startItem = (id: string) => act(api.startItem(id));
+  // A story from an outside author's issue is untrusted text an agent would act on: ask first.
+  const startItem = (id: string): Promise<void> => {
+    const known = item.value?.id === id ? item.value : Object.values(board.value ?? {}).flat().find((i) => i.id === id);
+    if (known?.external) {
+      const ok = window.confirm(
+        `This story comes from an issue by an external author (@${known.author ?? "unknown"}).\n` +
+          "Its text is untrusted and may try to steer the agent, which can run commands.\n\nStart it anyway?",
+      );
+      if (!ok) return Promise.resolve();
+      return act(api.startItem(id, true));
+    }
+    return act(api.startItem(id));
+  };
   const cancelItem = (id: string) => act(api.cancelItem(id));
   const reopenItem = (id: string) => act(api.reopenItem(id));
   const openPr = (id: string) => act(api.openPr(id));

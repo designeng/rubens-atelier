@@ -122,9 +122,10 @@ async def exec_result(item_id: str, exec_id: str, engine: Eng) -> dict:
 
 
 @router.post("/items/{item_id}/start", status_code=status.HTTP_202_ACCEPTED)
-async def start_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
+async def start_item(item_id: str, db: Db, engine: Eng, confirm_external: bool = False) -> ItemOut:
+    """`confirm_external` acknowledges that a story imported from an outside author's issue is untrusted."""
     try:
-        await engine.start(item_id)
+        await engine.start(item_id, confirm_external=confirm_external)
     except EngineError as e:
         raise _engine_error(e) from None
     return await _get_item_out(db, engine, item_id)

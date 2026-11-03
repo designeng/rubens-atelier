@@ -25,8 +25,14 @@ def _column(engine: Engine, item: WorkItem) -> Column:
 
 
 def _item_out(engine: Engine, item: WorkItem) -> ItemOut:
+    source = item.source or {}
     return ItemOut.model_validate(item).model_copy(
-        update={"column": _column(engine, item), "issue": (item.source or {}).get("issue")}
+        update={
+            "column": _column(engine, item),
+            "issue": source.get("issue"),
+            "author": source.get("author"),
+            "external": bool(source.get("external")) and not source.get("external_confirmed"),
+        }
     )
 
 
