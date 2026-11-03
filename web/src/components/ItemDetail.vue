@@ -329,6 +329,9 @@ onUnmounted(() => {
         <span v-if="it.kind !== 'story' || it.workflow !== 'story'">{{ it.kind }} · {{ it.workflow }}</span>
         <span v-if="it.priority">{{ urgencyLabel(it.priority) }}</span>
         <span v-if="it.issue">#{{ it.issue }}</span>
+        <span v-if="it.external" class="chip warn" title="Untrusted text: confirm before starting">
+          External author<template v-if="it.author"> @{{ it.author }}</template>
+        </span>
         <span v-if="it.branch" class="mono" title="Branch"><Icon name="branch" :size="13" /> {{ it.branch }}</span>
         <a v-if="it.pr_url" :href="it.pr_url" target="_blank" rel="noopener" class="pr-link">
           <Icon name="pr" :size="13" /> Pull request <Icon name="external" :size="12" />

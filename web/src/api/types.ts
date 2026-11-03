@@ -99,6 +99,10 @@ export interface ItemOut {
   updated_at: string;
   column: Column;
   issue: number | null;
+  // Login of the issue's author when the story was imported from an issue.
+  author: string | null;
+  // Imported from an outside author's issue and not yet confirmed: starting needs an explicit confirmation.
+  external: boolean;
   progress: Progress | null;
   attention?: Attention | null;
   // Backlog items only: the blockers that have not succeeded yet ("title (id)").

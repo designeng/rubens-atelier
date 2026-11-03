@@ -146,6 +146,10 @@ class ItemOut(Orm):
     column: Column = "backlog"
     # GitHub issue the story came from or should close (item.source["issue"]).
     issue: int | None = None
+    # Login of the issue's author, and whether the story is untrusted (written by someone who is not
+    # OWNER/MEMBER/COLLABORATOR) and still awaits confirmation to start.
+    author: str | None = None
+    external: bool = False
     # Only for items in the working column: what is happening right now (see _progress).
     progress: dict[str, Any] | None = None
     # Only for items waiting for a human: why they are stuck (see _attention).
@@ -232,8 +236,14 @@ def _column(engine: Engine, item: WorkItem) -> Column:
 
 
 def _item_out(engine: Engine, item: WorkItem) -> ItemOut:
+    source = item.source or {}
     return ItemOut.model_validate(item).model_copy(
-        update={"column": _column(engine, item), "issue": (item.source or {}).get("issue")}
+        update={
+            "column": _column(engine, item),
+            "issue": source.get("issue"),
+            "author": source.get("author"),
+            "external": bool(source.get("external")) and not source.get("external_confirmed"),
+        }
     )
 
 
@@ -514,6 +524,10 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
     return await _get_item_out(db, engine, item.id)
 
 
+# Issue authors whose text is trusted; anyone else (or an unknown association) is "external".
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
 @router.post("/projects/{slug}/import-issues")
 async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
     """Put every open issue of the project's repo into the backlog as a story; nothing is started.
@@ -544,7 +558,12 @@ async def import_issues(slug: str, db: Db, engine: Eng) -> ImportResult:
                     filter(None, [(issue.get("body") or "").strip(), f"Imported from {issue['html_url']}"])
                 ),
                 workflow="story",
-                source={"issue": issue["number"]},
+                source={
+                    "issue": issue["number"],
+                    "author": (issue.get("user") or {}).get("login"),
+                    "author_association": issue.get("author_association"),
+                    "external": issue.get("author_association") not in TRUSTED_ASSOCIATIONS,
+                },
             )
             for issue in issues
             if issue["number"] not in known
@@ -801,9 +820,10 @@ async def exec_result(item_id: str, exec_id: str, engine: Eng) -> dict:
 
 
 @router.post("/items/{item_id}/start", status_code=status.HTTP_202_ACCEPTED)
-async def start_item(item_id: str, db: Db, engine: Eng) -> ItemOut:
+async def start_item(item_id: str, db: Db, engine: Eng, confirm_external: bool = False) -> ItemOut:
+    """`confirm_external` acknowledges that a story imported from an outside author's issue is untrusted."""
     try:
-        await engine.start(item_id)
+        await engine.start(item_id, confirm_external=confirm_external)
     except EngineError as e:
         raise _engine_error(e) from None
     return await _get_item_out(db, engine, item_id)
