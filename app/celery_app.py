@@ -11,7 +11,7 @@ import os
 import socket
 
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, worker_ready
 from redis.asyncio import Redis
 
 from .config import settings
@@ -68,6 +68,31 @@ def _scrub_secrets(**_):
 
 def _redis() -> Redis:
     return Redis.from_url(settings.redis_url, decode_responses=True)
+
+
+def check_sandbox() -> dict:
+    """Probe bwrap, log the verdict and publish it for /healthz. Never raises."""
+    from . import sandbox_check
+
+    result = sandbox_check.probe()
+    if result["ok"]:
+        log.info("sandbox: %s", result["detail"])
+    else:
+        log.error("sandbox check failed: %s. %s", result["detail"], sandbox_check.HINT)
+
+    async def publish(store):
+        await sandbox_check.report(store.r, result, f"{socket.gethostname()}:{os.getpid()}")
+
+    try:
+        asyncio.run(_with_store(publish))
+    except Exception:
+        log.exception("could not publish the sandbox check to Redis")
+    return result
+
+
+@worker_ready.connect
+def _check_sandbox_on_start(**_):
+    check_sandbox()
 
 
 async def _with_store(fn):

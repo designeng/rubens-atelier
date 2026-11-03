@@ -4,7 +4,7 @@ from datetime import timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app import api, service
+from app import api, sandbox_check, service
 from app.api import app
 from app.celery_app import celery_app
 from app.config import settings
@@ -23,7 +23,27 @@ def client(redis, db, monkeypatch):
 def test_healthz_checks_redis_and_postgres(client):
     r = client.get("/healthz")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "redis": True, "postgres": True}
+    assert r.json() == {"ok": True, "redis": True, "postgres": True, "sandbox": None}
+
+
+async def test_healthz_reports_a_failed_sandbox_without_failing(client, redis):
+    await sandbox_check.report(redis, {"ok": False, "detail": "bwrap is not installed"}, "w1")
+    r = await asyncio.to_thread(client.get, "/healthz")
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "redis": True,
+        "postgres": True,
+        "sandbox": False,
+        "sandbox_detail": "bwrap is not installed",
+    }
+
+
+async def test_healthz_reports_a_working_sandbox(client, redis):
+    await sandbox_check.report(redis, {"ok": True, "detail": "ok"}, "w1")
+    r = await asyncio.to_thread(client.get, "/healthz")
+    assert r.json()["sandbox"] is True
+    assert "sandbox_detail" not in r.json()
 
 
 def test_healthz_fails_when_postgres_is_down(client, monkeypatch):
@@ -33,7 +53,7 @@ def test_healthz_fails_when_postgres_is_down(client, monkeypatch):
     monkeypatch.setattr(app.state.db, "ping", down)
     r = client.get("/healthz")
     assert r.status_code == 503
-    assert r.json() == {"ok": False, "redis": True, "postgres": False}
+    assert r.json() == {"ok": False, "redis": True, "postgres": False, "sandbox": None}
 
 
 def test_healthz_fails_when_redis_is_down(client, monkeypatch):
@@ -43,7 +63,7 @@ def test_healthz_fails_when_redis_is_down(client, monkeypatch):
     monkeypatch.setattr(app.state.redis, "ping", down)
     r = client.get("/healthz")
     assert r.status_code == 503
-    assert r.json() == {"ok": False, "redis": False, "postgres": True}
+    assert r.json() == {"ok": False, "redis": False, "postgres": True, "sandbox": None}
 
 
 def test_healthz_times_out_a_hanging_dependency(client, monkeypatch):

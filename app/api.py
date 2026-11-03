@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
 
-from . import board_api, checks, memory, metrics, terminal, webhooks, workspaces
+from . import board_api, checks, memory, metrics, sandbox_check, terminal, webhooks, workspaces
 from .archive import events_after, load_transcript
 from .config import settings
 from .db import Database
@@ -113,8 +113,19 @@ async def _healthy(check: Awaitable[object]) -> bool:
 async def healthz(store: Store, db: Db) -> JSONResponse:
     redis_ok, postgres_ok = await asyncio.gather(_healthy(store.r.ping()), _healthy(db.ping()))
     ok = redis_ok and postgres_ok
+    body = {"ok": ok, "redis": redis_ok, "postgres": postgres_ok, "sandbox": None}
+    if redis_ok:
+        # Reported by the worker on start. Informational: it never changes `ok` or the status.
+        try:
+            reported = await asyncio.wait_for(sandbox_check.read(store.r), HEALTH_TIMEOUT)
+        except Exception:
+            reported = None
+        if reported:
+            body["sandbox"] = bool(reported["ok"])
+            if not reported["ok"]:
+                body["sandbox_detail"] = reported["detail"]
     return JSONResponse(
-        {"ok": ok, "redis": redis_ok, "postgres": postgres_ok},
+        body,
         status_code=status.HTTP_200_OK if ok else status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 

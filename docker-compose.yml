@@ -55,6 +55,7 @@ services:
     # default seccomp profile blocks; without them Bash fails (the sandbox is fail-closed).
     # Pick one: uncomment the line below (drops seccomp filtering for the worker container),
     # use a custom profile that allows them, or set HARNESS_SANDBOX=false (secrets readable).
+    # The worker probes bwrap on start: it logs an error and /healthz reports "sandbox": false.
     # security_opt: ["seccomp=unconfined"]
     # Warm shutdown waits for running agents; give them time before SIGKILL.
     stop_grace_period: 10m
