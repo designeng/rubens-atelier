@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { fileChanges } from "../diff";
+import { shortPaths } from "../session";
 
 // A file-editing tool call as a unified diff, one block per edit.
-const props = defineProps<{ name: string; input: unknown }>();
+const props = defineProps<{ name: string; input: unknown; short?: boolean }>();
 const changes = computed(() => fileChanges(props.name, props.input));
 const SIGN = { add: "+", del: "-", same: " " } as const;
 </script>
@@ -11,7 +12,7 @@ const SIGN = { add: "+", del: "-", same: " " } as const;
 <template>
   <div v-for="(c, i) in changes" :key="i" class="diff">
     <div class="d-head">
-      <span class="d-path" :title="c.path">{{ c.path }}</span>
+      <span class="d-path" :title="c.path">{{ short ? shortPaths(c.path) : c.path }}</span>
       <span v-if="c.note" class="d-note">{{ c.note }}</span>
     </div>
     <div class="d-body">

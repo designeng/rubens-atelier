@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TaskEvent } from "../api/types";
-import { contextTokens, describeTool, resultText, transcript } from "../session";
+import { contextTokens, describeTool, resultText, shortPaths, transcript } from "../session";
 
 let n = 0;
 const ev = (type: string, data: Record<string, unknown>): TaskEvent => ({ id: `${++n}-0`, type, data });
@@ -63,5 +63,19 @@ describe("context size", () => {
     ]);
     expect(contextTokens(events)).toBe(21400);
     expect(contextTokens([])).toBeNull();
+  });
+});
+
+describe("shortPaths", () => {
+  const root = "/Users/me/agent-harness/workspaces/items/7fdcc6c8324147d5af4b125e99ee45c0";
+  it("drops the workspace directory from paths", () => {
+    expect(shortPaths(`${root}/Sources/A.swift`)).toBe("Sources/A.swift");
+    expect(shortPaths(`cd ${root}/x && ls`)).toBe("cd x && ls");
+    expect(shortPaths("/etc/hosts")).toBe("/etc/hosts");
+  });
+  it("applies to the tool summary on request", () => {
+    const input = { file_path: `${root}/Sources/A.swift` };
+    expect(describeTool("Edit", input, true)).toBe("Edit: Sources/A.swift");
+    expect(describeTool("Edit", input)).toBe(`Edit: ${root}/Sources/A.swift`);
   });
 });

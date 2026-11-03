@@ -5,7 +5,7 @@ import type { TaskEvent, TaskInfo } from "../api/types";
 import { useBoardStore } from "../composables/useBoard";
 import { isFileEdit } from "../diff";
 import { formatTokens, formatUsd } from "../format";
-import { contextTokens, transcript } from "../session";
+import { contextTokens, describeTool, transcript } from "../session";
 import { isShell } from "../shell";
 import DiffBlock from "./DiffBlock.vue";
 import ShellBlock from "./ShellBlock.vue";
@@ -25,6 +25,7 @@ const events = ref<TaskEvent[]>([]);
 const live = ref(false);
 const error = ref("");
 const follow = ref(true);
+const short = ref(true);
 const log = ref<HTMLElement | null>(null);
 const entries = computed(() => transcript(events.value));
 const turns = computed(() => events.value.filter((e) => e.type === "turn").length);
@@ -125,6 +126,8 @@ function onScroll(): void {
   if (el) follow.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 }
 
+const summaryOf = (e: Extract<(typeof entries.value)[number], { kind: "tool" }>) =>
+  e.input == null ? e.summary : describeTool(e.name, e.input, short.value);
 const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
 </script>
 
@@ -140,6 +143,7 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
       <span v-if="task?.cost_usd != null">{{ formatUsd(task.cost_usd) }}</span>
       <span v-if="task?.session_id" class="mono subtle sid" :title="`session ${task.session_id}`">{{ task.session_id.slice(0, 8) }}</span>
       <span class="spacer"></span>
+      <label class="check follow" title="Hide the workspace directory from file paths"><input v-model="short" type="checkbox" /> Short paths</label>
       <label class="check follow" title="Keep the newest entry in view"><input v-model="follow" type="checkbox" /> Follow</label>
     </div>
     <p v-if="error" class="err">{{ error }}</p>
@@ -156,11 +160,11 @@ const fmtInput = (input: unknown) => JSON.stringify(input, null, 2);
         </details>
         <details v-else-if="e.kind === 'tool'" class="s-tool" :class="{ bad: e.result?.isError }">
           <summary>
-            <span v-if="!e.result && live" class="spin"></span>{{ e.summary }}
+            <span v-if="!e.result && live" class="spin"></span>{{ summaryOf(e) }}
           </summary>
           <template v-if="isFileEdit(e.name, e.input) || isShell(e.name, e.input)">
-            <DiffBlock v-if="isFileEdit(e.name, e.input)" :name="e.name" :input="e.input" />
-            <ShellBlock v-else :input="e.input" />
+            <DiffBlock v-if="isFileEdit(e.name, e.input)" :name="e.name" :input="e.input" :short="short" />
+            <ShellBlock v-else :input="e.input" :short="short" />
             <details class="s-raw">
               <summary>raw input</summary>
               <pre>{{ fmtInput(e.input) }}</pre>

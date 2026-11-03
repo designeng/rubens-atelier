@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { shortPaths } from "../session";
 import { shellCall, shellTokens } from "../shell";
 
 // A Bash tool call as a terminal line, with what the agent said it does above it.
-const props = defineProps<{ input: unknown }>();
+const props = defineProps<{ input: unknown; short?: boolean }>();
 const call = computed(() => shellCall(props.input));
-const tokens = computed(() => shellTokens(call.value.command));
+const tokens = computed(() => shellTokens(props.short ? shortPaths(call.value.command) : call.value.command));
 </script>
 
 <template>

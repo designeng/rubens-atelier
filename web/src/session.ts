@@ -17,12 +17,18 @@ export interface ToolResult {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v, null, 2));
 
+// Every file of a run sits under its workspace (.../workspaces/items/<id>/), which says nothing new.
+export const shortPaths = (text: string): string => text.replace(/(?:\/[^\s/"']+)*\/workspaces\/items\/[0-9a-f]+\//g, "");
+
 // Same as describe_tool in app/store.py: which tool, on what.
-export function describeTool(name: string, input: unknown): string {
+export function describeTool(name: string, input: unknown, short = false): string {
   const args = (input ?? {}) as Record<string, unknown>;
   for (const key of ["command", "file_path", "pattern", "path", "url", "description"]) {
     const v = args[key];
-    if (typeof v === "string") return v ? `${name}: ${v.split("\n")[0].slice(0, 120)}` : name;
+    if (typeof v === "string") {
+      const line = short ? shortPaths(v) : v;
+      return v ? `${name}: ${line.split("\n")[0].slice(0, 120)}` : name;
+    }
   }
   return name;
 }
