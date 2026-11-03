@@ -1,5 +1,6 @@
 import type {
   Board,
+  CopyNotesResult,
   ExecResult,
   ExecStart,
   GithubApp,
@@ -12,6 +13,9 @@ import type {
   ProjectOut,
   ItemPatch,
   Models,
+  NoteIn,
+  NoteOut,
+  NoteStatus,
   ProjectPatch,
   PruneIn,
   PruneResult,
@@ -133,6 +137,13 @@ export function createClient(
     },
     createItem: (slug: string, item: ItemIn) => api<ItemOut>(`/projects/${seg(slug)}/items`, "POST", item),
     importIssues: (slug: string) => api<ImportResult>(`/projects/${seg(slug)}/import-issues`, "POST"),
+    listNotes: (slug: string) => api<NoteOut[]>(`/projects/${seg(slug)}/notes`),
+    createNote: (slug: string, note: NoteIn) => api<NoteOut>(`/projects/${seg(slug)}/notes`, "POST", note),
+    updateNote: (id: string, patch: Partial<NoteIn> & { status?: NoteStatus }) =>
+      api<NoteOut>(`/notes/${seg(id)}`, "PATCH", patch),
+    deleteNote: (id: string) => api<void>(`/notes/${seg(id)}`, "DELETE"),
+    copyNotes: (slug: string, body: { from_project: string; note_ids: string[]; tags: string[] }) =>
+      api<CopyNotesResult>(`/projects/${seg(slug)}/notes/copy`, "POST", body),
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),
     updateItem: (id: string, patch: ItemPatch) => api<ItemOut>(`/items/${seg(id)}`, "PATCH", patch),
     getItemGit: (id: string, diff = false) => api<GitSnapshot>(`/items/${seg(id)}/git${diff ? "?diff=true" : ""}`),

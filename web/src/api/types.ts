@@ -117,6 +117,33 @@ export interface Attention {
   from?: string;
 }
 
+export type NoteStatus = "proposed" | "active" | "archived";
+
+export interface NoteOut {
+  id: string;
+  project_id: string;
+  title: string;
+  content: string;
+  tags: string[];
+  status: NoteStatus;
+  created_by: string;
+  source_item_id: string | null;
+  origin_note_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteIn {
+  title: string;
+  content: string;
+  tags: string[];
+}
+
+export interface CopyNotesResult {
+  copied: NoteOut[];
+  skipped: number;
+}
+
 export interface ImportResult {
   imported: ItemOut[];
   skipped: number;

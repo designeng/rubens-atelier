@@ -9,7 +9,7 @@ from app import steps
 from app.archive import archive_task
 from app.checks import poll_checks
 from app.config import settings
-from app.db import Artifact, HumanRequest, ItemEvent, Project, Run, TaskTranscript, WorkItem, utcnow
+from app.db import Artifact, HumanRequest, ItemEvent, Note, Project, Run, TaskTranscript, WorkItem, utcnow
 from app.engine import Engine, EngineError
 from app.execution import item_workspace, remove_item_workspace
 from app.models import FailureReason
@@ -238,6 +238,48 @@ async def test_review_feedback_loops_back_to_the_same_implementer_session(make_f
     assert '<artifact name="planner">' not in second_impl["prompt"]
     assert '<artifact name="implementer">' not in second_impl["prompt"]
     assert second_impl["spec"].lean_context is False
+
+
+async def test_project_memory_reaches_fresh_prompts_and_agents_propose_notes(make_factory):
+    class NotingRunner(ScriptedRunner):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            out = await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+            if spec.metadata["state"] == "review":
+                out.structured_output["notes"] = [
+                    {"title": "Greetings end with a newline", "content": "CI diffs hello.txt.", "tags": ["CI", "ci"]},
+                    {"title": "", "content": "no title"},
+                    "junk",
+                ]
+            return out
+
+    f = make_factory(NotingRunner(reviews=["changes_requested", "approved"]))
+    item_id = await f.new_item()
+    async with f.db.session() as s:
+        project_id = (await s.get(WorkItem, item_id)).project_id
+        s.add_all([
+            Note(project_id=project_id, title="Use uv", content="Never pip install.", tags=["python"],
+                 created_by="user"),
+            Note(project_id=project_id, title="Unvetted idea", content="?", status="proposed",
+                 created_by="agent:planner"),
+        ])
+        await s.commit()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    plan = f.runner.of("plan")[0]
+    assert '<note title="Use uv" tags="python">\nNever pip install.\n</note>' in plan["prompt"]
+    assert "Unvetted idea" not in plan["prompt"]  # proposed notes wait for a person
+    assert plan["spec"].output_schema["properties"]["notes"]["maxItems"] == 3
+    assert all("<project_memory>" in r["prompt"] for r in f.runner.of("review"))  # fresh every time
+    first, second = f.runner.of("implement")
+    assert "<project_memory>" in first["prompt"] and "<project_memory>" not in second["prompt"]  # resumed
+
+    async with f.db.session() as s:
+        proposed = (await s.scalars(select(Note).where(Note.created_by == "agent:reviewer"))).all()
+    # Both review rounds proposed it; the repeat and the malformed entries are dropped.
+    assert [(n.title, n.tags, n.status, n.source_item_id) for n in proposed] == [
+        ("Greetings end with a newline", ["ci"], "proposed", item_id)
+    ]
 
 
 async def test_lean_story_starts_each_visit_afresh(make_factory):

@@ -10,6 +10,7 @@ what the factory is about: projects, the work graph, and the history of every st
   human_requests    the inbox: decisions the workflow is waiting for
   item_events       every state change, for the board and for loop guards
   task_transcripts  a finished run's harness task and event stream, kept after Redis expires them
+  notes             project memory: lessons agents propose and people approve, put into later prompts
 
 The schema is versioned with Alembic: change a model here, then `make revision m="..."`.
 """
@@ -166,6 +167,28 @@ class TaskTranscript(Base):
     task: Mapped[dict[str, Any]]  # TaskInfo as JSON
     events: Mapped[list[dict[str, Any]]]  # [{"id", "type", "data"}] in stream order
     archived_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+class Note(Base):
+    """One piece of a project's memory (see memory.py). Agents propose, people approve: only
+    `active` notes reach agent prompts."""
+
+    __tablename__ = "notes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(Text)
+    # Free-form labels (language, area, kind of lesson); copying between projects selects by them.
+    tags: Mapped[list[str]] = mapped_column(default=list)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # proposed | active | archived
+    created_by: Mapped[str] = mapped_column(String(100))  # user | agent:<role> | copy:<project slug>
+    # The story whose agent proposed it; cleared when that story is deleted.
+    source_item_id: Mapped[str | None] = mapped_column(ForeignKey("work_items.id"))
+    # The note it was copied from (the first one, through chains of copies).
+    origin_note_id: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow)
 
 
 class Database:

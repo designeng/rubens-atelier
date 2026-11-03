@@ -19,7 +19,7 @@ from datetime import timedelta
 from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
 
 from .config import settings
-from .db import Artifact, Database, HumanRequest, ItemEvent, Run, TaskTranscript, WorkItem, aware, utcnow
+from .db import Artifact, Database, HumanRequest, ItemEvent, Note, Run, TaskTranscript, WorkItem, aware, utcnow
 from .scheduler import Scheduler
 from .store import TaskStore
 from .workflow import State, Workflow
@@ -174,7 +174,7 @@ class Engine:
 
     async def delete(self, item_id: str) -> None:
         """Remove a failed or cancelled item with its runs, artifacts, requests and events.
-        Child stories lose their parent link. The branch, workspace and issue are kept."""
+        Child stories lose their parent link, notes it proposed stay. The branch, workspace and issue are kept."""
         async with self.db.session() as s:
             item = await _get(s, item_id)
             wf = self.workflow(item.workflow)
@@ -185,6 +185,7 @@ class Engine:
             for model in (Artifact, HumanRequest, ItemEvent, Run):
                 await s.execute(delete(model).where(model.item_id == item_id))
             await s.execute(update(WorkItem).where(WorkItem.parent_id == item_id).values(parent_id=None))
+            await s.execute(update(Note).where(Note.source_item_id == item_id).values(source_item_id=None))
             await s.delete(item)
             await s.commit()
 

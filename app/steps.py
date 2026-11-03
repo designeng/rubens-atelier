@@ -14,6 +14,9 @@ otherwise gives its failure reason (`turn_limit`, `verify_failed`, ...) as the v
 
 A finished run's task and event stream are archived to Postgres (see `archive`), so the
 transcript `Run.task_id` points to survives Redis's result TTL.
+
+A fresh session's prompt carries the project's approved notes, and a role with a structured
+answer may propose new ones for a person to review (see `memory`).
 """
 
 import logging
@@ -25,7 +28,7 @@ from string import Template
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
-from . import gitops
+from . import gitops, memory
 from .actions import ACTIONS, ActionContext
 from .archive import archive_task
 from .budget import remaining
@@ -169,7 +172,7 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 workspace_key=item.id,
                 resume_session=interrupted or session,
                 verify_command=project.verify_command if st.verify else None,
-                output_schema=verdict_schema(st.verdicts) if st.verdicts else None,
+                output_schema=verdict_schema(st.verdicts, memory.NOTES_SCHEMA) if st.verdicts else None,
                 model=item.model or st.model,
                 effort=st.effort,
                 lean_context=lean,
@@ -248,6 +251,8 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
         run = await s.merge(run)
         run.status, run.verdict, run.cost_usd, run.finished_at = info.status.value, verdict, info.cost_usd, utcnow()
         s.add(Artifact(item_id=item.id, run_id=run.id, name="error" if failed else st.agent, content=content))
+        if info.status == TaskStatus.succeeded:
+            await memory.propose(s, project.id, item.id, st.agent, out.get("notes"))
         if info.session_id:
             sessions = {**item.sessions, st.agent: info.session_id}
             await s.execute(update(WorkItem).where(WorkItem.id == item.id).values(sessions=sessions))
@@ -284,7 +289,11 @@ async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: Sta
         base=item.base_branch,
     )
     template = (settings.prompts_dir / f"{st.agent}.md").read_text()
-    prompt = Template(template).safe_substitute(fields) + Template(CONTEXT).safe_substitute(fields)
+    prompt = Template(template).safe_substitute(fields)
+    if not since:  # a resumed session has read the project's memory already
+        async with engine.db.session() as s:
+            prompt += await memory.render(s, project.id)
+    prompt += Template(CONTEXT).safe_substitute(fields)
     rows = (await latest_artifact_rows(engine, item.id)).values()
     if since:
         rows = [a for a in rows if a.created_at > since.created_at and (a.run_id != since.id or a.name == "error")]

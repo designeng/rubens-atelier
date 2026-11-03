@@ -7,7 +7,7 @@ import { toasts } from "../toasts";
 import Icon from "./ui/Icon.vue";
 import Popover from "./ui/Popover.vue";
 
-const emit = defineEmits<{ settings: []; workspaces: []; github: []; "new-project": []; "new-item": []; token: [] }>();
+const emit = defineEmits<{ settings: []; memory: []; workspaces: []; github: []; "new-project": []; "new-item": []; token: [] }>();
 const b = useBoardStore();
 const theme = ref<Theme>(loadTheme());
 
@@ -105,6 +105,9 @@ async function importIssues() {
       <div class="menu-sep" role="separator"></div>
       <button type="button" class="menu-item" role="menuitem" :disabled="!b.slug.value" @click="emit('settings')">
         <Icon name="sliders" /> Project settings…
+      </button>
+      <button type="button" class="menu-item" role="menuitem" :disabled="!b.slug.value" @click="emit('memory')">
+        <Icon name="book" /> Project memory…
       </button>
       <button type="button" class="menu-item" role="menuitem" @click="emit('new-project')"><Icon name="plus" /> New project…</button>
     </Popover>

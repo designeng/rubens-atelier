@@ -71,6 +71,16 @@ R — только чтение, W — меняет состояние, D — н
 | `set_scheduler_limits` | W | `PATCH` / `DELETE /scheduler/limits` | `max_agents`, `max_agents_per_project`, `force`; `reset=true` сбрасывает все переопределения |
 | `list_models` | R | `GET /models` | Модели для историй, модель по умолчанию, lean context по умолчанию |
 
+### Память проекта
+
+| Инструмент | | Эндпоинт | Что делает |
+|---|---|---|---|
+| `list_notes` | R | `GET /projects/{slug}/notes` | Заметки проекта, новые сверху; фильтры `status` (`proposed`, `active`, `archived`) и `tag` |
+| `create_note` | W | `POST /projects/{slug}/notes` | Заметка от человека, сразу `active` |
+| `update_note` | W | `PATCH /notes/{id}` | `title`, `content`, `tags`, `status`; `status=active` утверждает предложенную агентом |
+| `delete_note` | D | `DELETE /notes/{id}` | Отклонить предложенную или удалить насовсем |
+| `copy_notes` | W | `POST /projects/{slug}/notes/copy` | Скопировать фрагмент памяти другого проекта: `note_ids` и/или `tags`; уже скопированное пропускается |
+
 ### Workspaces
 
 | Инструмент | | Эндпоинт | Что делает |

@@ -4,6 +4,7 @@ import AppHeader from "./components/AppHeader.vue";
 import BoardColumns from "./components/BoardColumns.vue";
 import GithubDialog from "./components/GithubDialog.vue";
 import ItemDetail from "./components/ItemDetail.vue";
+import MemoryDialog from "./components/MemoryDialog.vue";
 import NewItemDialog from "./components/NewItemDialog.vue";
 import NewProjectDialog from "./components/NewProjectDialog.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
@@ -16,6 +17,7 @@ const b = useBoard();
 provideBoard(b);
 
 const settingsDialog = ref<InstanceType<typeof SettingsDialog>>();
+const memoryDialog = ref<InstanceType<typeof MemoryDialog>>();
 const workspacesDialog = ref<InstanceType<typeof WorkspacesDialog>>();
 const githubDialog = ref<InstanceType<typeof GithubDialog>>();
 const projectDialog = ref<InstanceType<typeof NewProjectDialog>>();
@@ -42,6 +44,7 @@ onUnmounted(() => document.removeEventListener("keydown", onKey));
 <template>
   <AppHeader
     @settings="settingsDialog?.open()"
+    @memory="memoryDialog?.open()"
     @workspaces="workspacesDialog?.open()"
     @github="githubDialog?.open()"
     @new-project="projectDialog?.open()"
@@ -56,6 +59,7 @@ onUnmounted(() => document.removeEventListener("keydown", onKey));
   <BoardColumns @new-project="projectDialog?.open()" @new-item="itemDialog?.open()" @token="tokenDialog?.open()" />
   <ItemDetail />
   <SettingsDialog ref="settingsDialog" />
+  <MemoryDialog ref="memoryDialog" />
   <WorkspacesDialog ref="workspacesDialog" />
   <GithubDialog ref="githubDialog" />
   <NewProjectDialog ref="projectDialog" />

@@ -126,12 +126,14 @@ class Workflow(BaseModel):
         return next(n for n, s in self.states.items() if s.terminal == "cancelled")
 
 
-def verdict_schema(verdicts: list[str]) -> dict[str, Any]:
+def verdict_schema(verdicts: list[str], notes: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`notes`: the JSON schema of an optional field for proposing project memory (memory.NOTES_SCHEMA)."""
     return {
         "type": "object",
         "properties": {
             "verdict": {"type": "string", "enum": verdicts},
             "summary": {"type": "string", "description": "Markdown: what you found or did and why."},
+            **({"notes": notes} if notes else {}),
         },
         "required": ["verdict", "summary"],
         "additionalProperties": False,

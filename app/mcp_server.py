@@ -21,7 +21,8 @@ Manage a software factory where Claude Code agents work on stories: plan, implem
 open a PR, pass CI, merge. A project is a GitHub repo; its stories move through a workflow
 (states plan → implement → sync_base → review → publish → ci → merge → awaiting_merge).
 Start with list_projects, then get_board. Stories waiting for a person show up in get_inbox;
-answer them with answer_request using one of the request's options."""
+answer them with answer_request using one of the request's options. Each project keeps a memory of
+lessons for its agents (list_notes); notes agents propose stay `proposed` until approved."""
 
 # Fields of a board card worth showing a model; the full card is in get_item.
 CARD_FIELDS = (
@@ -303,6 +304,55 @@ async def set_scheduler_limits(
 async def list_models() -> dict:
     """Models offered for a story, the default one, and whether lean context is the default."""
     return await _call("GET", "/models")
+
+
+# Project memory
+
+
+@mcp.tool(annotations=READ)
+async def list_notes(
+    project: str, status: Literal["proposed", "active", "archived"] | None = None, tag: str | None = None
+) -> list[dict]:
+    """A project's memory, newest first: lessons agents read in every fresh session (`active`),
+    ones agents proposed that wait for a person (`proposed`), retired ones (`archived`)."""
+    params = {k: v for k, v in {"status": status, "tag": tag}.items() if v is not None}
+    return await _call("GET", f"/projects/{project}/notes", params=params)
+
+
+@mcp.tool(annotations=WRITE)
+async def create_note(project: str, title: str, content: str, tags: list[str] = []) -> dict:
+    """Add a lesson to a project's memory (active at once): a convention, a pitfall, an approach
+    that failed and why. Tags (language, area) let a fragment be copied into other projects."""
+    return await _call("POST", f"/projects/{project}/notes", json={"title": title, "content": content, "tags": tags})
+
+
+@mcp.tool(annotations=WRITE)
+async def update_note(
+    note_id: str,
+    title: str | None = None,
+    content: str | None = None,
+    tags: list[str] | None = None,
+    status: Literal["proposed", "active", "archived"] | None = None,
+) -> dict:
+    """Edit a note; omitted fields stay. `status="active"` approves a proposed note,
+    `"archived"` retires one while keeping it."""
+    fields = {"title": title, "content": content, "tags": tags, "status": status}
+    return await _call("PATCH", f"/notes/{note_id}", json=_patch(fields, []))
+
+
+@mcp.tool(annotations=DESTRUCTIVE)
+async def delete_note(note_id: str) -> str:
+    """Reject a proposed note, or drop a note for good (archive it to keep the record)."""
+    await _call("DELETE", f"/notes/{note_id}")
+    return f"deleted {note_id}"
+
+
+@mcp.tool(annotations=WRITE)
+async def copy_notes(project: str, from_project: str, note_ids: list[str] = [], tags: list[str] = []) -> dict:
+    """Copy a fragment of another project's memory into `project`: the listed active notes plus
+    every active note with one of `tags`. Notes copied before are skipped."""
+    body = {"from_project": from_project, "note_ids": note_ids, "tags": tags}
+    return await _call("POST", f"/projects/{project}/notes/copy", json=body)
 
 
 # Workspaces

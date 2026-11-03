@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
 
-from . import board_api, checks, metrics, terminal, webhooks, workspaces
+from . import board_api, checks, memory, metrics, terminal, webhooks, workspaces
 from .archive import events_after, load_transcript
 from .config import settings
 from .db import Database
@@ -70,6 +70,7 @@ Db = Annotated[Database, Depends(get_db)]
 
 app = FastAPI(title="Claude Code agent harness", lifespan=lifespan)
 app.include_router(board_api.router, dependencies=[Depends(require_token)])
+app.include_router(memory.router, dependencies=[Depends(require_token)])
 app.include_router(board_api.page)
 # Signed by GitHub with the webhook secret instead of the bearer token.
 app.include_router(webhooks.router)

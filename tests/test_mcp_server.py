@@ -134,3 +134,21 @@ async def test_token_is_sent(monkeypatch):
     monkeypatch.setattr(settings, "api_token", "secret")
     await mcp_server.mcp.call_tool("list_models", {})
     assert seen == ["Bearer secret"]
+
+
+async def test_note_tools(tools):
+    for slug in ("api", "web"):
+        await tools("create_project", slug=slug, repo=f"acme/{slug}")
+    note = await tools("create_note", project="api", title="Use uv", content="Never pip.", tags=["Python"])
+    assert (note["status"], note["tags"]) == ("active", ["python"])
+    archived = await tools("update_note", note_id=note["id"], status="archived")
+    assert archived["status"] == "archived" and archived["content"] == "Never pip."
+    with pytest.raises(ToolError, match="nothing to change"):
+        await tools("update_note", note_id=note["id"])
+    await tools("update_note", note_id=note["id"], status="active")
+
+    copied = await tools("copy_notes", project="web", from_project="api", tags=["python"])
+    assert [n["title"] for n in copied["copied"]] == ["Use uv"] and copied["skipped"] == 0
+    (in_web,) = await tools("list_notes", project="web", status="active")
+    assert await tools("delete_note", note_id=in_web["id"]) == f"deleted {in_web['id']}"
+    assert await tools("list_notes", project="web") == []
