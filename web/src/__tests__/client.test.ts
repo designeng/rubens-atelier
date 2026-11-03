@@ -135,6 +135,12 @@ describe("createClient", () => {
     expect((f.calls[0].init.headers as Record<string, string>)["content-type"]).toBe("application/json");
   });
 
+  it("creates a story without starting it when start is false", async () => {
+    const f = fakeFetch(() => json({}));
+    await createClient(() => "t", f.impl).createItem("app", { title: "x", body: "", priority: 50, start: false });
+    expect(JSON.parse(f.calls[0].init.body as string).start).toBe(false);
+  });
+
   it("reads the size of the done column from the board response", async () => {
     const empty = { backlog: [], working: [], needs_human: [], done: [], failed: [] };
     const f = fakeFetch(
