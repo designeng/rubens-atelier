@@ -11,7 +11,7 @@
   --e1: 0 1px 2px rgba(48, 38, 24, .06), 0 1px 1px rgba(48, 38, 24, .04);
   --e2: 0 4px 16px rgba(48, 38, 24, .12), 0 1px 3px rgba(48, 38, 24, .08);
   --e3: 0 16px 48px rgba(48, 38, 24, .18), 0 2px 6px rgba(48, 38, 24, .08);
-  --portrait-opacity: .16;
+  --portrait-opacity: .3;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -24,7 +24,7 @@
     --danger: #f2857c; --danger-subtle: #321b1a; --info: #9fb5d6; --info-subtle: #1c2533;
     --brand: #c9a574; --scrim: rgba(0, 0, 0, .5);
     --e1: 0 1px 2px rgba(0, 0, 0, .3); --e2: 0 6px 20px rgba(0, 0, 0, .45); --e3: 0 18px 56px rgba(0, 0, 0, .55);
-    --portrait-opacity: .2;
+    --portrait-opacity: .3;
     color-scheme: dark;
   }
 }
@@ -37,7 +37,7 @@
   --danger: #f2857c; --danger-subtle: #321b1a; --info: #9fb5d6; --info-subtle: #1c2533;
   --brand: #c9a574; --scrim: rgba(0, 0, 0, .5);
   --e1: 0 1px 2px rgba(0, 0, 0, .3); --e2: 0 6px 20px rgba(0, 0, 0, .45); --e3: 0 18px 56px rgba(0, 0, 0, .55);
-  --portrait-opacity: .2;
+  --portrait-opacity: .3;
   color-scheme: dark;
 }
 :root {
@@ -58,10 +58,10 @@ html, body { height: 100%; }
 body { margin: 0; font: var(--fs-base)/1.45 var(--font-ui); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
 #app { height: 100dvh; display: flex; flex-direction: column; isolation: isolate; }
 /* Portrait in the top-left corner, faded on its right and bottom edges so it never sits under content at strength. */
-body::before { content: ""; position: fixed; top: 0; left: 0; width: min(440px, 55vw); aspect-ratio: 1036 / 1518; z-index: -1; pointer-events: none;
+body::before { content: ""; position: fixed; top: 0; left: 0; width: min(560px, 60vw); aspect-ratio: 1036 / 1518; z-index: -1; pointer-events: none;
   background: url(./assets/portrait.jpg) top left / 100% 100% no-repeat; opacity: var(--portrait-opacity);
-  -webkit-mask-image: linear-gradient(to right, #000 30%, transparent 85%), linear-gradient(to bottom, #000 25%, transparent 75%);
-  -webkit-mask-composite: source-in; mask-image: linear-gradient(to right, #000 30%, transparent 85%), linear-gradient(to bottom, #000 25%, transparent 75%);
+  -webkit-mask-image: linear-gradient(to right, #000 45%, transparent), linear-gradient(to bottom, #000 45%, transparent);
+  -webkit-mask-composite: source-in; mask-image: linear-gradient(to right, #000 45%, transparent), linear-gradient(to bottom, #000 45%, transparent);
   mask-composite: intersect; }
 h1, h2, h3, h4 { margin: 0; line-height: 1.25; }
 a { color: var(--accent); text-underline-offset: 2px; }

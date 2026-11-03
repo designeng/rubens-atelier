@@ -930,6 +930,14 @@ async def board_page() -> FileResponse | HTMLResponse:
     return FileResponse(index, headers={"cache-control": "no-cache"})
 
 
+@page.get("/board/favicon.svg", include_in_schema=False, response_model=None)
+async def board_favicon() -> FileResponse:
+    file = DIST / "favicon.svg"
+    if not file.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    return FileResponse(file, media_type="image/svg+xml")
+
+
 @page.get("/board/assets/{path:path}", include_in_schema=False)
 async def board_asset(path: str) -> FileResponse:
     root = (DIST / "assets").resolve()
