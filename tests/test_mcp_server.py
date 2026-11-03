@@ -152,3 +152,10 @@ async def test_note_tools(tools):
     (in_web,) = await tools("list_notes", project="web", status="active")
     assert await tools("delete_note", note_id=in_web["id"]) == f"deleted {in_web['id']}"
     assert await tools("list_notes", project="web") == []
+
+    file = await tools("export_notes", project="api", tags=["python"])
+    assert [n["title"] for n in file["notes"]] == ["Use uv"]
+    assert "## Use uv" in await tools("export_notes", project="api", format="markdown")
+    imported = await tools("import_notes", project="web", notes_file=file)
+    assert imported["copied"][0]["status"] == "proposed"
+    assert (await tools("get_board", project="web"))["proposed_notes"] == 1

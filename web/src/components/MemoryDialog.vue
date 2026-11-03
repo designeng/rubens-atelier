@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import type { NoteOut } from "../api/types";
-import { useBoardStore } from "../composables/useBoard";
+import type { NoteOut, NotesFile } from "../api/types";
+import { itemHash, useBoardStore } from "../composables/useBoard";
 import AppDialog from "./ui/AppDialog.vue";
 import Field from "./ui/Field.vue";
 import Icon from "./ui/Icon.vue";
@@ -25,12 +25,19 @@ const from = ref("");
 const fromNotes = ref<NoteOut[]>([]);
 const picked = ref<string[]>([]);
 const copyTags = ref("");
+const fileInput = ref<HTMLInputElement>();
+const MAX_FILE_BYTES = 5_000_000;
 
 const proposed = computed(() => notes.value.filter((n) => n.status === "proposed"));
 const kept = computed(() => notes.value.filter((n) => n.status === "active" || (showArchived.value && n.status === "archived")));
 const others = computed(() => b.projects.value.filter((p) => p.slug !== b.slug.value));
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const splitTags = (s: string) => s.split(",").map((t) => t.trim()).filter(Boolean);
+// The story whose agent proposed a note, if the board still shows it.
+const storyTitle = (id: string) =>
+  Object.values(b.board.value ?? {})
+    .flat()
+    .find((i) => i.id === id)?.title ?? "a story";
 
 async function load() {
   if (!b.slug.value) return;
@@ -64,6 +71,7 @@ async function guarded(work: () => Promise<unknown>) {
   try {
     await work();
     await load();
+    b.refresh().catch(b.fail); // the header counts proposed notes
   } catch (e) {
     err.value = message(e);
   } finally {
@@ -108,6 +116,38 @@ const copy = () =>
     picked.value = [];
   });
 
+async function download(format: "json" | "markdown") {
+  err.value = "";
+  try {
+    const url = URL.createObjectURL(await b.api.exportNotes(b.slug.value, format));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${b.slug.value}-notes.${format === "json" ? "json" : "md"}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    err.value = message(e);
+  }
+}
+
+function importFile(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  return guarded(async () => {
+    if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} is too large for a notes file`);
+    let data: NotesFile;
+    try {
+      data = JSON.parse(await file.text()) as NotesFile;
+    } catch {
+      throw new Error(`${file.name} is not a JSON export of notes`);
+    }
+    const res = await b.api.importNotes(b.slug.value, data);
+    note.value = `Imported ${res.copied.length} for review` + (res.skipped ? `, ${res.skipped} already here` : "") + ".";
+  });
+}
+
 defineExpose({ open });
 </script>
 
@@ -126,6 +166,9 @@ defineExpose({ open });
             <b>{{ n.title }}</b>
             <span v-for="t in n.tags" :key="t" class="chip">{{ t }}</span>
             <span class="subtle by">{{ n.created_by }}</span>
+            <a v-if="n.source_item_id" class="by" :href="itemHash(n.source_item_id)" @click="dlg?.close()">
+              from {{ storyTitle(n.source_item_id) }}
+            </a>
           </div>
           <p class="body">{{ n.content }}</p>
           <div class="row actions">
@@ -196,9 +239,21 @@ defineExpose({ open });
       </form>
     </section>
 
-    <section v-if="others.length">
-      <h3 class="section-title">Copy from another project</h3>
+    <section>
+      <h3 class="section-title">Copy, export, import</h3>
       <div class="row">
+        <button type="button" class="btn sm" :disabled="busy" title="Active notes, to import here or on another factory" @click="download('json')">
+          <Icon name="download" :size="14" /> Export
+        </button>
+        <button type="button" class="btn sm" :disabled="busy" title="Active notes as Markdown, for people to read" @click="download('markdown')">
+          <Icon name="download" :size="14" /> Markdown
+        </button>
+        <button type="button" class="btn sm" :disabled="busy" title="Notes from an exported file arrive as proposals" @click="fileInput?.click()">
+          <Icon name="upload" :size="14" /> Import…
+        </button>
+        <input ref="fileInput" type="file" accept=".json,application/json" hidden @change="importFile" />
+      </div>
+      <div v-if="others.length" class="row copy">
         <select v-model="from" aria-label="Source project" @change="loadFrom">
           <option value="">Pick a project…</option>
           <option v-for="p in others" :key="p.id" :value="p.slug">{{ p.slug }}</option>
@@ -206,7 +261,7 @@ defineExpose({ open });
         <input v-model="copyTags" :disabled="!from" placeholder="and every note tagged… (python, ci)" aria-label="Tags to copy" class="grow" />
         <button type="button" class="btn" :disabled="busy || !from || (!picked.length && !copyTags.trim())" @click="copy">Copy</button>
       </div>
-      <ul v-if="from" class="picks">
+      <ul v-if="others.length && from" class="picks">
         <li v-for="n in fromNotes" :key="n.id">
           <label class="check">
             <input v-model="picked" type="checkbox" :value="n.id" />
@@ -284,6 +339,9 @@ section + section {
 }
 .grow {
   flex: 1;
+}
+.copy {
+  margin-top: var(--s2);
 }
 .picks li {
   padding: 2px 0;

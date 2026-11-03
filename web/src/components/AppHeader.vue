@@ -108,11 +108,24 @@ async function importIssues() {
       </button>
       <button type="button" class="menu-item" role="menuitem" :disabled="!b.slug.value" @click="emit('memory')">
         <Icon name="book" /> Project memory…
+        <span v-if="b.proposedNotes.value" class="hint">{{ b.proposedNotes.value }} to review</span>
       </button>
       <button type="button" class="menu-item" role="menuitem" @click="emit('new-project')"><Icon name="plus" /> New project…</button>
     </Popover>
 
     <span class="spacer"></span>
+
+    <button
+      v-if="b.proposedNotes.value"
+      type="button"
+      class="btn sm chip-btn accent"
+      :title="`Agents proposed notes for the memory of ${b.slug.value}; they wait for your review`"
+      @click="emit('memory')"
+    >
+      <Icon name="book" :size="14" /> {{ b.proposedNotes.value }}<span class="wide-only">
+        {{ b.proposedNotes.value === 1 ? "note" : "notes" }} to review</span
+      >
+    </button>
 
     <button v-if="needsGithub" type="button" class="btn sm chip-btn warn" @click="emit('github')">
       <Icon name="plug" :size="14" /> Connect GitHub
@@ -311,6 +324,11 @@ async function importIssues() {
 .chip-btn.warn {
   color: var(--warn);
   background: var(--warn-subtle);
+  border-color: transparent;
+}
+.chip-btn.accent {
+  color: var(--accent);
+  background: var(--accent-subtle);
   border-color: transparent;
 }
 :deep(.split) {

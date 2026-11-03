@@ -47,6 +47,7 @@ export function useBoard() {
   const board = ref<Board | null>(null);
   const doneLimit = ref(DONE_PAGE);
   const doneTotal = ref(0);
+  const proposedNotes = ref(0); // agents' notes waiting for review in the project's memory
   const scheduler = ref<SchedulerStatus | null>(null);
   const openItemId = ref<string | null>(null);
   const item = ref<ItemDetail | null>(null);
@@ -83,10 +84,11 @@ export function useBoard() {
       board.value = null;
       return;
     }
-    const { board: b, doneTotal: total } = await api.getBoard(current, doneLimit.value);
+    const { board: b, doneTotal: total, proposedNotes: proposed } = await api.getBoard(current, doneLimit.value);
     if (slug.value !== current) return;
     board.value = b;
     doneTotal.value = total;
+    proposedNotes.value = proposed;
     const id = openItemId.value;
     if (id) {
       const it = await api.getItem(id);
@@ -141,6 +143,7 @@ export function useBoard() {
   function selectProject(value: string): void {
     slug.value = value;
     doneLimit.value = DONE_PAGE;
+    proposedNotes.value = 0;
     storage.set("project", value);
     closeItem();
     refresh().catch(fail);
@@ -275,6 +278,7 @@ export function useBoard() {
     slug,
     board,
     doneTotal,
+    proposedNotes,
     doneLimit,
     scheduler,
     openItemId,

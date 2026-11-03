@@ -129,11 +129,32 @@ describe("createClient", () => {
   it("reads the size of the done column from the board response", async () => {
     const empty = { backlog: [], working: [], needs_human: [], done: [], failed: [] };
     const f = fakeFetch(
-      () => new Response(JSON.stringify(empty), { status: 200, headers: { "x-done-total": "123" } }),
+      () =>
+        new Response(JSON.stringify(empty), {
+          status: 200,
+          headers: { "x-done-total": "123", "x-proposed-notes": "2" },
+        }),
     );
     const api = createClient(() => "t", f.impl);
-    expect(await api.getBoard("app", 50)).toEqual({ board: empty, doneTotal: 123 });
+    expect(await api.getBoard("app", 50)).toEqual({ board: empty, doneTotal: 123, proposedNotes: 2 });
     expect(f.calls[0].url).toBe("/projects/app/board?done_limit=50");
+  });
+
+  it("downloads an export as a file and posts one back", async () => {
+    const f = fakeFetch(() => new Response("# Project memory: app", { status: 200 }));
+    const api = createClient(() => "t", f.impl);
+    expect(await (await api.exportNotes("a/b", "markdown")).text()).toBe("# Project memory: app");
+    expect(f.calls[0].url).toBe("/projects/a%2Fb/notes/export?format=markdown");
+    expect((f.calls[0].init.headers as Record<string, string>).authorization).toBe("Bearer t");
+
+    const g = fakeFetch(() => json({ copied: [], skipped: 1 }));
+    const file = { format: "rubens-notes/1" as const, project: "app", exported_at: null, notes: [] };
+    expect(await createClient(() => "t", g.impl).importNotes("app", file)).toEqual({ copied: [], skipped: 1 });
+    expect([g.calls[0].url, g.calls[0].init.method, g.calls[0].init.body]).toEqual([
+      "/projects/app/notes/import",
+      "POST",
+      JSON.stringify(file),
+    ]);
   });
 
   it("encodes path segments", async () => {

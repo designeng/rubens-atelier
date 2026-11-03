@@ -139,6 +139,14 @@ export interface NoteIn {
   tags: string[];
 }
 
+// An export file of active notes: import it back here or on another factory.
+export interface NotesFile {
+  format: "rubens-notes/1";
+  project: string;
+  exported_at: string | null;
+  notes: { id: string; title: string; content: string; tags: string[] }[];
+}
+
 export interface CopyNotesResult {
   copied: NoteOut[];
   skipped: number;

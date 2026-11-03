@@ -50,7 +50,7 @@ R — только чтение, W — меняет состояние, D — н
 
 | Инструмент | | Эндпоинт | Что делает |
 |---|---|---|---|
-| `get_board` | R | `GET /projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed с сокращёнными карточками; `done_limit` (по умолчанию 20) и `done_total` |
+| `get_board` | R | `GET /projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed с сокращёнными карточками; `done_limit` (по умолчанию 20), `done_total` и `proposed_notes` (заметки, ждущие проверки) |
 | `get_inbox` | R | `GET /projects/{slug}/inbox` | Открытые запросы к человеку, старые первыми |
 | `get_item` | R | `GET /items/{id}` | История целиком: тело, переходы, runs (с `task_id`), артефакты, открытый запрос. Артефакты — только последняя версия каждого, все — с `all_artifacts=true` |
 | `create_item` | W | `POST /projects/{slug}/items` | `title`, `body`, `kind`, `priority` (-100..100), `parent_id`, `issue`, `model`, `lean_context`, `budget_usd`, `blocked_by`; `start=true` сразу запускает |
@@ -80,6 +80,8 @@ R — только чтение, W — меняет состояние, D — н
 | `update_note` | W | `PATCH /notes/{id}` | `title`, `content`, `tags`, `status`; `status=active` утверждает предложенную агентом |
 | `delete_note` | D | `DELETE /notes/{id}` | Отклонить предложенную или удалить насовсем |
 | `copy_notes` | W | `POST /projects/{slug}/notes/copy` | Скопировать фрагмент памяти другого проекта: `note_ids` и/или `tags`; уже скопированное пропускается |
+| `export_notes` | R | `GET /projects/{slug}/notes/export` | Активные заметки файлом (`note_ids`, `tags` или все): JSON для импорта или `format="markdown"` для чтения |
+| `import_notes` | W | `POST /projects/{slug}/notes/import` | Загрузить JSON из `export_notes`; заметки приходят как `proposed`, уже загруженное пропускается |
 
 ### Workspaces
 

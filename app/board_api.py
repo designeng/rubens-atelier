@@ -18,7 +18,7 @@ from .budget import Spending, project_spending
 from .config import settings
 from .execution import item_workspace
 from .github import GitHub
-from .db import Artifact, Database, HumanRequest, ItemEvent, Project, Run, WorkItem
+from .db import Artifact, Database, HumanRequest, ItemEvent, Note, Project, Run, WorkItem
 from .engine import Engine, EngineError
 from .scheduler import Scheduler, SchedulerError
 
@@ -567,7 +567,8 @@ async def board(
     done_limit: Annotated[int, Query(ge=1, le=DONE_LIMIT_MAX)] = DONE_LIMIT_DEFAULT,
 ) -> dict[Column, list[ItemOut]]:
     """The items of the project by column. The done column holds only the `done_limit` most
-    recently updated items; how many there are in total is in the `X-Done-Total` header."""
+    recently updated items; how many there are in total is in the `X-Done-Total` header. Notes
+    agents proposed and no person has reviewed yet are counted in `X-Proposed-Notes`."""
     project = await _project(db, slug)
     columns: dict[Column, list[ItemOut]] = {c: [] for c in Column.__args__}
     in_project = WorkItem.project_id == project.id
@@ -589,11 +590,15 @@ async def board(
         blockers = await engine.load_blockers(s, (i for i in open_items if i.state is None))
         runs, live = await _preload_runs(engine, s, open_items)
         spending = await project_spending(s, project.id)
+        proposed = await s.scalar(
+            select(func.count()).select_from(Note).where(Note.project_id == project.id, Note.status == "proposed")
+        )
         for item in [*open_items, *done_items]:
             out = await _item_with_progress(engine, s, item, dependents, blockers, runs, live, spending)
             columns[out.column].append(out)
     columns["done"].sort(key=lambda o: o.updated_at, reverse=True)
     response.headers["X-Done-Total"] = str(done_total)
+    response.headers["X-Proposed-Notes"] = str(proposed)
     return columns
 
 

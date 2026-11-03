@@ -16,6 +16,7 @@ import type {
   NoteIn,
   NoteOut,
   NoteStatus,
+  NotesFile,
   ProjectPatch,
   PruneIn,
   PruneResult,
@@ -128,12 +129,18 @@ export function createClient(
     createProject: (p: ProjectIn) => api<ProjectOut>("/projects", "POST", p),
     updateProject: (slug: string, patch: ProjectPatch) => api<ProjectOut>(`/projects/${seg(slug)}`, "PATCH", patch),
     // The done column holds the `doneLimit` newest items; `doneTotal` is how many there are in all.
-    getBoard: async (slug: string, doneLimit: number): Promise<{ board: Board; doneTotal: number }> => {
+    // `proposedNotes`: notes agents proposed for the project's memory that wait for a person.
+    getBoard: async (
+      slug: string,
+      doneLimit: number,
+    ): Promise<{ board: Board; doneTotal: number; proposedNotes: number }> => {
       let doneTotal = 0;
+      let proposedNotes = 0;
       const board = await api<Board>(`/projects/${seg(slug)}/board?done_limit=${doneLimit}`, "GET", undefined, (h) => {
         doneTotal = Number(h.get("x-done-total") ?? 0);
+        proposedNotes = Number(h.get("x-proposed-notes") ?? 0);
       });
-      return { board, doneTotal };
+      return { board, doneTotal, proposedNotes };
     },
     createItem: (slug: string, item: ItemIn) => api<ItemOut>(`/projects/${seg(slug)}/items`, "POST", item),
     importIssues: (slug: string) => api<ImportResult>(`/projects/${seg(slug)}/import-issues`, "POST"),
@@ -144,6 +151,17 @@ export function createClient(
     deleteNote: (id: string) => api<void>(`/notes/${seg(id)}`, "DELETE"),
     copyNotes: (slug: string, body: { from_project: string; note_ids: string[]; tags: string[] }) =>
       api<CopyNotesResult>(`/projects/${seg(slug)}/notes/copy`, "POST", body),
+    // All active notes as a file to save: JSON imports back, Markdown is for reading.
+    exportNotes: async (slug: string, format: "json" | "markdown"): Promise<Blob> => {
+      const res = await fetchImpl(`/projects/${seg(slug)}/notes/export?format=${format}`, {
+        headers: { authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw await apiError(res);
+      onOk();
+      return res.blob();
+    },
+    importNotes: (slug: string, file: NotesFile) =>
+      api<CopyNotesResult>(`/projects/${seg(slug)}/notes/import`, "POST", file),
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),
     updateItem: (id: string, patch: ItemPatch) => api<ItemOut>(`/items/${seg(id)}`, "PATCH", patch),
     getItemGit: (id: string, diff = false) => api<GitSnapshot>(`/items/${seg(id)}/git${diff ? "?diff=true" : ""}`),

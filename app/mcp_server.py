@@ -145,10 +145,15 @@ def _card(item: dict) -> dict:
 @mcp.tool(annotations=READ)
 async def get_board(project: str, done_limit: int = 20) -> dict:
     """The project's stories by column: backlog, working, needs_human, done, failed. `done` holds
-    only the `done_limit` most recent ones; `done_total` says how many there are."""
+    only the `done_limit` most recent ones; `done_total` says how many there are. `proposed_notes`
+    counts notes agents proposed for the project's memory that wait for a person (list_notes)."""
     r = await _request("GET", f"/projects/{project}/board", params={"done_limit": done_limit})
     board = {column: [_card(i) for i in items] for column, items in r.json().items()}
-    return {**board, "done_total": int(r.headers.get("X-Done-Total", len(board.get("done", []))))}
+    return {
+        **board,
+        "done_total": int(r.headers.get("X-Done-Total", len(board.get("done", [])))),
+        "proposed_notes": int(r.headers.get("X-Proposed-Notes", 0)),
+    }
 
 
 @mcp.tool(annotations=READ)
@@ -353,6 +358,28 @@ async def copy_notes(project: str, from_project: str, note_ids: list[str] = [], 
     every active note with one of `tags`. Notes copied before are skipped."""
     body = {"from_project": from_project, "note_ids": note_ids, "tags": tags}
     return await _call("POST", f"/projects/{project}/notes/copy", json=body)
+
+
+@mcp.tool(annotations=READ)
+async def export_notes(
+    project: str,
+    note_ids: list[str] = [],
+    tags: list[str] = [],
+    format: Literal["json", "markdown"] = "json",
+) -> dict | str:
+    """A project's active notes as a file to keep in git or import on another factory: the listed
+    ones plus every one with one of `tags`, or all of them when neither is given. `markdown` is
+    for people to read; only JSON can be imported back."""
+    params = {"note_ids": note_ids, "tags": tags, "format": format}
+    r = await _request("GET", f"/projects/{project}/notes/export", params=params)
+    return r.text if format == "markdown" else r.json()
+
+
+@mcp.tool(annotations=WRITE)
+async def import_notes(project: str, notes_file: dict) -> dict:
+    """Import a JSON file from export_notes into `project`. The notes arrive `proposed`, for a
+    person to approve; notes imported or copied before are skipped."""
+    return await _call("POST", f"/projects/{project}/notes/import", json=notes_file)
 
 
 # Workspaces

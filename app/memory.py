@@ -4,7 +4,7 @@ Artifacts carry knowledge between the steps of one item; notes carry it between 
 is a convention, a pitfall, an approach that failed, a CI quirk: whatever the next agent in this
 project would otherwise rediscover. Projects differ (language, tooling, requirements), so each
 keeps its own notes, and a fragment of one project's memory (picked notes, or every note with
-a tag) can be copied into another.
+a tag) can be copied into another, or exported to a file and imported on another factory.
 
 Agents propose notes through the `notes` field of their structured answer; those wait as
 `proposed` until a person approves them (`active`) or deletes them. Only active notes reach
@@ -12,16 +12,17 @@ prompts: a story's text can come from outside, and a lesson drawn from it must n
 later story without a person reading it first.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .board_api import Db, Orm, _project
-from .db import Note, utcnow
+from .db import Note, Project, utcnow
 
 Status = Literal["proposed", "active", "archived"]
 
@@ -29,6 +30,9 @@ MEMORY_LIMIT = 8_000  # characters of notes in one prompt; the newest go first
 MAX_PROPOSED = 3  # notes one agent answer may propose
 MAX_TAGS = 10
 PROPOSED_CONTENT_LIMIT = 4_000
+EXPORT_FORMAT = "rubens-notes/1"
+MAX_IMPORTED = 500  # notes in one imported file
+IMPORTED_CONTENT_LIMIT = 20_000
 
 MEMORY = """
 Project memory: notes the people of this project keep for agents (conventions, pitfalls,
@@ -107,6 +111,26 @@ class CopyResult(BaseModel):
     skipped: int  # already in the target project (copied before, or copied from it)
 
 
+class FileNote(BaseModel):
+    """A note in an export file; `id` is its first origin, so copies of one note share it. The
+    raw fields are only bounded here: import clips and normalizes them as propose() does."""
+
+    id: str = Field(min_length=1, max_length=32)
+    title: str = Field(max_length=10_000)
+    content: str = Field(max_length=100_000)
+    tags: list[str] = Field(default_factory=list, max_length=100)
+
+
+class NotesFile(BaseModel):
+    """What export writes and import reads: active notes of `project`, to keep in git or carry
+    to another factory."""
+
+    format: Literal["rubens-notes/1"] = EXPORT_FORMAT
+    project: str = Field(min_length=1, max_length=200)
+    exported_at: datetime | None = None
+    notes: list[FileNote] = Field(max_length=MAX_IMPORTED)
+
+
 @router.get("/projects/{slug}/notes")
 async def list_notes(slug: str, db: Db, status: Status | None = None, tag: str | None = None) -> list[NoteOut]:
     """A project's notes, newest first: proposed ones waiting for a person, active ones agents
@@ -165,43 +189,110 @@ async def copy_notes(slug: str, body: CopyIn, db: Db) -> CopyResult:
     if source.id == target.id:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "copy from another project")
     async with db.session() as s:
-        active = list(
-            await s.scalars(
-                select(Note)
-                .where(Note.project_id == source.id, Note.status == "active")
-                .order_by(Note.created_at)
-            )
-        )
-        if missing := set(body.note_ids) - {n.id for n in active}:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, f"no active notes {sorted(missing)} in project {source.slug}"
-            )
-        picked = [n for n in active if n.id in body.note_ids or set(n.tags) & set(body.tags)]
+        picked = await _pick(s, source, body.note_ids, body.tags)
         roots = {n.origin_note_id or n.id: n for n in picked}
-        rows = (
-            await s.execute(
-                select(Note.id, Note.origin_note_id)
-                .where(Note.project_id == target.id)
-                .where(or_(Note.id.in_(roots), Note.origin_note_id.in_(roots)))
-            )
-        ).all()
-        present = {r for row in rows for r in row if r}
-        copies = [
-            Note(
-                project_id=target.id,
-                title=n.title,
-                content=n.content,
-                tags=list(n.tags),
-                status="active",
-                created_by=f"copy:{source.slug}",
-                origin_note_id=root,
-            )
-            for root, n in roots.items()
-            if root not in present
-        ]
-        s.add_all(copies)
-        await s.commit()
-        return CopyResult(copied=[NoteOut.model_validate(n) for n in copies], skipped=len(roots) - len(copies))
+        return await _add_copies(s, target.id, roots, "active", f"copy:{source.slug}")
+
+
+@router.get("/projects/{slug}/notes/export", response_model=None)
+async def export_notes(
+    slug: str,
+    db: Db,
+    response: Response,
+    tags: Annotated[list[str] | None, Query()] = None,
+    note_ids: Annotated[list[str] | None, Query()] = None,
+    fmt: Annotated[Literal["json", "markdown"], Query(alias="format")] = "json",
+) -> NotesFile | Response:
+    """Active notes as a file: the listed ones plus every one with one of `tags`, or all of them
+    when neither is given. JSON can be imported back (here or on another factory); `markdown`
+    is for people to read."""
+    project = await _project(db, slug)
+    async with db.session() as s:
+        picked = await _pick(s, project, note_ids or [], normalize_tags(tags or []))
+    file = NotesFile(
+        project=project.slug,
+        exported_at=utcnow(),
+        notes=[FileNote(id=n.origin_note_id or n.id, title=n.title, content=n.content, tags=n.tags) for n in picked],
+    )
+    name = f"{project.slug}-notes"
+    if fmt == "markdown":
+        return Response(
+            _markdown(file),
+            media_type="text/markdown; charset=utf-8",
+            headers={"content-disposition": f'attachment; filename="{name}.md"'},
+        )
+    response.headers["content-disposition"] = f'attachment; filename="{name}.json"'
+    return file
+
+
+@router.post("/projects/{slug}/notes/import")
+async def import_notes(slug: str, body: NotesFile, db: Db) -> CopyResult:
+    """Add the notes of an export file as `proposed`: the file may come from anywhere, so a person
+    reads each one before agents do. Imported notes remember their id in the file as their
+    origin, so importing the same file again (or one with copies of them) skips what is there."""
+    project = await _project(db, slug)
+    roots: dict[str, FileNote] = {}
+    for n in body.notes:
+        title, content = n.title.strip()[:200], n.content.strip()[:IMPORTED_CONTENT_LIMIT]
+        if title and content and n.id not in roots:
+            roots[n.id] = FileNote(id=n.id, title=title, content=content, tags=normalize_tags(n.tags))
+    async with db.session() as s:
+        return await _add_copies(s, project.id, roots, "proposed", f"import:{body.project.strip()[:90]}")
+
+
+async def _pick(s: AsyncSession, project: Project, note_ids: list[str], tags: list[str]) -> list[Note]:
+    """The project's active notes that are listed or carry one of `tags`, oldest first; all of
+    them when nothing is asked for. A listed id that is not an active note there is a 404."""
+    active = list(
+        await s.scalars(
+            select(Note).where(Note.project_id == project.id, Note.status == "active").order_by(Note.created_at)
+        )
+    )
+    if missing := set(note_ids) - {n.id for n in active}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no active notes {sorted(missing)} in project {project.slug}")
+    if not note_ids and not tags:
+        return active
+    return [n for n in active if n.id in note_ids or set(n.tags) & set(tags)]
+
+
+async def _add_copies(
+    s: AsyncSession, project_id: str, roots: Mapping[str, Note | FileNote], status: Status, created_by: str
+) -> CopyResult:
+    """Add copies of `roots` (first origin id → the note) to the project, skipping origins it has
+    already: the original itself, or an earlier copy in any status. Commits."""
+    rows = (
+        await s.execute(
+            select(Note.id, Note.origin_note_id)
+            .where(Note.project_id == project_id)
+            .where(or_(Note.id.in_(roots), Note.origin_note_id.in_(roots)))
+        )
+    ).all()
+    present = {r for row in rows for r in row if r}
+    copies = [
+        Note(
+            project_id=project_id,
+            title=n.title,
+            content=n.content,
+            tags=list(n.tags),
+            status=status,
+            created_by=created_by,
+            origin_note_id=root,
+        )
+        for root, n in roots.items()
+        if root not in present
+    ]
+    s.add_all(copies)
+    await s.commit()
+    return CopyResult(copied=[NoteOut.model_validate(n) for n in copies], skipped=len(roots) - len(copies))
+
+
+def _markdown(file: NotesFile) -> str:
+    stamp = file.exported_at.strftime("%Y-%m-%d") if file.exported_at else ""
+    parts = [f"# Project memory: {file.project}\n\n{len(file.notes)} active notes, exported {stamp}.\n"]
+    for n in file.notes:
+        tags = f"\n_Tags: {', '.join(n.tags)}_\n" if n.tags else ""
+        parts.append(f"\n## {n.title}\n{tags}\n{n.content.strip()}\n")
+    return "".join(parts)
 
 
 async def _get(s: AsyncSession, note_id: str) -> Note:

@@ -84,6 +84,74 @@ def test_copy_a_fragment_between_projects(client):
     assert back == {"copied": [], "skipped": 1}
 
 
+def test_board_counts_proposed_notes(client):
+    client.post("/projects", json={"slug": "api", "repo": "acme/api"})
+    assert client.get("/projects/api/board").headers["x-proposed-notes"] == "0"
+    project_id = _note(client, "api", "Use uv")["project_id"]
+
+    async def propose():
+        async with client.app.state.db.session() as s:
+            drafts = [{"title": "Lock files", "content": "x"}, {"title": "Small PRs", "content": "y"}]
+            await memory.propose(s, project_id, None, "reviewer", drafts)
+            await s.commit()
+
+    client.portal.call(propose)
+    assert client.get("/projects/api/board").headers["x-proposed-notes"] == "2"
+    first = client.get("/projects/api/notes", params={"status": "proposed"}).json()[0]
+    client.patch(f"/notes/{first['id']}", json={"status": "active"})
+    assert client.get("/projects/api/board").headers["x-proposed-notes"] == "1"
+
+
+def test_export_and_import_a_file(client):
+    for slug in ("api", "web"):
+        client.post("/projects", json={"slug": slug, "repo": f"acme/{slug}"})
+    uv = _note(client, "api", "Use uv", tags=["python"])
+    _note(client, "api", "Small PRs", tags=["process"])
+    old = _note(client, "api", "Old way", tags=["python"])
+    client.patch(f"/notes/{old['id']}", json={"status": "archived"})
+
+    r = client.get("/projects/api/notes/export")
+    assert r.status_code == 200 and 'filename="api-notes.json"' in r.headers["content-disposition"]
+    file = r.json()
+    assert (file["format"], file["project"]) == ("rubens-notes/1", "api")
+    assert [(n["id"], n["title"]) for n in file["notes"]][0] == (uv["id"], "Use uv")
+    assert len(file["notes"]) == 2  # active only
+    picked = client.get("/projects/api/notes/export", params={"tags": "PYTHON"}).json()["notes"]
+    assert [n["title"] for n in picked] == ["Use uv"]
+    assert client.get("/projects/api/notes/export", params={"note_ids": old["id"]}).status_code == 404
+    md = client.get("/projects/api/notes/export", params={"format": "markdown"})
+    assert md.headers["content-type"].startswith("text/markdown")
+    assert "# Project memory: api" in md.text and "## Use uv\n\n_Tags: python_" in md.text
+
+    # Imported notes wait for a person; importing the same file again, or back home, adds nothing.
+    res = client.post("/projects/web/notes/import", json=file).json()
+    assert res["skipped"] == 0
+    copy = next(n for n in res["copied"] if n["title"] == "Use uv")
+    assert (copy["status"], copy["created_by"], copy["origin_note_id"]) == ("proposed", "import:api", uv["id"])
+    assert client.post("/projects/web/notes/import", json=file).json() == {"copied": [], "skipped": 2}
+    assert client.post("/projects/api/notes/import", json=file).json() == {"copied": [], "skipped": 2}
+    # A note approved after import exports with its first origin, so it is not imported back either.
+    client.patch(f"/notes/{copy['id']}", json={"status": "active"})
+    again = client.get("/projects/web/notes/export").json()
+    assert again["notes"][0]["id"] == uv["id"]
+    assert client.post("/projects/api/notes/import", json=again).json() == {"copied": [], "skipped": 1}
+
+    # A file from anywhere: clipped and normalized as agent proposals are, refused when malformed.
+    raw = {"format": "rubens-notes/1", "project": "elsewhere", "notes": [
+        {"id": "x1", "title": "  T" * 100, "content": "c" * 30_000, "tags": [" CI ", "ci", ""] + list("abcdefghijk")},
+        {"id": "x2", "title": " ", "content": "empty title"},
+        {"id": "x1", "title": "duplicate id", "content": "c"},
+    ]}
+    (note,) = client.post("/projects/web/notes/import", json=raw).json()["copied"]
+    assert len(note["title"]) == 200 and len(note["content"]) == memory.IMPORTED_CONTENT_LIMIT
+    assert note["tags"][:2] == ["ci", "a"] and len(note["tags"]) == memory.MAX_TAGS
+    assert note["created_by"] == "import:elsewhere"
+    assert client.post("/projects/web/notes/import", json={**raw, "format": "other/1"}).status_code == 422
+    too_many = {**raw, "notes": [{"id": str(i), "title": "t", "content": "c"} for i in range(memory.MAX_IMPORTED + 1)]}
+    assert client.post("/projects/web/notes/import", json=too_many).status_code == 422
+    assert client.post("/projects/web/notes/import", json={**raw, "notes": [{"id": "y" * 33}]}).status_code == 422
+
+
 async def test_render_keeps_the_newest_within_the_limit(db, monkeypatch):
     monkeypatch.setattr(memory, "MEMORY_LIMIT", 120)
     async with db.session() as s:
