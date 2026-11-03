@@ -18,7 +18,6 @@ from .config import settings
 log = logging.getLogger(__name__)
 
 KEY = "harness:sandbox"
-TTL_SECONDS = 3600
 PROBE_TIMEOUT = 5
 HINT = (
     "Bash will fail. Uncomment `security_opt: [\"seccomp=unconfined\"]` for the worker in "
@@ -56,7 +55,7 @@ def probe() -> dict:
 
 async def report(redis: Redis, result: dict, worker_id: str) -> None:
     payload = {**result, "worker_id": worker_id, "checked_at": datetime.now(UTC).isoformat()}
-    await redis.set(KEY, json.dumps(payload), ex=TTL_SECONDS)
+    await redis.set(KEY, json.dumps(payload))
 
 
 async def read(redis: Redis) -> dict | None:

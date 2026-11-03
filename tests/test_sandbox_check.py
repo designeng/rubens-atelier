@@ -65,7 +65,7 @@ async def test_report_read_round_trip(redis):
     got = await sandbox_check.read(redis)
     assert got["ok"] is False and got["detail"] == "x" and got["worker_id"] == "w1"
     assert got["checked_at"]
-    assert 0 < await redis.ttl(sandbox_check.KEY) <= sandbox_check.TTL_SECONDS
+    assert await redis.ttl(sandbox_check.KEY) == -1  # no expiry: the verdict outlives the one probe
 
 
 def test_check_sandbox_survives_redis_failure(monkeypatch):
