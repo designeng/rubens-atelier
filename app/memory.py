@@ -21,7 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .board_api import Db, Orm, _project
+from .board_api.deps import Db, _project
+from .board_api.schemas import Orm
 from .db import Note, Project, utcnow
 
 Status = Literal["proposed", "active", "archived"]
