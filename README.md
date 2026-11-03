@@ -2,8 +2,7 @@
 
 **English** · [Русский](docs/readme.ru.md)
 
-<img width="1511" height="660" alt="Screenshot 2026-10-30 at 14 46 42" src="https://github.com/user-attachments/assets/6350c987-bc51-4bfa-b940-9d22e0b72d0e" />
-
+<img width="1511" height="641" alt="image" src="https://github.com/user-attachments/assets/8bd804ca-ece8-4e1d-9fb3-c2a9a1d8ee4e" />
 
 A software factory in the spirit of Rubens' workshop. Claude Code agents work as apprentices: they plan, implement, pass CI and open the PR. You are the master who reviews it and signs off with a merge. It works on GitHub issues and on projects built from scratch.
 
