@@ -21,6 +21,8 @@ docker compose up -d --build  # redis, postgres, migrate (one-off), api :8000, w
 
 Board: http://localhost:8000/board (when the server sets `HARNESS_API_TOKEN`, the board asks for it; later it's under ⋯ → API token).
 
+Without `HARNESS_API_TOKEN` the API accepts only requests from this machine: a loopback client, a loopback `Host` (no DNS rebinding) and no `Origin` of another site. That is enough for `make dev`. Under compose the host's requests reach the container from the Docker gateway, so set the token there. Behind a reverse proxy on the same host, the proxy must send `X-Forwarded-For`, or set the token. Compose publishes Redis and Postgres on `127.0.0.1` only.
+
 The agent inside the container needs `ANTHROPIC_API_KEY`. You can set `CLAUDE_CODE_OAUTH_TOKEN` instead; `claude setup-token` issues one. The login from the host keychain does not reach the container.
 
 Local development: `make dev` starts Redis and Postgres in Docker, migrates the schema (`make migrate`), then the api, worker and beat on the host (Ctrl-C stops all three). See `make help` for the other targets.
