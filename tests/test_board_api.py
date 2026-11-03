@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app import board_api
+from app.board_api import board_page
 from app.api import app
 from app.config import settings
 from app.engine import EngineError
@@ -194,7 +194,7 @@ def test_validation_and_scoping(client):
 
 
 def test_board_page_without_build(client, tmp_path, monkeypatch):
-    monkeypatch.setattr(board_api, "DIST", tmp_path)
+    monkeypatch.setattr(board_page, "DIST", tmp_path)
     r = client.get("/board")
     assert r.status_code == 200 and "make web-build" in r.text
     assert client.get("/board/assets/app.js").status_code == 404
@@ -204,7 +204,7 @@ def test_board_page_serves_build(client, tmp_path, monkeypatch):
     (tmp_path / "assets").mkdir()
     (tmp_path / "index.html").write_text("<div id=app></div>")
     (tmp_path / "assets" / "app.js").write_text("console.log(1)")
-    monkeypatch.setattr(board_api, "DIST", tmp_path)
+    monkeypatch.setattr(board_page, "DIST", tmp_path)
     r = client.get("/board", params={"installation_id": 1, "setup_action": "install"})
     assert r.status_code == 200 and r.text == "<div id=app></div>"
     js = client.get("/board/assets/app.js")

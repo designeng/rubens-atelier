@@ -175,6 +175,7 @@ dialog.dlg::backdrop { background: var(--scrim); }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s3); padding: var(--s6) var(--s4); text-align: center; color: var(--text-muted); }
 .empty h2 { font-size: var(--fs-lg); color: var(--text); }
 .empty p { margin: 0; max-width: 42ch; }
+.note { margin: 0 0 var(--s3); padding: var(--s2) var(--s3); background: var(--info-subtle); color: var(--info); border-radius: var(--r-sm); font-size: var(--fs-md); }
 
 /* Tables */
 .table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }

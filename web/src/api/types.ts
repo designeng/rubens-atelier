@@ -1,4 +1,4 @@
-// Mirrors the response models of app/board_api.py.
+// Mirrors the response models of app/board_api/schemas.py.
 
 export type Column = "backlog" | "working" | "needs_human" | "done" | "failed";
 export type Kind = "epic" | "story" | "task";
@@ -64,7 +64,7 @@ export interface Todo {
   activeForm?: string;
 }
 
-// `_progress` in board_api.py plus `TaskStore.progress` in store.py for a live agent run.
+// `_progress` in board_api/helpers.py plus `TaskStore.progress` in store.py for a live agent run.
 export interface Progress {
   step: string;
   kind: "agent" | "action" | "check" | string;
@@ -113,7 +113,7 @@ export interface ItemOut {
   blocking: string[];
 }
 
-// `_attention` in board_api.py: why an item in the needs_human column waits. `kind` is pr, error,
+// `_attention` in board_api/helpers.py: why an item in the needs_human column waits. `kind` is pr, error,
 // questions, exhausted, or the verdict that led there (timeout, too_big, needs_clarification, ...).
 export interface Attention {
   kind: string;

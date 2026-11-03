@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import event, update
 
-from app import board_api
+from app.board_api import projects as board_projects
 from app.api import app
 from app.db import WorkItem, utcnow
 
@@ -56,9 +56,9 @@ def test_done_column_is_limited_and_newest_first(client):
 
 def test_board_rejects_a_done_limit_out_of_range(client):
     client.post("/projects", json={"slug": "app", "repo": "acme/app"})
-    for bad in (0, -1, board_api.DONE_LIMIT_MAX + 1, "x"):
+    for bad in (0, -1, board_projects.DONE_LIMIT_MAX + 1, "x"):
         assert client.get(f"/projects/app/board?done_limit={bad}").status_code == 422
-    assert client.get(f"/projects/app/board?done_limit={board_api.DONE_LIMIT_MAX}").status_code == 200
+    assert client.get(f"/projects/app/board?done_limit={board_projects.DONE_LIMIT_MAX}").status_code == 200
 
 
 def test_board_query_count_does_not_grow_with_the_items(client):
