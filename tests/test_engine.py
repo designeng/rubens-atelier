@@ -164,6 +164,19 @@ def make_factory(db, store, origin):
     return make
 
 
+async def test_pr_body_names_the_item_model_for_every_role(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item(model="claude-opus-5-5")
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert {c["spec"].model for c in f.runner.calls} == {"claude-opus-5-5"}
+    body = f.gh.prs[0]["body"]
+    for role in ("planner", "implementer", "reviewer"):
+        assert f"{role} `claude-opus-5-5`" in body
+
+
 async def test_story_happy_path(make_factory, origin):
     f = make_factory(ScriptedRunner())
     item_id = await f.new_item(source={"issue": 7})
@@ -182,6 +195,13 @@ async def test_story_happy_path(make_factory, origin):
     for part in ("Closes #7", "Plan 0: ready", "Implemented greeting", "Review 0: approved"):
         assert part in pr["body"]
     assert "hi 0" in git(origin, "show", f"{item.branch}:hello.txt")
+    used = {c["role"]: c["spec"].model for c in f.runner.calls}
+    assert all(used.values())
+    async with f.db.session() as s:
+        recorded = {r.role: r.model for r in await s.scalars(select(Run).where(Run.item_id == item_id))}
+    assert recorded == {"planner": used["plan"], "implementer": used["implement"], "reviewer": used["review"]}
+    for role, model in recorded.items():
+        assert f"{role} `{model}`" in pr["body"]
 
     (plan,) = f.runner.of("plan")
     assert plan["spec"].disallowed_tools == ["Write", "Edit"]

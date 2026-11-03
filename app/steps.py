@@ -165,6 +165,7 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 session = await store.r.hget(key, "paused") or (item.sessions.get(st.agent) if cut else None)
             else:
                 session = item.sessions.get(st.agent) if st.resume else None
+            model = item.model or st.model or settings.default_model
             spec = TaskCreate(
                 prompt=CONTINUE
                 if interrupted
@@ -173,7 +174,7 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 resume_session=interrupted or session,
                 verify_command=project.verify_command if st.verify else None,
                 output_schema=verdict_schema(st.verdicts, memory.NOTES_SCHEMA) if st.verdicts else None,
-                model=item.model or st.model,
+                model=model,
                 effort=st.effort,
                 lean_context=lean,
                 max_budget_usd=cap,
@@ -181,7 +182,9 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 metadata={"project": project.slug, "item_id": item.id, "state": item.state},
             )
             task_id = await store.create(spec)
-            run = Run(item_id=item.id, version=item.version, state=item.state, role=st.agent, task_id=task_id)
+            run = Run(
+                item_id=item.id, version=item.version, state=item.state, role=st.agent, task_id=task_id, model=model
+            )
             s.add(run)
             try:
                 await s.commit()
@@ -264,7 +267,14 @@ async def _action(item, project, st: State, cwd, engine, gh) -> str:
     action = ACTIONS.get(st.action)
     if action is None:
         raise RuntimeError(f"unknown action {st.action!r}")
-    ctx = ActionContext(gh=gh, project=project, item=item, cwd=cwd, artifacts=await latest_artifacts(engine, item.id))
+    ctx = ActionContext(
+        gh=gh,
+        project=project,
+        item=item,
+        cwd=cwd,
+        artifacts=await latest_artifacts(engine, item.id),
+        models=await latest_models(engine, item.id),
+    )
     verdict = await action(ctx)
     async with engine.db.session() as s:
         await s.execute(
@@ -305,6 +315,13 @@ async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: Sta
 
 async def latest_artifacts(engine: Engine, item_id: str) -> dict[str, str]:
     return {name: a.content for name, a in (await latest_artifact_rows(engine, item_id)).items()}
+
+
+async def latest_models(engine: Engine, item_id: str) -> dict[str, str]:
+    """The model of each role's latest run that recorded one."""
+    async with engine.db.session() as s:
+        rows = await s.scalars(select(Run).where(Run.item_id == item_id).order_by(Run.created_at))
+        return {r.role: r.model for r in rows if r.model}  # later rows overwrite earlier ones
 
 
 async def latest_artifact_rows(engine: Engine, item_id: str) -> dict[str, Artifact]:
