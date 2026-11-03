@@ -55,12 +55,14 @@ services:
     # At least HARNESS_MAX_AGENTS, plus room for actions (push, PR).
     command: ["celery", "-A", "app.celery_app", "worker", "-l", "info", "--concurrency", "6"]
     volumes: [workspaces:/workspaces]
-    # The agent's Bash sandbox (bubblewrap) needs unprivileged user namespaces, which Docker's
-    # default seccomp profile blocks; without them Bash fails (the sandbox is fail-closed).
-    # Pick one: uncomment the line below (drops seccomp filtering for the worker container),
-    # use a custom profile that allows them, or set HARNESS_SANDBOX=false (secrets readable).
-    # The worker probes bwrap on start: it logs an error and /healthz reports "sandbox": false.
-    # security_opt: ["seccomp=unconfined"]
+    # The agent's Bash sandbox (bubblewrap) needs what Docker blocks by default, and without it Bash
+    # fails (the sandbox is fail-closed). The profile is Docker's default (moby v27.5.1) plus one
+    # last rule with the syscalls bubblewrap needs; systempaths=unconfined lets it mount a fresh
+    # /proc, which seccomp=unconfined alone does not. On AppArmor hosts (Ubuntu) Docker's default
+    # AppArmor profile may also block the mounts: then add "apparmor=unconfined".
+    # The worker probes bwrap on start: it logs an error, /healthz reports "sandbox": false and the
+    # board shows a warning.
+    security_opt: ["seccomp=./docker/seccomp-worker.json", "systempaths=unconfined"]
     # Warm shutdown waits for running agents; give them time before SIGKILL.
     stop_grace_period: 10m
 

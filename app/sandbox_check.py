@@ -20,10 +20,15 @@ log = logging.getLogger(__name__)
 KEY = "harness:sandbox"
 PROBE_TIMEOUT = 5
 HINT = (
-    "Bash will fail. Uncomment `security_opt: [\"seccomp=unconfined\"]` for the worker in "
-    "docker-compose.yml, use a seccomp profile that allows unprivileged user namespaces, "
-    "or set HARNESS_SANDBOX=false."
+    "Bash will fail. Give the worker the `security_opt` from docker-compose.yml (on AppArmor hosts "
+    "also apparmor=unconfined), or set HARNESS_SANDBOX=false."
 )
+# The namespaces and mounts of Claude Code's sandbox: a fresh /proc is what fails in a container
+# when user namespaces alone work.
+PROBE_ARGS = [
+    "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts",
+    "--hostname", "localhost", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "true",
+]  # fmt: skip
 
 
 def probe() -> dict:
@@ -37,7 +42,7 @@ def probe() -> dict:
         return {"ok": False, "detail": "bwrap is not installed"}
     try:
         proc = subprocess.run(
-            [bwrap, "--unshare-user", "--unshare-pid", "--ro-bind", "/", "/", "true"],
+            [bwrap, *PROBE_ARGS],
             capture_output=True,
             text=True,
             timeout=PROBE_TIMEOUT,
@@ -49,7 +54,7 @@ def probe() -> dict:
         return {"ok": False, "detail": "bwrap could not be run"}
     if proc.returncode != 0:
         log.error("sandbox probe: bwrap exited %s: %s", proc.returncode, proc.stderr.strip())
-        return {"ok": False, "detail": "bwrap cannot create a sandbox (user namespaces blocked?)"}
+        return {"ok": False, "detail": "bwrap cannot create a sandbox (user namespaces or /proc mount blocked?)"}
     return {"ok": True, "detail": "ok"}
 
 

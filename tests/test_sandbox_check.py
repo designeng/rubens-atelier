@@ -59,6 +59,20 @@ def test_probe_success(monkeypatch):
     assert sandbox_check.probe()["ok"] is True
 
 
+def test_probe_mounts_a_fresh_proc_like_the_real_sandbox(monkeypatch):
+    _linux(monkeypatch)
+    monkeypatch.setattr(sandbox_check.shutil, "which", lambda _: "/usr/bin/bwrap")
+    calls = []
+
+    def run(cmd, **k):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(sandbox_check.subprocess, "run", run)
+    sandbox_check.probe()
+    assert "--proc" in calls[0] and "--unshare-net" in calls[0]
+
+
 async def test_report_read_round_trip(redis):
     assert await sandbox_check.read(redis) is None
     await sandbox_check.report(redis, {"ok": False, "detail": "x"}, "w1")

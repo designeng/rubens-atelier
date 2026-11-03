@@ -49,6 +49,7 @@ export function useBoard() {
   const doneTotal = ref(0);
   const proposedNotes = ref(0); // agents' notes waiting for review in the project's memory
   const scheduler = ref<SchedulerStatus | null>(null);
+  const sandboxProblem = ref(""); // why the worker's Bash sandbox can't start; empty when it can
   const openItemId = ref<string | null>(null);
   const item = ref<ItemDetail | null>(null);
   const github = ref<GithubApp>(NO_GITHUB);
@@ -96,6 +97,9 @@ export function useBoard() {
     }
     scheduler.value = await api.getScheduler();
     projects.value = await api.listProjects(); // the header shows what the project has spent
+    // A warning only: /healthz answers 503 while Redis or Postgres is down, and that must not fail the refresh.
+    const health = await api.getHealth().catch(() => null);
+    sandboxProblem.value = health?.sandbox === false ? health.sandbox_detail || "the sandbox check failed" : "";
   }
 
   function refresh(): Promise<void> {
@@ -293,6 +297,7 @@ export function useBoard() {
     proposedNotes,
     doneLimit,
     scheduler,
+    sandboxProblem,
     openItemId,
     item,
     github,

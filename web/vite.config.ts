@@ -10,7 +10,7 @@ export default defineConfig({
   plugins: [vue()],
   build: { outDir: "../app/static/dist", emptyOutDir: true },
   server: {
-    proxy: Object.fromEntries(["/projects", "/items", "/requests", "/scheduler", "/github", "/tasks", "/models", "/workspaces"].map((p) => [p, api])),
+    proxy: Object.fromEntries(["/projects", "/items", "/requests", "/scheduler", "/github", "/tasks", "/models", "/workspaces", "/healthz"].map((p) => [p, api])),
   },
   test: { environment: "node" },
 });

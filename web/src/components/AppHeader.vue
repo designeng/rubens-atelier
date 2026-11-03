@@ -131,6 +131,25 @@ async function importIssues() {
       <Icon name="plug" :size="14" /> Connect GitHub
     </button>
 
+    <Popover
+      v-if="b.sandboxProblem.value"
+      class="sandbox"
+      label="Bash sandbox problem"
+      align="end"
+      button-class="btn sm chip-btn warn"
+    >
+      <template #button><Icon name="alert" :size="14" /><span class="wide-only"> Sandbox</span></template>
+      <div class="capacity-panel">
+        <div class="menu-label">Bash sandbox</div>
+        <p class="cap-why warn">Agents' Bash commands will fail: {{ b.sandboxProblem.value }}.</p>
+        <p class="cap-why">
+          Give the worker the <code>security_opt</code> from docker-compose.yml (on AppArmor hosts also
+          <code>apparmor=unconfined</code>) and restart it, or set <code>HARNESS_SANDBOX=false</code>, which leaves secrets
+          readable to agents.
+        </p>
+      </div>
+    </Popover>
+
     <template v-if="sc">
       <Popover class="capacity" label="Agent capacity" align="end" button-class="btn ghost capacity-btn">
         <template #button>
@@ -321,7 +340,7 @@ async function importIssues() {
   color: var(--warn);
   background: var(--warn-subtle);
 }
-.chip-btn.warn {
+:deep(.chip-btn.warn) {
   color: var(--warn);
   background: var(--warn-subtle);
   border-color: transparent;
@@ -375,6 +394,7 @@ kbd {
     height: 0;
   }
   .chip-btn,
+  .sandbox,
   .pause,
   .theme,
   .more {
