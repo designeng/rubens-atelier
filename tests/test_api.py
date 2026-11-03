@@ -13,7 +13,8 @@ from app.store import TaskStore, events_key, task_key
 def client(redis, db, monkeypatch):
     enqueued: list[str] = []
     monkeypatch.setattr(service.run_agent, "apply_async", lambda args, task_id: enqueued.append(task_id))
-    with TestClient(app) as c:
+    # From this machine: without HARNESS_API_TOKEN the API serves only local requests.
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as c:
         # Swap the real Redis created in lifespan for the fake one.
         app.state.redis, app.state.store = redis, TaskStore(redis)
         c.enqueued = enqueued
@@ -51,6 +52,21 @@ def test_auth(client, monkeypatch):
     monkeypatch.setattr(settings, "api_token", "s3cret")
     assert client.get("/tasks").status_code == 401
     assert client.get("/tasks", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+
+
+def test_no_token_serves_only_local_requests(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_token", "")
+    assert client.get("/tasks").status_code == 200
+    assert client.get("/tasks", headers={"Origin": "http://localhost:5173"}).status_code == 200
+    assert client.get("http://[::1]:8000/tasks").status_code == 200
+    # DNS rebinding: a foreign name resolved to 127.0.0.1.
+    assert client.get("/tasks", headers={"Host": "evil.example"}).status_code == 401
+    # A form on a page of another site, posted to localhost.
+    assert client.post("/tasks/x/cancel", headers={"Origin": "https://evil.example"}).status_code == 401
+    with TestClient(app, base_url="http://localhost", client=("192.168.1.20", 50000)) as remote:
+        r = remote.get("/tasks")
+    assert r.status_code == 401
+    assert "HARNESS_API_TOKEN" in r.json()["detail"]
 
 
 async def test_stream_replays_until_terminal(client, redis):

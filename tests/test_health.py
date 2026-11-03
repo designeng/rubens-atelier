@@ -15,7 +15,8 @@ from app.store import TaskStore
 @pytest.fixture
 def client(redis, db, monkeypatch):
     monkeypatch.setattr(service.run_agent, "apply_async", lambda args, task_id: None)
-    with TestClient(app) as c:
+    # From this machine: without HARNESS_API_TOKEN the API serves only local requests.
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as c:
         app.state.redis, app.state.store = redis, TaskStore(redis)
         yield c
 

@@ -1,9 +1,12 @@
 import asyncio
+import ipaddress
 import json
+import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -26,9 +29,13 @@ from .workflow import load_workflows
 SSE_BLOCK_MS = 15_000
 HEALTH_TIMEOUT = 2.0
 
+log = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not settings.api_token:
+        log.warning("HARNESS_API_TOKEN is not set: the API accepts only requests from this machine")
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.store = TaskStore(app.state.redis)
     # The schema is brought up to date beforehand by `python -m app.migrate`.
@@ -48,10 +55,43 @@ async def lifespan(app: FastAPI):
 bearer = HTTPBearer(auto_error=False)
 
 
-def require_token(creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> None:
-    if settings.api_token and not (
-        creds and secrets.compare_digest(creds.credentials, settings.api_token)
-    ):
+def _is_loopback(host: str | None) -> bool:
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def _local_request(request: Request) -> bool:
+    """Sent from this machine to a loopback address, and not by a page of another site.
+
+    The Host check stops DNS rebinding, the Origin check a cross-site form POST from a page the
+    user has open. Behind a reverse proxy on the same host the client is the proxy: uvicorn takes
+    the real one from X-Forwarded-For, so the proxy must set it (or the server must set a token).
+    """
+    origin = request.headers.get("origin")
+    return (
+        _is_loopback(request.client.host if request.client else None)
+        and _is_loopback(urlsplit(f"//{request.headers.get('host', '')}").hostname)
+        and (origin is None or _is_loopback(urlsplit(origin).hostname))
+    )
+
+
+def require_token(
+    request: Request, creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
+) -> None:
+    if not settings.api_token:
+        # Without a token the API runs agents with a shell for anyone who reaches it: local use only.
+        if not _local_request(request):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "HARNESS_API_TOKEN is not set, so only requests from this machine are accepted",
+            )
+    elif not (creds and secrets.compare_digest(creds.credentials, settings.api_token)):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or missing bearer token")
 
 

@@ -15,7 +15,9 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6379:6379"]
+    # Published for `make dev` on the host, on loopback only: Redis has no password, and whoever
+    # reaches it can put tasks straight into the Celery queue.
+    ports: ["127.0.0.1:6379:6379"]
     volumes: [redis-data:/data]
 
   postgres:
@@ -24,7 +26,7 @@ services:
       POSTGRES_USER: harness
       POSTGRES_PASSWORD: harness
       POSTGRES_DB: harness
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]  # loopback only: the password above is no secret
     volumes: [pg-data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U harness -d harness"]
@@ -43,6 +45,8 @@ services:
 
   api:
     <<: *app
+    # Reachable from other machines only with HARNESS_API_TOKEN set; without it the API refuses
+    # every request that does not come from inside this container.
     ports: ["8000:8000"]
     volumes: [workspaces:/workspaces:ro]  # the board's read-only git view
 

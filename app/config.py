@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     github_webhook_secret: str = ""
     # Polling with webhooks on: catches lost deliveries and time-based verdicts (no_checks, timeout).
     checks_fallback_poll_seconds: int = 300
-    # Optional bearer token for the HTTP API. Empty = auth disabled (local dev only).
+    # Bearer token for the HTTP API. Empty = only requests from this machine (loopback client,
+    # loopback Host, no foreign Origin) are accepted: enough for local dev, set it anywhere else.
     api_token: str = ""
     # Where the MCP server (python -m app.mcp_server) reaches the HTTP API; it sends `api_token`.
     api_url: str = "http://localhost:8000"

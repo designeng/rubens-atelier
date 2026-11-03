@@ -21,7 +21,7 @@ def tools(client, monkeypatch):
         return httpx.Response(r.status_code, headers=r.headers, content=r.content)
 
     monkeypatch.setattr(mcp_server, "transport", httpx.MockTransport(forward))
-    monkeypatch.setattr(settings, "api_url", "http://factory")
+    monkeypatch.setattr(settings, "api_url", "http://localhost:8000")
 
     async def call(name, **arguments):
         result = await mcp_server.mcp.call_tool(name, arguments)

@@ -114,7 +114,8 @@ def client(redis, db):
     async def enqueue(item_id, version):
         enqueued.append((item_id, version))
 
-    with TestClient(app) as c:
+    # From this machine: without HARNESS_API_TOKEN the API serves only local requests.
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as c:
         app.state.redis, app.state.store = redis, TaskStore(redis)
         app.state.scheduler = Scheduler(redis, enqueue)
         app.state.engine = Engine(app.state.db, load_workflows(settings.workflows_dir), app.state.store, enqueue)

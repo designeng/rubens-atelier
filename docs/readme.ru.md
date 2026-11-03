@@ -19,6 +19,8 @@ docker compose up -d --build  # redis, postgres, migrate (разовый), api :
 
 Доска: http://localhost:8000/board (если сервер задаёт `HARNESS_API_TOKEN`, доска попросит его ввести; потом он в меню ⋯ → API token).
 
+Без `HARNESS_API_TOKEN` API принимает только запросы с этой машины: клиент с loopback-адреса, loopback в `Host` (защита от DNS rebinding) и без `Origin` чужого сайта. Для `make dev` этого достаточно. В compose запросы с хоста приходят в контейнер с адреса Docker-шлюза, поэтому там токен нужен. За reverse proxy на той же машине прокси должен передавать `X-Forwarded-For`, иначе задайте токен. Redis и Postgres в compose опубликованы только на `127.0.0.1`.
+
 Агенту в контейнере нужен `ANTHROPIC_API_KEY`. Вместо него можно указать `CLAUDE_CODE_OAUTH_TOKEN`, его выдаёт `claude setup-token`. Логин из keychain хоста в контейнер не попадает.
 
 Локально без Docker, со своими Redis и Postgres:
