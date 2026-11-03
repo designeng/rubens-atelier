@@ -7,6 +7,7 @@ from sqlalchemy import event, select, update
 
 from app import steps
 from app.archive import archive_task
+from app.board_api.helpers import _column
 from app.checks import poll_checks
 from app.config import settings
 from app.db import Artifact, HumanRequest, ItemEvent, Note, Project, Run, TaskTranscript, WorkItem, utcnow
@@ -141,7 +142,7 @@ class ScriptedRunner:
         self.calls.append({"role": role, "prompt": spec.prompt, "resume": resume, "spec": spec})
         session = f"{role}-{n}"
         await emit("session", {"session_id": session})
-        if role == "implement":
+        if role in ("implement", "resolve_conflicts"):
             if not self.implement_ok:
                 return AgentOutcome(session, None, True, error="max turns")
             (cwd / "hello.txt").write_text(f"hi {n}\n")
@@ -705,13 +706,15 @@ async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, 
     await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == [*HAPPY_PATH[:3], "implement", "sync_base", *HAPPY_PATH[3:]]
-    resolve = f.runner.of("implement")[1]
+    assert await f.path(item_id) == [*HAPPY_PATH[:3], "resolve_conflicts", "sync_base", *HAPPY_PATH[3:]]
+    resolve = f.runner.of("resolve_conflicts")[0]
     assert resolve["resume"] == "implement-0"
+    assert resolve["spec"].metadata["state"] == "resolve_conflicts"
+    assert "You are the implementer" in resolve["prompt"]
     assert "conflicts in:\n- hello.txt" in resolve["prompt"] and "Do not abort the merge" in resolve["prompt"]
 
     branch = (await f.item(item_id)).branch
-    assert git(origin, "show", f"{branch}:hello.txt") == "hi 1\n"  # the implementer's resolution
+    assert git(origin, "show", f"{branch}:hello.txt") == "hi 0\n"  # the implementer's resolution
     assert git(origin, "show", f"{branch}:other.txt") == "unrelated\n"  # main's work came along
     assert git(origin, "log", "--merges", "--format=%s", branch).strip()  # concluded as a merge commit
     # The PR now merges cleanly: main is an ancestor of the branch.
@@ -742,9 +745,9 @@ async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_pat
 async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, origin, tmp_path):
     class LeavesMarkers(ConflictingMerge):
         async def __call__(self, spec, *, cwd, resume, emit):
-            if spec.metadata["state"] == "implement" and len(self.of("implement")) == 1:
-                self.calls.append({"role": "implement", "prompt": spec.prompt, "resume": resume, "spec": spec})
-                return AgentOutcome("implement-1", "gave up", False)  # merge still in progress
+            if spec.metadata["state"] == "resolve_conflicts" and not self.of("resolve_conflicts"):
+                self.calls.append({"role": "resolve_conflicts", "prompt": spec.prompt, "resume": resume, "spec": spec})
+                return AgentOutcome("resolve-0", "gave up", False)  # merge still in progress
             return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
 
     f = make_factory(LeavesMarkers(origin, tmp_path))
@@ -753,11 +756,96 @@ async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, orig
     await f.drain()
 
     path = await f.path(item_id)
-    assert path[:6] == ["plan", "implement", "sync_base", "implement", "sync_base", "implement"]
+    assert path[:6] == ["plan", "implement", "sync_base", "resolve_conflicts", "sync_base", "resolve_conflicts"]
     async with f.db.session() as s:
         reports = (await s.scalars(select(Artifact.content).where(Artifact.name == "sync_base"))).all()
     assert reports[1].startswith("The merge of origin/main still has conflicts")
     assert "<<<<<<<" not in git(origin, "show", f"{(await f.item(item_id)).branch}:hello.txt")
+
+
+async def test_conflicts_nobody_resolves_escalate_without_using_implement_visits(make_factory, origin, tmp_path):
+    class NeverResolves(ConflictingMerge):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            if spec.metadata["state"] == "resolve_conflicts":
+                self.calls.append({"role": "resolve_conflicts", "prompt": spec.prompt, "resume": resume, "spec": spec})
+                return AgentOutcome("resolve", "gave up", False)
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    f = make_factory(NeverResolves(origin, tmp_path))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert len(f.runner.of("resolve_conflicts")) == 3
+    assert len(f.runner.of("implement")) == 1
+
+
+async def to_awaiting_merge_after_refusal(f) -> str:
+    """An automerge story whose merge GitHub refused: its PR waits in awaiting_merge."""
+    f.gh.merge_refusal = 405
+    item_id = await f.new_item(auto_merge=True)
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    return item_id
+
+
+async def test_automerge_sends_a_conflicting_pr_back_to_in_progress(make_factory, origin, tmp_path):
+    f = make_factory(ScriptedRunner())
+    item_id = await to_awaiting_merge_after_refusal(f)
+    land_on_main(origin, tmp_path, "hello.txt", "HELLO from main\n")
+    f.gh.pr_state["mergeable"] = False
+    f.gh.merge_refusal = None
+
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == [(item_id, "update")]
+
+    item = await f.item(item_id)
+    assert item.state == "sync_base" and _column(f.engine, item) == "working"
+    assert await f.open_request(item_id) is None
+    assert (await steps.latest_artifacts(f.engine, item_id))["merge"] == "PR #1 conflicts with main."
+
+    await f.drain()
+
+    tail = ["awaiting_merge", "sync_base", "resolve_conflicts", "sync_base", "review", "publish", "ci", "merge", "done"]
+    assert (await f.path(item_id))[-9:] == tail
+    assert f.runner.of("resolve_conflicts")[0]["resume"] == "implement-0"
+    assert len(f.gh.merges) == 2
+
+
+@pytest.mark.parametrize("auto_merge, mergeable", [(False, False), (True, None), (True, True)])
+async def test_pr_keeps_waiting_unless_automerge_sees_a_conflict(make_factory, origin, auto_merge, mergeable):
+    f = make_factory(ScriptedRunner())
+    f.gh.merge_refusal = 405
+    item_id = await f.new_item(auto_merge=auto_merge)
+    await f.engine.start(item_id)
+    await f.drain()
+    f.gh.pr_state["mergeable"] = mergeable
+
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == []
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    assert (await f.open_request(item_id)) is not None
+
+
+async def test_merged_pr_wins_over_a_stale_conflict_report(make_factory, origin):
+    f = make_factory(ScriptedRunner())
+    item_id = await to_awaiting_merge_after_refusal(f)
+    f.gh.pr_state = {"state": "closed", "merged_at": "2026-10-29T10:00:00Z", "mergeable": False}
+
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == [(item_id, "merged")]
+
+
+async def test_conflict_github_keeps_reporting_stops_at_a_human(make_factory, origin):
+    """The local merge is clean, so no agent step's limit would ever end this loop."""
+    f = make_factory(ScriptedRunner())
+    item_id = await to_awaiting_merge_after_refusal(f)
+    f.gh.pr_state["mergeable"] = False
+
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert (await f.path(item_id)).count("sync_base") == 8
+    assert not f.runner.of("resolve_conflicts")
 
 
 async def test_merged_pr_moves_the_story_to_done_by_itself(make_factory):

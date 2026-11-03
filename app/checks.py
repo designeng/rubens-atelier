@@ -102,7 +102,9 @@ async def _describe(gh: GitHub, repo: str, sha: str, failed: list[Result]) -> st
 
 
 async def merge(ctx: CheckContext) -> tuple[str | None, str]:
-    """Has the item's PR been merged (`merged`) or closed without merging (`abandon`)?"""
+    """Has the item's PR been merged (`merged`) or closed without merging (`abandon`)? With
+    project automerge on, a PR that conflicts with its base goes back to work by itself (`update`);
+    `mergeable` is None while GitHub is still computing it, which the next poll asks again."""
     match = re.search(r"/pull/(\d+)", ctx.item.pr_url or "")
     if not match:
         return None, ""
@@ -111,6 +113,8 @@ async def merge(ctx: CheckContext) -> tuple[str | None, str]:
         return "merged", f"PR #{pr['number']} was merged on GitHub."
     if pr.get("state") == "closed":
         return "abandon", f"PR #{pr['number']} was closed on GitHub without merging."
+    if ctx.project.auto_merge and pr.get("mergeable") is False:
+        return "update", f"PR #{pr['number']} conflicts with {ctx.item.base_branch}."
     return None, ""
 
 

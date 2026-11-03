@@ -18,7 +18,7 @@ def test_story_workflow_loads_and_routes():
     assert story.decide("clarify", "answered") == "plan"
     assert story.decide("implement", "done") == "sync_base"
     assert story.decide("sync_base", "done") == "review"
-    assert story.decide("sync_base", "conflict") == "implement"
+    assert story.decide("sync_base", "conflict") == "resolve_conflicts"
     assert story.decide("awaiting_merge", "update") == "sync_base"
     assert story.decide("review", "changes_requested") == "implement"
     assert story.decide("review", "approved") == "publish"
