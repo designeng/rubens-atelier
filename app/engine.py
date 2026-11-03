@@ -71,11 +71,18 @@ class Engine:
         except KeyError:
             raise EngineError(f"unknown workflow {name!r}") from None
 
-    async def start(self, item_id: str, actor: str = "user") -> bool:
+    async def start(self, item_id: str, actor: str = "user", confirm_external: bool = False) -> bool:
+        """Start a backlog story. A story imported from an outsider's issue is untrusted text that an agent
+        would act on, so it starts only with `confirm_external=True` (recorded in `source`)."""
         async with self.db.session() as s:
             item = await _get(s, item_id)
             if item.state is not None:
                 raise EngineError(f"item is already in state {item.state!r}")
+            source = item.source or {}
+            if source.get("external") and not source.get("external_confirmed"):
+                if not confirm_external:
+                    raise EngineError("external author: confirmation required")
+                item.source = {**source, "external_confirmed": True}
             wf = self.workflow(item.workflow)
             if waiting := await self.unfinished_blockers(s, item):
                 raise EngineError(f"blocked by: {', '.join(waiting)}")
