@@ -29,6 +29,9 @@ const urgency = computed(() => (props.item.priority > 0 ? urgencyLabel(props.ite
       <span v-if="item.blocked.length" class="chip" :title="`Blocked by ${item.blocked.join(', ')}`">Blocked</span>
       <span v-if="item.ready" class="chip ok" title="All blockers succeeded; ready to start">Ready</span>
       <span v-if="urgency" class="chip warn">{{ urgency }}</span>
+      <span v-if="item.external" class="chip warn" title="Imported from an issue by an outside author; confirm before starting">
+        External author<template v-if="item.author"> @{{ item.author }}</template>
+      </span>
     </div>
     <h3 class="title">
       <button type="button" class="open" @click="emit('open')">{{ item.title }}</button>
