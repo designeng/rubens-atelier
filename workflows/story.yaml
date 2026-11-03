@@ -30,11 +30,24 @@ states:
     next: {done: sync_base, turn_limit: implement, error: needs_human}
 
   # Bring in what other stories merged meanwhile, so the reviewer sees the code as it will
-  # land and the PR doesn't conflict. Conflicts go back to the implementer.
+  # land and the PR doesn't conflict. Conflicts go back to the implementer. max_visits stops a
+  # loop no agent step would catch: GitHub keeps reporting conflicts the local merge doesn't see.
   sync_base:
     action: sync_base
     verdicts: [done, conflict]
-    next: {done: review, conflict: implement, error: needs_human}
+    max_visits: 8
+    on_exhausted: needs_human
+    next: {done: review, conflict: resolve_conflicts, error: needs_human}
+
+  # The implementer's job, in a state of its own so conflicts don't use up implement's visits.
+  resolve_conflicts:
+    agent: implementer
+    effort: medium
+    verify: true
+    resume: true
+    max_visits: 3
+    on_exhausted: needs_human
+    next: {done: sync_base, turn_limit: resolve_conflicts, error: needs_human}
 
   review:
     agent: reviewer
@@ -63,7 +76,9 @@ states:
     human: >-
       The PR is open. Merge it, send it back with a comment, or update it when the base branch
       has moved on or GitHub reports conflicts.
-    watch: merge  # answers `merged` / `abandon` by itself once GitHub reports the PR's fate
+    # Answers `merged` / `abandon` by itself once GitHub reports the PR's fate, and `update`
+    # when GitHub reports conflicts on a project with automerge on.
+    watch: merge
     options: [merged, update, rework, abandon]
     next: {merged: done, update: sync_base, rework: implement, abandon: cancelled}
 
