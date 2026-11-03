@@ -37,6 +37,15 @@ describe("createClient", () => {
     expect(f.calls.map((c) => c.url)).toEqual(["/items/a%2Fb/git", "/items/a%2Fb/git?diff=true"]);
   });
 
+  it("starts a story, confirming an external author only on request", async () => {
+    const f = fakeFetch(() => json({}));
+    const api = createClient(() => "t", f.impl);
+    await api.startItem("a/b");
+    await api.startItem("a/b", true);
+    expect(f.calls.map((c) => c.url)).toEqual(["/items/a%2Fb/start", "/items/a%2Fb/start?confirm_external=true"]);
+    expect(f.calls.every((c) => c.init.method === "POST")).toBe(true);
+  });
+
   it("lists workspaces with only the filters that are set", async () => {
     const f = fakeFetch(() => json({ root: "/w", count: 0, size_bytes: null, workspaces: [] }));
     const api = createClient(() => "t", f.impl);

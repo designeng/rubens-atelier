@@ -223,7 +223,8 @@ async def update_item(
 @mcp.tool(annotations=WRITE)
 async def item_action(item_id: str, action: Literal["start", "run-now", "cancel", "reopen", "open-pr"]) -> dict:
     """Move a story:
-    - start: begin the workflow of a backlog story (refused while its blockers have not succeeded);
+    - start: begin the workflow of a backlog story (refused while its blockers have not succeeded, and
+      for a story imported from an outside author's issue, which a person must confirm on the board);
     - run-now: hand its waiting agent step a slot now, even if the scheduler is paused or full;
     - cancel: stop it (a running agent stops within seconds);
     - reopen: return a failed or cancelled story to the backlog;

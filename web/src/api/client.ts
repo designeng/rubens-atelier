@@ -165,7 +165,8 @@ export function createClient(
     getItem: (id: string) => api<ItemDetail>(`/items/${seg(id)}`),
     updateItem: (id: string, patch: ItemPatch) => api<ItemOut>(`/items/${seg(id)}`, "PATCH", patch),
     getItemGit: (id: string, diff = false) => api<GitSnapshot>(`/items/${seg(id)}/git${diff ? "?diff=true" : ""}`),
-    startItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/start`, "POST"),
+    startItem: (id: string, confirmExternal = false) =>
+      api<ItemOut>(`/items/${seg(id)}/start${confirmExternal ? "?confirm_external=true" : ""}`, "POST"),
     reopenItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/reopen`, "POST"),
     cancelItem: (id: string) => api<ItemOut>(`/items/${seg(id)}/cancel`, "POST"),
     openPr: (id: string) => api<ItemOut>(`/items/${seg(id)}/open-pr`, "POST"),

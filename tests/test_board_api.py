@@ -1,8 +1,10 @@
 import httpx
+import pytest
 
 from app import board_api
 from app.api import app
 from app.config import settings
+from app.engine import EngineError
 from app.github import GitHub
 
 
@@ -112,6 +114,48 @@ def test_import_issues(client, monkeypatch):
     issues.append({"number": 9, "title": "Linked", "body": "", "html_url": "https://github.com/acme/app/issues/9"})
     res = client.post("/projects/app/import-issues").json()
     assert [i["issue"] for i in res["imported"]] == [3] and res["skipped"] == 3
+
+
+def test_imported_issue_of_outsider_needs_confirmation_to_start(client, monkeypatch):
+    def issue(number, assoc, login="someone"):
+        data = {"number": number, "title": f"T{number}", "body": "b", "html_url": f"https://github.com/acme/app/issues/{number}"}
+        data["user"] = {"login": login}
+        if assoc is not None:
+            data["author_association"] = assoc
+        return data
+
+    issues = [issue(1, "OWNER", "boss"), issue(2, "CONTRIBUTOR", "eve"), issue(3, "NONE"), issue(4, None)]
+
+    async def fake_list(self, repo, state="open"):
+        return list(issues)
+
+    monkeypatch.setattr(GitHub, "list_issues", fake_list)
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    imported = client.post("/projects/app/import-issues").json()["imported"]
+    owner, contributor, none, missing = imported
+    assert [i["external"] for i in imported] == [False, True, True, True]
+    assert (owner["author"], contributor["author"], missing["author"]) == ("boss", "eve", "someone")
+
+    # An outsider's story is refused until confirmed; nothing is enqueued meanwhile.
+    r = client.post(f"/items/{contributor['id']}/start")
+    assert r.status_code == 409 and "confirmation required" in r.json()["detail"]
+    assert client.enqueued == []
+    assert client.get(f"/items/{contributor['id']}").json()["state"] is None
+
+    r = client.post(f"/items/{contributor['id']}/start?confirm_external=true")
+    assert r.status_code == 202 and r.json()["column"] == "working" and r.json()["external"] is False
+    assert client.enqueued == [(contributor["id"], 1)]
+
+    # A trusted author's story and a hand-made one start as before.
+    assert client.post(f"/items/{owner['id']}/start").status_code == 202
+    manual = client.post("/projects/app/items", json={"title": "Manual"}).json()
+    assert manual["external"] is False and client.post(f"/items/{manual['id']}/start").status_code == 202
+
+    # Engine-level: the gate does not depend on the HTTP route.
+    engine = app.state.engine
+    with pytest.raises(EngineError, match="confirmation required"):
+        client.portal.call(engine.start, none["id"])
+    assert client.portal.call(engine.start, none["id"], "user", True)
 
 
 def test_import_issues_errors(client, monkeypatch):
