@@ -15,6 +15,7 @@ const urgency = ref(DEFAULT_URGENCY);
 const model = ref("");
 const err = ref("");
 const busy = ref(false);
+const busyStart = ref(true);
 
 function open(initialTitle = "") {
   title.value = initialTitle;
@@ -27,7 +28,7 @@ function open(initialTitle = "") {
   nextTick(() => document.getElementById("iTitle")?.focus());
 }
 
-async function create() {
+async function create(start: boolean) {
   const t = title.value.trim();
   if (!t) {
     err.value = "Title is required";
@@ -35,6 +36,7 @@ async function create() {
     return;
   }
   busy.value = true;
+  busyStart.value = start;
   try {
     await b.createItem({
       title: t,
@@ -42,7 +44,7 @@ async function create() {
       budget_usd: budget.value.trim() === "" ? null : Number(budget.value),
       priority: urgency.value,
       model: model.value || null,
-      start: true,
+      start,
     });
     dlg.value?.close();
     emit("created");
@@ -58,7 +60,7 @@ defineExpose({ open });
 
 <template>
   <AppDialog ref="dlg" :title="`New story in ${b.slug.value}`" size="md">
-    <form id="newItemForm" novalidate @submit.prevent="create">
+    <form id="newItemForm" novalidate @submit.prevent="create(true)">
       <Field label="Title" for="iTitle">
         <input id="iTitle" v-model="title" maxlength="300" required :aria-invalid="!!err && !title.trim()" />
       </Field>
@@ -85,8 +87,11 @@ defineExpose({ open });
     <template #footer>
       <span class="err" role="alert">{{ err }}</span>
       <button type="button" class="btn" @click="dlg?.close()">Cancel</button>
+      <button type="button" class="btn" :disabled="busy" title="Add to the backlog without starting" @click="create(false)">
+        <span v-if="busy && !busyStart" class="spin"></span>Create
+      </button>
       <button type="submit" form="newItemForm" class="btn primary" :disabled="busy">
-        <span v-if="busy" class="spin"></span>Create &amp; start
+        <span v-if="busy && busyStart" class="spin"></span>Create &amp; start
       </button>
     </template>
   </AppDialog>
