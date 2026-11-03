@@ -59,9 +59,10 @@ The Docker image builds the board itself in a Node stage.
 | `GET` | `/tasks/{id}/stream` | SSE: history and live events until the task finishes, supports `Last-Event-ID` |
 | `GET` | `/tasks/{id}/events?after=` | The same events, paginated |
 
-On the board, **Session** (in a story's "Now" block and next to each run on its Runs tab) shows an agent run's full session: prompt, text, thinking, tool calls with their results, verify output and the result. It reads `/tasks/{id}/stream` and updates live until the run ends, reconnecting from the last event if the connection drops. Event strings are clipped at 8000 characters. Factory runs stay viewable after Redis expires them, from the Postgres archive (see below).
 | `POST` | `/tasks/{id}/cancel` | Cancel: a queued task is removed at once, a running one stops within about 2 seconds |
 | `GET` | `/tasks?status=` | Task list |
+
+On the board, **Session** (in a story's "Now" block and next to each run on its Runs tab) shows an agent run's full session: prompt, text, thinking, tool calls with their results, verify output and the result. It reads `/tasks/{id}/stream` and updates live until the run ends, reconnecting from the last event if the connection drops. Event strings are clipped at 8000 characters. Factory runs stay viewable after Redis expires them, from the Postgres archive (see below).
 
 Observability. `GET /healthz` (no token) pings Redis and Postgres, each with a 2-second timeout: it answers `200 {"ok": true, "redis": true, "postgres": true}`, or `503` with the failing dependency set to `false`. `GET /metrics` (bearer token) is Prometheus text computed on each scrape: `harness_queue_depth` (messages in the Celery queue), `harness_tasks{status}` (the newest 200 tasks in Redis), and, from the Postgres `runs` of the last 24 hours, `harness_runs{status}`, `harness_run_cost_usd_sum`, `harness_run_duration_seconds_sum` / `_count` (finished runs) and `harness_run_success_ratio` (succeeded / (succeeded + failed), 0 when there are none). They are gauges over the window, not counters.
 
