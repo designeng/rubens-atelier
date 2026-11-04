@@ -12,6 +12,12 @@ FROM python:3.13-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates bubblewrap socat \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /usr/local/bin/uv
+# For `codex/<model>` stories; Claude Code comes with the Agent SDK.
+ADD https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-x86_64-unknown-linux-musl.tar.gz /tmp/codex-x86_64.tar.gz
+ADD https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-aarch64-unknown-linux-musl.tar.gz /tmp/codex-aarch64.tar.gz
+RUN tar -xzf "/tmp/codex-$(uname -m).tar.gz" -C /usr/local/bin \
+    && mv "/usr/local/bin/codex-$(uname -m)-unknown-linux-musl" /usr/local/bin/codex \
+    && rm /tmp/codex-*.tar.gz
 
 # Claude Code refuses some permission modes as root, and the agent has a shell: run unprivileged.
 RUN useradd --create-home agent

@@ -18,7 +18,8 @@ from . import gitops, issue_flow
 from .config import settings
 from .github import GitHub
 from .models import FailureReason, TaskCreate, TaskStatus
-from .runner import AgentOutcome, AgentRunner, Emit, run_claude
+from .providers import run_routed
+from .runner import AgentOutcome, AgentRunner, Emit
 from .scheduler import record_rate_limit
 from .store import TaskStore, describe_tool
 
@@ -126,7 +127,7 @@ async def execute_task(
     task_id: str,
     store: TaskStore,
     worker_id: str,
-    runner: AgentRunner = run_claude,
+    runner: AgentRunner = run_routed,
     github_factory: Callable[[], GitHub] = GitHub,
 ) -> None:
     if not await store.claim(task_id, worker_id):

@@ -38,7 +38,8 @@ from .engine import Engine
 from .execution import execute_task, item_workspace
 from .github import GitHub
 from .models import FailureReason, TaskCreate, TaskStatus
-from .runner import AgentRunner, run_claude
+from .providers import reports_cost, resumable, run_routed
+from .runner import AgentRunner
 from .store import TaskStore
 from .workflow import DONE, ERROR, State, verdict_schema
 
@@ -70,7 +71,7 @@ async def run_step(
     engine: Engine,
     store: TaskStore,
     worker_id: str,
-    runner: AgentRunner = run_claude,
+    runner: AgentRunner = run_routed,
     github_factory: Callable[[Project], GitHub] = GitHub.for_project,
 ) -> None:
     db = engine.db
@@ -151,9 +152,17 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 await s.commit()
                 log.warning("item %s: %s", item.id, content)
                 return FailureReason.budget.value
+            model = item.model or st.model or settings.default_model
+            if left is not None and not reports_cost(model):
+                content = f"{st.agent} not started: {model} reports no cost, so the {limit}'s budget can't be kept."
+                s.add(Artifact(item_id=item.id, name="error", content=content))
+                await s.commit()
+                log.warning("item %s: %s", item.id, content)
+                return FailureReason.budget.value
             cap = settings.default_max_budget_usd if left is None else min(left, settings.default_max_budget_usd)
             key = restarts_key(item.id, item.version)
-            interrupted = await store.r.hget(key, "session")
+            # Changing a story's model to another provider leaves its sessions behind.
+            interrupted = resumable(await store.r.hget(key, "session"), model)
             lean = item.lean_context if item.lean_context is not None else settings.lean_context
             previous = await s.scalar(
                 select(Run).where(Run.item_id == item.id, Run.role == st.agent).order_by(Run.created_at.desc()).limit(1)
@@ -165,7 +174,7 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 session = await store.r.hget(key, "paused") or (item.sessions.get(st.agent) if cut else None)
             else:
                 session = item.sessions.get(st.agent) if st.resume else None
-            model = item.model or st.model or settings.default_model
+            session = resumable(session, model)
             spec = TaskCreate(
                 prompt=CONTINUE
                 if interrupted

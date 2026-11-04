@@ -87,6 +87,14 @@ class Settings(BaseSettings):
     default_verify_attempts: int = 2
     verify_timeout_seconds: int = 30 * 60
 
+    # Other providers, chosen by the model id's prefix (see app/providers.py).
+    # `openrouter/<slug>` runs Claude Code against OpenRouter.
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api"
+    # `codex/<model>` runs the Codex CLI. No key = the CLI's saved login (`codex login`).
+    codex_api_key: str = ""
+    codex_binary: str = "codex"
+
     # GitHub issue workflow. The token needs contents, issues and pull-requests write
     # access; it is used only by the harness (clone/push/API), never exposed to the agent.
     github_token: str = ""

@@ -82,6 +82,27 @@ curl -X POST localhost:8000/issues/run -H "Authorization: Bearer $HARNESS_API_TO
   -d '{"repo": "acme/app", "number": 42, "verify_command": "make test"}'
 ```
 
+## Providers
+
+The model id picks the provider, wherever a model can be set: a story's picker, a workflow state's `model`, a task, `HARNESS_DEFAULT_MODEL`. Add the ones you use to `HARNESS_MODELS` to offer them on the board.
+
+| Model id | Runs on | Auth |
+|---|---|---|
+| `claude-sonnet-5-5` | Claude Code | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` |
+| `openrouter/<slug>`, e.g. `openrouter/anthropic/claude-opus-5` | Claude Code, against OpenRouter | `HARNESS_OPENROUTER_API_KEY` |
+| `codex/<model>`, e.g. `codex/gpt-5.5` | Codex CLI (`codex exec`; in the Docker image) | `HARNESS_CODEX_API_KEY`, or the CLI's saved `codex login` outside a container |
+
+What differs from Claude:
+
+- **Budgets.** These runs report no cost in USD: Codex gives only tokens, and Claude Code's estimate says nothing about OpenRouter's bill. So a story or project with a budget refuses to start them (verdict `budget`), and `HARNESS_DEFAULT_MAX_BUDGET_USD` doesn't limit them. Set a credit limit on the OpenRouter key or in the OpenAI project instead. Their spending doesn't appear on the board.
+- **OpenRouter models.** All of Claude Code's requests, subagents and background ones included, go to the chosen model. OpenRouter only guarantees compatibility with Anthropic's own models; other models may misbehave with Claude Code's tools.
+- **Codex permissions.** The sandbox matches Claude's: writes only in the workspace (and `.git`), the harness's secret files and Codex's `auth.json` unreadable, and the agent's shell gets no credentials. The role's `disallowed_tools: [Write, Edit]` makes the whole workspace read-only, so a reviewer's tests can't write there either. Limits Codex can't enforce fail the run instead of being ignored: `HARNESS_BASH_ALLOWED_COMMANDS`, `allowed_tools` and other `disallowed_tools`.
+- **Codex turn limit.** `max_turns` counts tool calls, and the run is stopped when they exceed it. Codex doesn't report a command the sandbox blocked, so those aren't counted or shown; the task timeout still applies.
+- **Repo docs.** Codex reads `AGENTS.md`, then `CLAUDE.md`; lean context skips both. Its global `~/.codex/AGENTS.md`, if any, may still apply.
+- **Limits.** Scheduler pacing follows Claude's subscription windows only, and it holds back stories on every provider. A Codex limit fails the run (`model_error`) instead of requeueing it.
+
+Changing a story's model to another provider starts new sessions, since a session can't move between them. The new session gets the full artifacts.
+
 ## Factory: projects, board, workflows
 
 The factory runs on top of tasks. A **project** is a tenant with its own repository and its own `verify_command`. A project holds **work items** (epic, story, task), and each item moves through its own **workflow**.

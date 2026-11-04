@@ -93,16 +93,20 @@ def agent_env() -> dict[str, str]:
     return env
 
 
-def secret_read_rules() -> list[str]:
-    """Deny rules for the harness's secret files. Workspaces may sit inside the harness checkout,
-    and the sandbox only confines writes, so without these `cat ../../../.env` would work.
-    Read deny rules cover the Read tool and, under the sandbox, Bash as well (only when they
-    come from settings: `--disallowedTools` rules don't reach the sandbox)."""
+def secret_paths() -> list[Path]:
+    """The harness's secret files. Workspaces may sit inside the harness checkout, and a sandbox
+    only confines writes, so unless these are denied `cat ../../../.env` would work."""
     paths = [ROOT / ".env", Path(".env").resolve()]
     if settings.github_app_private_key_file:
         paths.append(settings.github_app_private_key_file.resolve())
+    return list(dict.fromkeys(paths))
+
+
+def secret_read_rules() -> list[str]:
+    """Read deny rules cover the Read tool and, under the sandbox, Bash as well (only when they
+    come from settings: `--disallowedTools` rules don't reach the sandbox)."""
     # `//` marks an absolute path in a permission rule.
-    return [f"Read(/{p})" for p in dict.fromkeys(paths)]
+    return [f"Read(/{p})" for p in secret_paths()]
 
 
 def sandbox_settings() -> Any:
@@ -122,7 +126,9 @@ def tool_names(allowed: list[str]) -> list[str]:
     return list(dict.fromkeys(t.split("(", 1)[0] for t in allowed))
 
 
-def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgentOptions:
+def build_options(
+    spec: TaskCreate, cwd: Path, resume: str | None, env: dict[str, str] | None = None
+) -> ClaudeAgentOptions:
     lean = spec.lean_context if spec.lean_context is not None else settings.lean_context
     allowed = effective_tools(spec.allowed_tools if spec.allowed_tools is not None else settings.default_allowed_tools)
     system_prompt: str | dict[str, Any]
@@ -135,7 +141,7 @@ def build_options(spec: TaskCreate, cwd: Path, resume: str | None) -> ClaudeAgen
     return ClaudeAgentOptions(
         cwd=str(cwd),
         resume=resume,
-        env=agent_env(),
+        env=agent_env() | (env or {}),
         add_dirs=[uv_cache_dir()],
         system_prompt=system_prompt,
         # Lean: only the allowed tools' definitions reach the context, not every built-in one.
@@ -190,7 +196,7 @@ def _failure(call: dict[str, Any] | None, content: Any) -> str:
 
 
 async def run_claude(
-    spec: TaskCreate, *, cwd: Path, resume: str | None, emit: Emit
+    spec: TaskCreate, *, cwd: Path, resume: str | None, emit: Emit, env: dict[str, str] | None = None
 ) -> AgentOutcome:
     session_id: str | None = resume
     result: ResultMessage | None = None
@@ -199,7 +205,7 @@ async def run_claude(
     last_failure: str | None = None
     last_message: str | None = None
 
-    async for msg in query(prompt=spec.prompt, options=build_options(spec, cwd, resume)):
+    async for msg in query(prompt=spec.prompt, options=build_options(spec, cwd, resume, env)):
         match msg:
             case SystemMessage(subtype="init", data=data):
                 session_id = data.get("session_id", session_id)
