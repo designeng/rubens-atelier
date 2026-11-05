@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from .. import worker_heartbeat
 from .deps import Sched
 
 router = APIRouter()
@@ -14,8 +15,8 @@ class Pause(BaseModel):
 
 @router.get("/scheduler")
 async def scheduler_status(scheduler: Sched) -> dict:
-    """Slots in use, queue, and the subscription windows the pacing is based on."""
-    return await scheduler.status()
+    """Slots in use, queue, the subscription windows the pacing is based on, and the live workers."""
+    return await scheduler.status() | {"workers": await worker_heartbeat.alive(scheduler.r)}
 
 
 @router.post("/scheduler/pause")

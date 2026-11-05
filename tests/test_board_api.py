@@ -299,7 +299,7 @@ def test_working_items_report_progress(client):
     item = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()
     # Not dispatched to a worker in this test: the agent step has no run yet.
     (card,) = client.get("/projects/app/board").json()["working"]
-    assert card["progress"] == {"step": "planner", "kind": "agent", "queued": False}
+    assert card["progress"] == {"step": "planner", "kind": "agent", "queued": False, "dispatched": False}
     assert client.get(f"/items/{item['id']}").json()["progress"]["step"] == "planner"
     assert client.post("/projects/app/items", json={"title": "Later"}).json()["progress"] is None
 
@@ -535,3 +535,23 @@ def test_blocked_by_validation_and_patch(client):
     assert patch(b, [c["id"]]).status_code == 422  # b -> c -> a -> b
     assert patch(a, []).json()["blocked_by"] == []
     assert client.post(f"/items/{a['id']}/start").status_code == 202
+
+
+def test_scheduler_reports_live_workers(client, redis):
+    import asyncio
+    import json
+
+    from fakeredis import FakeRedis
+
+    from app import worker_heartbeat
+
+    assert client.get("/scheduler").json()["workers"] == []
+    hb = worker_heartbeat.Heartbeat(settings.redis_url, 2)
+    hb.redis = FakeRedis(decode_responses=True)
+    hb._beat()
+    info = json.loads(hb.redis.get(worker_heartbeat.PREFIX + hb.worker_id))
+    assert info["id"] == hb.worker_id and info["concurrency"] == 2
+    assert hb.redis.ttl(worker_heartbeat.PREFIX + hb.worker_id) > 0
+    # The API reads the same keys.
+    asyncio.run(redis.set(worker_heartbeat.PREFIX + "w1", json.dumps(info), ex=30))
+    assert [w["id"] for w in client.get("/scheduler").json()["workers"]] == [hb.worker_id]
