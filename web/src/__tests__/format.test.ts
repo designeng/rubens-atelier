@@ -42,6 +42,9 @@ describe("progressSummary", () => {
       "implement · waiting for a free agent slot",
     );
     expect(progressSummary({ step: "implement", kind: "agent", queued: false }, now)).toBe("implement · starting");
+    expect(progressSummary({ step: "implement", kind: "agent", queued: false, dispatched: true }, now)).toBe(
+      "implement · slot taken, waiting for a worker",
+    );
     expect(progressSummary({ step: "review", kind: "agent", queued: true }, now, true)).toBe(
       "review · queued, the queue is paused",
     );

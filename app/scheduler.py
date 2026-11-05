@@ -94,6 +94,10 @@ class Scheduler:
         if (score := await self.r.zscore(READY, m)) is not None:
             await self.r.zadd(READY, {m: score + (old - new) * PRIORITY_WEIGHT}, xx=True)
 
+    async def is_queued(self, item_id: str, version: int) -> bool:
+        """The step waits in the ready queue for a slot (the only state `run_now` can start)."""
+        return await self.r.zscore(READY, member(item_id, version)) is not None
+
     async def is_pending(self, item_id: str, version: int) -> bool:
         m = member(item_id, version)
         return await self.r.zscore(READY, m) is not None or await self.r.zscore(ACTIVE, m) is not None

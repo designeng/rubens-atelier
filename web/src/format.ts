@@ -19,6 +19,7 @@ export function progressSummary(p: Progress, now = Date.now(), paused = false): 
   if (p.kind === "check") return `waiting for ${p.step}`;
   if (p.kind === "action") return `running ${p.step}`;
   if (!p.task_id) {
+    if (p.dispatched) return `${p.step} · slot taken, waiting for a worker`;
     if (!p.queued) return `${p.step} · starting`;
     return paused ? `${p.step} · queued, the queue is paused` : `${p.step} · waiting for a free agent slot`;
   }

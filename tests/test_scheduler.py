@@ -72,6 +72,7 @@ async def test_run_now_skips_the_pause_and_limits_but_not_a_rejected_window(sche
     await scheduler.run_now("b", 1)
     assert dispatched == ["busy", "b"]
     assert await scheduler.is_pending("b", 1)  # holds a slot now
+    assert not await scheduler.is_queued("b", 1)  # but no longer waits for one
     assert (await scheduler.status())["ready"] == ["a:1"]
     with pytest.raises(SchedulerError, match="not waiting"):
         await scheduler.run_now("b", 1)

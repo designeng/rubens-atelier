@@ -68,7 +68,8 @@ export interface Todo {
 export interface Progress {
   step: string;
   kind: "agent" | "action" | "check" | string;
-  queued?: boolean;
+  queued?: boolean; // waits in the scheduler's queue for a slot
+  dispatched?: boolean; // holds a slot, but no worker has started the agent yet
   task_id?: string;
   status?: string;
   started_at?: string | null;
