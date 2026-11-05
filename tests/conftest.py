@@ -22,6 +22,7 @@ def _settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "database_url", f"sqlite+aiosqlite:///{tmp_path / 'factory.db'}")
     monkeypatch.setattr(settings, "github_token", "test-token")
     monkeypatch.setattr(settings, "api_token", "")  # HARNESS_API_TOKEN in the environment would demand auth
+    monkeypatch.setattr(settings, "bash_allowed_commands", [])  # Codex refuses runs when this is set
     monkeypatch.setattr(settings, "issue_verify_command", "")
     monkeypatch.setattr(settings, "lean_context", False)  # a local .env may turn it on
     monkeypatch.setattr(execution, "WATCHDOG_INTERVAL", 0.05)
