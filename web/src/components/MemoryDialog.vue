@@ -166,7 +166,7 @@ defineExpose({ open });
             <b>{{ n.title }}</b>
             <span v-for="t in n.tags" :key="t" class="chip">{{ t }}</span>
             <span class="subtle by">{{ n.created_by }}</span>
-            <a v-if="n.source_item_id" class="by" :href="itemHash(n.source_item_id, "overview", b.slug.value)" @click="dlg?.close()">
+            <a v-if="n.source_item_id" class="by" :href="itemHash(n.source_item_id, 'overview', b.slug.value)" @click="dlg?.close()">
               from {{ storyTitle(n.source_item_id) }}
             </a>
           </div>
