@@ -21,6 +21,7 @@ def _settings(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "workspaces_root", tmp_path / "workspaces")
     monkeypatch.setattr(settings, "database_url", f"sqlite+aiosqlite:///{tmp_path / 'factory.db'}")
     monkeypatch.setattr(settings, "github_token", "test-token")
+    monkeypatch.setattr(settings, "api_token", "")  # HARNESS_API_TOKEN in the environment would demand auth
     monkeypatch.setattr(settings, "issue_verify_command", "")
     monkeypatch.setattr(settings, "lean_context", False)  # a local .env may turn it on
     monkeypatch.setattr(execution, "WATCHDOG_INTERVAL", 0.05)

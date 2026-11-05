@@ -299,7 +299,7 @@ def test_working_items_report_progress(client):
     item = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()
     # Not dispatched to a worker in this test: the agent step has no run yet.
     (card,) = client.get("/projects/app/board").json()["working"]
-    assert card["progress"] == {"step": "planner", "kind": "agent", "queued": False}
+    assert card["progress"] == {"step": "planner", "kind": "agent", "queued": False, "dispatched": False}
     assert client.get(f"/items/{item['id']}").json()["progress"]["step"] == "planner"
     assert client.post("/projects/app/items", json={"title": "Later"}).json()["progress"] is None
 
