@@ -253,6 +253,8 @@ export interface SchedulerStatus {
   active: string[];
   ready: string[];
   quota: Record<string, unknown>;
+  // Celery workers that reported in within the last 30 seconds.
+  workers: { id: string; concurrency: number | null; started_at: number }[];
 }
 
 export interface Installation {

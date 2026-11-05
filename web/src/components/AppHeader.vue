@@ -21,15 +21,18 @@ const current = computed(() => b.projects.value.find((p) => p.slug === b.slug.va
 const projectMoney = computed(() => (current.value ? spendText(current.value.spent_usd, current.value.budget_usd) : null));
 
 const sc = computed(() => b.scheduler.value);
+const noWorker = computed(() => !!sc.value && !sc.value.workers.length);
 const capacityTone = computed(() => {
   const s = sc.value;
   if (!s) return "";
+  if (noWorker.value) return "err";
   if (b.isPaused() || s.reason !== "ok") return "warn";
   return s.active.length ? "ok" : "";
 });
 const capacityWhy = computed(() => {
   const s = sc.value;
   if (!s) return "";
+  if (noWorker.value) return "No Celery worker is running: agent steps get a slot but never start. Start one with `celery -A app.celery_app worker`.";
   if (b.isPaused()) return "The queue is paused: no new agent step starts.";
   return s.reason === "ok" ? "Dispatching normally." : s.reason;
 });
@@ -143,6 +146,10 @@ async function importIssues() {
         <div class="capacity-panel">
           <div class="menu-label">Agent capacity</div>
           <p class="cap-why" :class="capacityTone">{{ capacityWhy }}</p>
+          <div class="cap-row">
+            <span>Workers</span>
+            <span :class="{ 'cap-err': noWorker }">{{ noWorker ? "none online" : `${sc.workers.length} online` }}</span>
+          </div>
           <div class="cap-row">
             <label for="capMax">Agents at once</label>
             <input
@@ -286,6 +293,9 @@ async function importIssues() {
 .dot.warn {
   color: var(--warn);
 }
+.dot.err {
+  color: var(--danger);
+}
 .capacity-panel {
   display: flex;
   flex-direction: column;
@@ -301,6 +311,10 @@ async function importIssues() {
 }
 .cap-why.warn {
   color: var(--warn);
+}
+.cap-why.err,
+.cap-err {
+  color: var(--danger);
 }
 .cap-row {
   display: flex;

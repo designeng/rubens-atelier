@@ -240,3 +240,19 @@ async def test_lean_rate_limited_step_resumes_the_cut_session(db, store, redis, 
 
     assert (await f.item(item_id)).state == "awaiting_merge"
     assert f.runner.of("implement")[1]["resume"] == "implement-cut"
+
+
+async def test_redispatch_if_lost_sends_a_silent_step_again(scheduler, redis, dispatched):
+    await scheduler.submit("a", 1, "A")
+    assert dispatched == ["a"]
+    assert not await scheduler.redispatch_if_lost("a", 1, after=600)  # dispatched just now
+
+    await redis.zadd(ACTIVE, {"a:1": time.time() + settings.dispatch_ttl_seconds - 601}, xx=True)
+    assert await scheduler.redispatch_if_lost("a", 1, after=600)
+    assert dispatched == ["a", "a"]
+    assert not await scheduler.redispatch_if_lost("a", 1, after=600)  # fresh lease now
+
+    await redis.zadd(ACTIVE, {"a:1": time.time() + settings.dispatch_ttl_seconds - 601}, xx=True)
+    await scheduler.started("a", 1, "task-1")
+    assert not await scheduler.redispatch_if_lost("a", 1, after=600)  # the agent started
+    assert not await scheduler.redispatch_if_lost("nope", 1, after=600)

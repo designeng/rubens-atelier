@@ -236,7 +236,11 @@ class Engine:
                 if st is None or not st.runs_on_worker:
                     continue
                 if st.agent and self.scheduler and await self.scheduler.is_pending(item.id, item.version):
-                    continue  # waiting for a slot, or holding one: the scheduler accounts for it
+                    # Waiting for a slot: the scheduler accounts for it. Holding one without a
+                    # run for too long: the message to the worker was lost, send it again.
+                    if await self.scheduler.redispatch_if_lost(item.id, item.version, settings.step_stale_seconds):
+                        requeued.append(item.id)
+                    continue
                 run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
                 if run is None:
                     stale = aware(item.updated_at) < cutoff
