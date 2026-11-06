@@ -174,6 +174,7 @@ export function createClient(
     getExec: (id: string, execId: string) => api<ExecResult>(`/items/${seg(id)}/exec/${seg(execId)}`),
     deleteItem: (id: string) => api<void>(`/items/${seg(id)}`, "DELETE"),
     runItemNow: (id: string) => api<ItemOut>(`/items/${seg(id)}/run-now`, "POST"),
+    commentItem: (id: string, body: string) => api<ItemOut>(`/items/${seg(id)}/comments`, "POST", { body }),
     answerRequest: (id: string, option: string, comment: string) =>
       api<{ advanced: boolean }>(`/requests/${seg(id)}/answer`, "POST", { option, comment }),
     getTask: (id: string) => api<TaskInfo>(`/tasks/${seg(id)}`),

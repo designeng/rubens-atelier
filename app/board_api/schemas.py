@@ -150,6 +150,7 @@ class RunOut(Orm):
 
 class ArtifactOut(Orm):
     id: str
+    run_id: str | None  # for a comment: the run it was delivered to
     name: str
     content: str
     created_at: datetime
@@ -184,3 +185,8 @@ class ItemDetail(ItemOut):
 class Answer(BaseModel):
     option: str
     comment: str = ""
+
+
+class CommentIn(BaseModel):
+    # Below steps.ARTIFACT_LIMIT, so a prompt never clips a comment.
+    body: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)]

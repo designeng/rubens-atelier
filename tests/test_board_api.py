@@ -8,6 +8,21 @@ from app.engine import EngineError
 from app.github import GitHub
 
 
+def test_comment_is_accepted_on_an_agent_step_only(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    backlog = client.post("/projects/app/items", json={"title": "Later"}).json()
+    started = client.post("/projects/app/items", json={"title": "Now", "start": True}).json()
+
+    r = client.post(f"/items/{started['id']}/comments", json={"body": "  Also run the tests  "})
+    assert r.status_code == 202
+    (comment,) = client.get(f"/items/{started['id']}").json()["artifacts"]
+    assert comment["content"] == "Also run the tests" and comment["run_id"] is None
+
+    assert client.post(f"/items/{backlog['id']}/comments", json={"body": "x"}).status_code == 409
+    assert client.post("/items/nope/comments", json={"body": "x"}).status_code == 404
+    assert client.post(f"/items/{started['id']}/comments", json={"body": "   "}).status_code == 422
+
+
 def test_projects_items_board_and_inbox(client):
     r = client.post("/projects", json={"slug": "app", "repo": "acme/app", "verify_command": "make test"})
     assert r.status_code == 201

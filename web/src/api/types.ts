@@ -177,6 +177,7 @@ export interface RunOut {
 
 export interface ArtifactOut {
   id: string;
+  run_id: string | null; // for a comment: the run it was delivered to
   name: string;
   content: string;
   created_at: string;

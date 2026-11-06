@@ -11,7 +11,7 @@ from app.board_api.helpers import _column
 from app.checks import poll_checks
 from app.config import settings
 from app.db import Artifact, HumanRequest, ItemEvent, Note, Project, Run, TaskTranscript, WorkItem, utcnow
-from app.engine import Engine, EngineError
+from app.engine import COMMENT_PREFIX, Engine, EngineError
 from app.execution import item_workspace, remove_item_workspace
 from app.models import FailureReason
 from app.runner import AgentOutcome
@@ -1085,3 +1085,138 @@ async def test_reconcile_loads_only_steps_a_worker_can_be_running(make_factory):
     finally:
         event.remove(WorkItem, "load", on_load)
     assert loaded == [working]
+
+
+class Commenting(ScriptedRunner):
+    """A person comments while the given runs, by (state, call number), are in progress."""
+
+    def __init__(self, comments, **kw):
+        super().__init__(**kw)
+        self.comments = comments
+        self.engine = None
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        state = spec.metadata["state"]
+        if text := self.comments.get((state, len(self.of(state)))):
+            await self.engine.comment(spec.metadata["item_id"], text)
+        return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+
+@pytest.fixture
+def commenting(make_factory):
+    def make(comments, **kw):
+        f = make_factory(Commenting(comments, **kw))
+        f.runner.engine = f.engine
+        return f
+
+    return make
+
+
+async def comments_of(f, item_id):
+    async with f.db.session() as s:
+        rows = await s.scalars(
+            select(Artifact).where(Artifact.item_id == item_id, Artifact.name.startswith(COMMENT_PREFIX))
+        )
+        return list(rows)
+
+
+async def test_a_comment_sends_the_role_back_to_its_session_before_moving_on(commenting):
+    f = commenting({("review", 0): "Also check the error path."})
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    # The verdict of the first review didn't count: the story went back to review, not to publish.
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "review", "publish", "ci", "merge",
+                                     "awaiting_merge"]
+    first, second = f.runner.of("review")
+    assert first["resume"] is None  # a review normally starts afresh...
+    assert second["resume"] == "review-0"  # ...but a comment goes to the session it concerns
+    assert second["prompt"].startswith(steps.FOLLOW_UP) and "Also check the error path." in second["prompt"]
+    (comment,) = await comments_of(f, item_id)
+    assert comment.run_id is not None
+
+
+async def test_comments_use_up_no_visits(commenting):
+    # implement has max_visits 4: six runs in a row would go to needs_human if they counted.
+    f = commenting({("implement", n): f"note {n}" for n in range(5)})
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    assert len(f.runner.of("implement")) == 6
+    assert (await f.path(item_id)).count("implement") == 6
+
+
+async def test_a_comment_on_a_waiting_step_goes_into_its_first_prompt(commenting):
+    f = commenting({})
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.engine.comment(item_id, "Keep it small.")
+    await f.drain()
+
+    (plan,) = f.runner.of("plan")  # no second run for what the first one has read
+    assert "Keep it small." in plan["prompt"]
+    assert "Keep it small." in f.runner.of("review")[0]["prompt"]  # later roles read it as an artifact
+
+
+async def test_a_comment_on_a_failed_run_goes_to_the_next_agent_step(make_factory):
+    class CommentThenOutOfTurns(OutOfTurnsOnce):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            if spec.metadata["state"] == "implement" and not self.of("implement"):
+                await f.engine.comment(spec.metadata["item_id"], "Use the new helper.")
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    f = make_factory(CommentThenOutOfTurns())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    # The workflow's own retry reads the comment: no run on top of it.
+    cut, retry = f.runner.of("implement")
+    assert retry["resume"] == "implement-long"
+    assert not retry["prompt"].startswith(steps.FOLLOW_UP) and "Use the new helper." in retry["prompt"]
+    assert (await f.path(item_id))[:3] == ["plan", "implement", "implement"]
+
+
+async def test_a_comment_survives_the_worker_dying(make_factory):
+    class CommentThenDie(DiesMidImplement):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            if spec.metadata["state"] == "implement" and self.deaths:
+                await f.engine.comment(spec.metadata["item_id"], "Mind the encoding.")
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    f = make_factory(CommentThenDie())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await die_and_redeliver(f, item_id)
+    await f.drain()
+
+    cut, resumed, follow_up = f.runner.of("implement")
+    assert resumed["prompt"] == steps.CONTINUE
+    assert follow_up["prompt"].startswith(steps.FOLLOW_UP) and "Mind the encoding." in follow_up["prompt"]
+    assert (await f.item(item_id)).state == "awaiting_merge"
+
+
+async def test_the_budget_stops_a_follow_up_and_the_comment_keeps_waiting(commenting):
+    f = commenting({("review", 0): "One more thing."})
+    item_id = await f.new_item(budget_usd=2.0)  # plan 0.5 + implement 1 + review 0.5 use it up
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert len(f.runner.of("review")) == 1
+    (comment,) = await comments_of(f, item_id)
+    assert comment.run_id is None
+
+
+async def test_comments_are_refused_outside_agent_steps(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    with pytest.raises(EngineError, match="no agent step"):
+        await f.engine.comment(item_id, "too early")
+    await f.engine.start(item_id)
+    await f.drain()
+    with pytest.raises(EngineError, match="no agent step"):
+        await f.engine.comment(item_id, "too late")  # awaiting_merge: the inbox request takes comments

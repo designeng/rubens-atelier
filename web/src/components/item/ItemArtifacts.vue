@@ -9,7 +9,7 @@ defineProps<{ artifacts: ArtifactOut[] }>();
   <section class="section">
     <div class="section-title">Artifacts</div>
     <details v-for="a in artifacts" :key="a.id" class="artifact" :open="a.name === 'error'">
-      <summary :class="{ err: a.name === 'error' }">{{ a.name }}</summary>
+      <summary :class="{ err: a.name === 'error' }">{{ a.name.startsWith("human:comment:") ? "comment" : a.name }}</summary>
       <pre :class="{ error: a.name === 'error' }">{{ a.content }}</pre>
     </details>
     <p v-if="!artifacts.length" class="subtle">None yet.</p>

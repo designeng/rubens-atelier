@@ -15,6 +15,7 @@ from .helpers import _check_blockers, _column, _get_item_out, _item_with_progres
 from .schemas import (
     Answer,
     ArtifactOut,
+    CommentIn,
     EventOut,
     ItemDetail,
     ItemOut,
@@ -126,6 +127,17 @@ async def start_item(item_id: str, db: Db, engine: Eng, confirm_external: bool =
     """`confirm_external` acknowledges that a story imported from an outside author's issue is untrusted."""
     try:
         await engine.start(item_id, confirm_external=confirm_external)
+    except EngineError as e:
+        raise _engine_error(e) from None
+    return await _get_item_out(db, engine, item_id)
+
+
+@router.post("/items/{item_id}/comments", status_code=status.HTTP_202_ACCEPTED)
+async def comment_item(item_id: str, body: CommentIn, db: Db, engine: Eng) -> ItemOut:
+    """Comment on the story's agent step: the run in progress finishes, then the same role
+    resumes its session to read the comment before the story moves on. Costs an extra run."""
+    try:
+        await engine.comment(item_id, body.body)
     except EngineError as e:
         raise _engine_error(e) from None
     return await _get_item_out(db, engine, item_id)

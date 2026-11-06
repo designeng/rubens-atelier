@@ -235,6 +235,15 @@ export function useBoard() {
   const cancelItem = (id: string) => act(api.cancelItem(id));
   const reopenItem = (id: string) => act(api.reopenItem(id));
   const openPr = (id: string) => act(api.openPr(id));
+  // True once sent: a form keeps the text of a comment that failed.
+  const commentItem = (id: string, body: string): Promise<boolean> =>
+    api.commentItem(id, body).then(
+      () => refresh().catch(fail).then(() => true),
+      (e) => {
+        fail(e);
+        return false;
+      },
+    );
   const deleteItem = (id: string) =>
     act(
       api.deleteItem(id).then(() => {
@@ -346,6 +355,7 @@ export function useBoard() {
     cancelItem,
     reopenItem,
     openPr,
+    commentItem,
     deleteItem,
     runItemNow,
     answer,

@@ -232,6 +232,14 @@ async def item_action(item_id: str, action: Literal["start", "run-now", "cancel"
     return _card(await _call("POST", f"/items/{item_id}/{action}"))
 
 
+@mcp.tool(annotations=WRITE)
+async def comment_item(item_id: str, body: str) -> dict:
+    """Comment on a story's agent step while it runs. The run finishes, then the same role resumes
+    its session to read the comment before the story moves on: an extra run, with its cost. Refused
+    while the story is in no agent step. Each new run counts against the budget but not max_visits."""
+    return _card(await _call("POST", f"/items/{item_id}/comments", json={"body": body}))
+
+
 @mcp.tool(annotations=DESTRUCTIVE)
 async def delete_item(item_id: str) -> str:
     """Delete a failed or cancelled story with its whole history. Cannot be undone."""
