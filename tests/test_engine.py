@@ -178,6 +178,48 @@ async def test_pr_body_names_the_item_model_for_every_role(make_factory):
         assert f"{role} `claude-opus-5-5`" in body
 
 
+class ReportingRunner(ScriptedRunner):
+    """Claude Code's `session` event names the model it really started on."""
+
+    def __init__(self, reported):
+        super().__init__()
+        self.reported = reported
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        async def reporting(type_, data):
+            await emit(type_, {**data, "model": self.reported} if type_ == "session" else data)
+
+        return await super().__call__(spec, cwd=cwd, resume=resume, emit=reporting)
+
+
+async def run_models(f, item_id):
+    async with f.db.session() as s:
+        return {r.role: r.model for r in await s.scalars(select(Run).where(Run.item_id == item_id))}
+
+
+async def test_run_records_the_model_the_runtime_reported(make_factory, caplog):
+    f = make_factory(ReportingRunner("claude-sonnet-5-5"))
+    item_id = await f.new_item(model="claude-opus-5-5")
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert set((await run_models(f, item_id)).values()) == {"claude-sonnet-5-5"}
+    assert "reviewer asked for model claude-opus-5-5 but ran on claude-sonnet-5-5" in caplog.text
+    assert "reviewer `claude-sonnet-5-5`" in f.gh.prs[0]["body"]
+
+
+async def test_run_keeps_the_provider_prefix_when_the_model_matches(make_factory, caplog):
+    f = make_factory(ReportingRunner("anthropic/claude-opus-5"))
+    item_id = await f.new_item(model="openrouter/anthropic/claude-opus-5")
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert set((await run_models(f, item_id)).values()) == {"openrouter/anthropic/claude-opus-5"}
+    assert "asked for model" not in caplog.text
+
+
 async def test_story_happy_path(make_factory, origin):
     f = make_factory(ScriptedRunner())
     item_id = await f.new_item(source={"issue": 7})

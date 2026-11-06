@@ -166,6 +166,8 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
         if type_ == "session" and data.get("session_id"):
             # Persist early so cancelled / timed-out runs can still be resumed.
             await store.set_fields(task_id, session_id=data["session_id"])
+        if type_ == "session" and data.get("model"):
+            await store.set_fields(task_id, session_model=data["model"])
         if type_ == "turn":
             await store.set_fields(task_id, turn=str(data["turn"]))
         if type_ == "context":

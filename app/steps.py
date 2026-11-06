@@ -38,7 +38,7 @@ from .engine import Engine
 from .execution import execute_task, item_workspace
 from .github import GitHub
 from .models import FailureReason, TaskCreate, TaskStatus
-from .providers import reports_cost, resumable, run_routed
+from .providers import reports_cost, resumable, route, run_routed
 from .runner import AgentRunner
 from .store import TaskStore
 from .workflow import DONE, ERROR, State, verdict_schema
@@ -259,9 +259,18 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
             content += f" (its worker died {settings.restart_limit + 1} times)"
     failed = info.status != TaskStatus.succeeded or verdict == ERROR
 
+    # The id the runtime reported, when it isn't the one asked for (compared without the provider prefix).
+    actual_model = raw.get("session_model")
+    if actual_model and actual_model == route(run.model).model:
+        actual_model = None
+    if actual_model:
+        log.warning("item %s: %s asked for model %s but ran on %s", item.id, st.agent, run.model, actual_model)
+
     async with db.session() as s:
         run = await s.merge(run)
         run.status, run.verdict, run.cost_usd, run.finished_at = info.status.value, verdict, info.cost_usd, utcnow()
+        if actual_model:
+            run.model = actual_model
         s.add(Artifact(item_id=item.id, run_id=run.id, name="error" if failed else st.agent, content=content))
         if info.status == TaskStatus.succeeded:
             await memory.propose(s, project.id, item.id, st.agent, out.get("notes"))
