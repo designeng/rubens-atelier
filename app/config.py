@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     # unsandboxed escape hatch. Needs bubblewrap/socat on Linux. On by default: without it Bash
     # ignores the secret-file read rules and can read .env, /proc/1/environ and process argv.
     sandbox: bool = True
+    # Hosts the agent's shell may reach, for Claude and Codex alike (JSON list): an exact host, or
+    # `*.example.com` for its subdomains. Anything else is blocked; empty = no network at all.
+    # Only applies under the sandbox. The default covers cloning and package installs.
+    allowed_domains: list[str] = [
+        "github.com",
+        "*.github.com",
+        "*.githubusercontent.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+    ]
     # Start agents with as little context as possible: a short system prompt instead of Claude
     # Code's preset, only the allowed tools' definitions, no CLAUDE.md or skills preloaded (the
     # agent reads the repo's docs itself when it needs them). Can be overridden per task.

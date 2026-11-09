@@ -130,6 +130,20 @@ def test_disabling_the_sandbox_keeps_read_only_roles_read_only(monkeypatch):
     assert 'default_permissions="harness"' in args and not any("danger-full-access" in a for a in args)
 
 
+def test_codex_and_claude_share_one_domain_list(monkeypatch):
+    from app.runner import sandbox_settings
+
+    monkeypatch.setattr(settings, "allowed_domains", ["github.com", "*.pypi.org"])
+    assert sandbox_settings()["network"] == {"allowedDomains": ["github.com", "*.pypi.org"]}
+    args = build_args(TaskCreate(prompt="x"), None, None)
+    assert 'permissions.harness.network.domains={"github.com"="allow","*.pypi.org"="allow"}' in args
+    assert "permissions.harness.network.enabled=true" in args and "features.network_proxy=true" in args
+
+    monkeypatch.setattr(settings, "allowed_domains", [])
+    assert sandbox_settings()["network"] == {"allowedDomains": []}
+    assert "permissions.harness.network.enabled=false" in build_args(TaskCreate(prompt="x"), None, None)
+
+
 def test_args_for_resume_and_options():
     args = build_args(TaskCreate(prompt="x", model="gpt-5.5", effort="max", system_prompt='say "hi"'), "t-1", None)
     assert args[1:3] == ["exec", "resume"] and args[-2:] == ["t-1", "-"]

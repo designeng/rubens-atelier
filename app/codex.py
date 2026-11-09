@@ -91,7 +91,10 @@ def build_args(spec: TaskCreate, resume: str | None, schema_file: Path | None) -
         config |= {
             "default_permissions": "harness",
             "permissions.harness.filesystem": filesystem(spec),
-            "permissions.harness.network.enabled": True,
+            "permissions.harness.network.enabled": bool(settings.allowed_domains),
+            "permissions.harness.network.domains": {d: "allow" for d in settings.allowed_domains},
+            # Without the proxy the domain rules aren't enforced and the network is simply open.
+            "features.network_proxy": True,
         }
     else:
         config["sandbox_mode"] = "danger-full-access"

@@ -118,6 +118,7 @@ def sandbox_settings() -> Any:
         "autoAllowBashIfSandboxed": True,
         "allowUnsandboxedCommands": False,
         "failIfUnavailable": True,
+        "network": {"allowedDomains": list(settings.allowed_domains)},
     }
 
 
