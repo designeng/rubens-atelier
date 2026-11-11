@@ -115,6 +115,14 @@ class Run(Base):
     verdict: Mapped[str | None] = mapped_column(String(64))
     cost_usd: Mapped[float | None]
     model: Mapped[str | None] = mapped_column(String(100))  # the model the run used
+    # Tokens over the run's API requests (cache reads re-read the context on every request, so a long
+    # session costs more per turn), the context its last request read, and its failed tool calls.
+    input_tokens: Mapped[int | None]
+    cache_read_tokens: Mapped[int | None]
+    cache_write_tokens: Mapped[int | None]
+    output_tokens: Mapped[int | None]
+    context_tokens: Mapped[int | None]
+    failed_tools: Mapped[int | None]
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     finished_at: Mapped[datetime | None]
 

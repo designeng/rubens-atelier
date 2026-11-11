@@ -65,6 +65,14 @@ async def test_story_from_creation_to_inbox_answer(tools, client):
     assert "state" not in reopened
 
 
+async def test_comment_item_reaches_the_story_and_shows_as_waiting(tools):
+    await tools("create_project", slug="app", repo="acme/app")
+    item = await tools("create_item", project="app", title="T", start=True)
+    await tools("comment_item", item_id=item["id"], body="Also run the tests")
+    (comment,) = (await tools("get_item", item_id=item["id"]))["artifacts"]
+    assert comment["content"] == "Also run the tests" and comment["run_id"] is None
+
+
 async def test_update_item_sends_only_given_fields_and_clears(tools):
     await tools("create_project", slug="app", repo="acme/app")
     item = await tools("create_item", project="app", title="T", model="claude-opus-5-5", budget_usd=3)

@@ -3,6 +3,7 @@ import type { EventOut, Progress, RunOut } from "../api/types";
 import {
   attentionBadge,
   canRunNow,
+  compactTokens,
   elapsed,
   formatBytes,
   formatUsd,
@@ -10,6 +11,7 @@ import {
   overBudget,
   progressSummary,
   rerunReasons,
+  runUsage,
   spendText,
   todoMark,
   turnPercent,
@@ -42,6 +44,9 @@ describe("progressSummary", () => {
       "implement · waiting for a free agent slot",
     );
     expect(progressSummary({ step: "implement", kind: "agent", queued: false }, now)).toBe("implement · starting");
+    expect(progressSummary({ step: "implement", kind: "agent", queued: false, dispatched: true }, now)).toBe(
+      "implement · slot taken, waiting for a worker",
+    );
     expect(progressSummary({ step: "review", kind: "agent", queued: true }, now, true)).toBe(
       "review · queued, the queue is paused",
     );
@@ -178,5 +183,29 @@ describe("money", () => {
     expect(overBudget(4.99, 5)).toBe(false);
     expect(overBudget(5, 5)).toBe(true);
     expect(overBudget(100, null)).toBe(false);
+  });
+});
+
+describe("runUsage", () => {
+  const base: RunOut = {
+    id: "r", version: 1, state: "implement", role: "implementer", task_id: "t", status: "succeeded", verdict: "done",
+    cost_usd: 1.2, created_at: "2026-11-11T10:00:00Z", error: null,
+  };
+
+  it("compacts token counts", () => {
+    expect([compactTokens(950), compactTokens(84_400), compactTokens(5_520_000)]).toEqual(["950", "84k", "5.5M"]);
+  });
+
+  it("puts a run's tokens and failed tool calls on one line", () => {
+    const run = {
+      ...base, context_tokens: 84_000, cache_read_tokens: 2_100_000, cache_write_tokens: 120_000, input_tokens: 0,
+      output_tokens: 30_000, failed_tools: 5,
+    };
+    expect(runUsage(run)).toBe("context 84k · read 2.1M · write 120k · out 30k · 5 failed tool calls");
+    expect(runUsage({ ...run, failed_tools: 1 })).toContain("1 failed tool call");
+  });
+
+  it("is null for a run without usage", () => {
+    expect(runUsage(base)).toBeNull();
   });
 });

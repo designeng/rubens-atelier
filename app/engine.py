@@ -19,14 +19,18 @@ from datetime import timedelta
 from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
 
 from .config import settings
-from .db import Artifact, Database, HumanRequest, ItemEvent, Note, Run, TaskTranscript, WorkItem, aware, utcnow
+from .db import Artifact, Database, HumanRequest, ItemEvent, Note, Run, TaskTranscript, WorkItem, aware, new_id, utcnow
 from .scheduler import Scheduler
 from .store import TaskStore
-from .workflow import State, Workflow
+from .workflow import DONE, State, Workflow
 
 log = logging.getLogger(__name__)
 
 BACKLOG = "backlog"  # to_state of the event that returns an item to the backlog
+COMMENT = "comment"  # verdict of the event that sends a role back to read a person's comments
+# A comment for an agent is an artifact with a name of its own, so later roles read them all.
+# Its `run_id` is the run it was delivered to; None means it still waits for one.
+COMMENT_PREFIX = "human:comment:"
 
 Enqueue = Callable[[str, int], Awaitable[None]]
 Cleanup = Callable[[str], Awaitable[None]]
@@ -118,15 +122,32 @@ class Engine:
         return {b.id: b for b in await s.scalars(select(WorkItem).where(WorkItem.id.in_(ids)))}
 
     async def advance(self, item_id: str, version: int, verdict: str, actor: str = "engine") -> bool:
-        """Leave the item's current state with `verdict`. False if the item has moved on."""
+        """Leave the item's current state with `verdict`. False if the item has moved on.
+        A role that finished its work with comments waiting runs again first, whatever it decided:
+        handing them to the next step would lose them when that step isn't an agent's. A failed
+        run moves on as usual; its comments go to the next agent step."""
         async with self.db.session() as s:
-            item = await _get(s, item_id)
+            item = await _get(s, item_id, lock=True)  # `comment` can't slip in behind the check below
             if item.version != version or item.state is None:
                 return False
             wf = self.workflow(item.workflow)
-            if wf.states[item.state].terminal:
+            st = wf.states[item.state]
+            if st.terminal:
                 return False
+            if st.agent and verdict in (st.verdicts or [DONE]) and await s.scalar(pending_comments(item_id).limit(1)):
+                return await self._enter(s, item, wf, item.state, COMMENT, actor)
             return await self._enter(s, item, wf, wf.decide(item.state, verdict), verdict, actor)
+
+    async def comment(self, item_id: str, body: str) -> None:
+        """Leave a comment for the item's agent step: a run in progress finishes, then its role
+        resumes its session to read it; a step still waiting for a slot gets it in its prompt."""
+        async with self.db.session() as s:
+            item = await _get(s, item_id, lock=True)
+            st = self.workflow(item.workflow).states.get(item.state) if item.state else None
+            if st is None or not st.agent:
+                raise EngineError(f"no agent step to comment on (state {item.state!r})")
+            s.add(Artifact(item_id=item_id, name=f"{COMMENT_PREFIX}{new_id()}", content=body))
+            await s.commit()
 
     async def answer(self, request_id: str, option: str, comment: str = "", actor: str = "user") -> bool:
         async with self.db.session() as s:
@@ -236,7 +257,11 @@ class Engine:
                 if st is None or not st.runs_on_worker:
                     continue
                 if st.agent and self.scheduler and await self.scheduler.is_pending(item.id, item.version):
-                    continue  # waiting for a slot, or holding one: the scheduler accounts for it
+                    # Waiting for a slot: the scheduler accounts for it. Holding one without a
+                    # run for too long: the message to the worker was lost, send it again.
+                    if await self.scheduler.redispatch_if_lost(item.id, item.version, settings.step_stale_seconds):
+                        requeued.append(item.id)
+                    continue
                 run = await s.scalar(select(Run).where(Run.item_id == item.id, Run.version == item.version))
                 if run is None:
                     stale = aware(item.updated_at) < cutoff
@@ -253,7 +278,8 @@ class Engine:
 
     async def _enter(self, s, item: WorkItem, wf: Workflow, target: str, verdict: str | None, actor: str) -> bool:
         st = wf.states[target]
-        if st.max_visits is not None:
+        # A run a person asked for with a comment is no loop: it uses up no visits and always happens.
+        if st.max_visits is not None and verdict != COMMENT:
             # An answer in the state an exhausted step escalates to (or a reopen) starts the count
             # over, otherwise a retry would bounce straight back there. Other human states
             # (clarify, awaiting_merge) keep counting, so a loop through a person stays bounded.
@@ -264,7 +290,10 @@ class Engine:
             ).scalar_subquery()
             visits = 0 if item.state in escalations else await s.scalar(
                 select(func.count()).select_from(ItemEvent).where(
-                    ItemEvent.item_id == item.id, ItemEvent.to_state == target, ItemEvent.id >= reset
+                    ItemEvent.item_id == item.id,
+                    ItemEvent.to_state == target,
+                    ItemEvent.id >= reset,
+                    ItemEvent.verdict.is_distinct_from(COMMENT),
                 )
             )
             if visits >= st.max_visits:
@@ -326,8 +355,17 @@ class Engine:
             await self.enqueue(item.id, version)
 
 
-async def _get(s, item_id: str) -> WorkItem:
-    item = await s.get(WorkItem, item_id)
+def pending_comments(item_id: str):
+    """The item's comments no run has received yet, oldest first."""
+    return (
+        select(Artifact)
+        .where(Artifact.item_id == item_id, Artifact.name.startswith(COMMENT_PREFIX), Artifact.run_id.is_(None))
+        .order_by(Artifact.created_at)
+    )
+
+
+async def _get(s, item_id: str, lock: bool = False) -> WorkItem:
+    item = await s.get(WorkItem, item_id, with_for_update=lock or None)
     if item is None:
         raise EngineError("item not found")
     return item

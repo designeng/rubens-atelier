@@ -37,6 +37,14 @@ describe("createClient", () => {
     expect(f.calls.map((c) => c.url)).toEqual(["/items/a%2Fb/git", "/items/a%2Fb/git?diff=true"]);
   });
 
+  it("posts a comment on a story", async () => {
+    const f = fakeFetch(() => json({}));
+    await createClient(() => "t", f.impl).commentItem("a/b", "Also run the tests");
+    expect(f.calls[0].url).toBe("/items/a%2Fb/comments");
+    expect(f.calls[0].init.method).toBe("POST");
+    expect(f.calls[0].init.body).toBe(JSON.stringify({ body: "Also run the tests" }));
+  });
+
   it("starts a story, confirming an external author only on request", async () => {
     const f = fakeFetch(() => json({}));
     const api = createClient(() => "t", f.impl);

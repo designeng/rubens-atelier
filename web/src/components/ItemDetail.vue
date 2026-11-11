@@ -32,6 +32,8 @@ const latestError = computed(() =>
   it.value?.column === "needs_human" || it.value?.column === "failed" ? artifacts.value.find((a) => a.name === "error") : undefined,
 );
 
+const pendingComments = computed(() => artifacts.value.filter((a) => a.name.startsWith("human:comment:") && !a.run_id));
+
 const STATUS: Record<string, { label: string; tone: string }> = {
   backlog: { label: "Backlog", tone: "" },
   working: { label: "In progress", tone: "accent" },
@@ -240,7 +242,14 @@ onUnmounted(() => document.removeEventListener("keydown", onKey));
           :busy="busy"
           @answer="(id, option, comment) => run(() => b.answer(id, option, comment))"
         />
-        <ItemNow v-if="it.progress" :progress="it.progress" :session-task="sessionTask" @toggle-session="toggleSession" />
+        <ItemNow
+          v-if="it.progress"
+          :item-id="it.id"
+          :progress="it.progress"
+          :session-task="sessionTask"
+          :pending-comments="pendingComments"
+          @toggle-session="toggleSession"
+        />
 
         <section v-if="!editing" class="section">
           <div class="section-title">Description</div>

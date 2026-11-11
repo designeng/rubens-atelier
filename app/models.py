@@ -105,6 +105,11 @@ class TaskInfo(BaseModel):
     failure_reason: FailureReason | None = None
     cost_usd: float | None = None
     num_turns: int | None = None
+    # Tokens summed over the task's API requests (see runner.USAGE_KEYS), the context its latest
+    # request read, and how many tool calls failed (refused commands, errors): each costs a turn.
+    usage: dict[str, int] | None = None
+    context_tokens: int | None = None
+    failed_tools: int | None = None
     branch: str | None = None
     pr_url: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

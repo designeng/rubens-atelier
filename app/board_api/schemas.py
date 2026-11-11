@@ -144,12 +144,20 @@ class RunOut(Orm):
     status: str
     verdict: str | None
     cost_usd: float | None
+    model: str | None = None
+    input_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    output_tokens: int | None = None
+    context_tokens: int | None = None  # what the run's last request read
+    failed_tools: int | None = None  # tool calls that failed: refused commands, errors
     created_at: datetime
     error: str | None = None  # the `error` artifact of a run that ended in the error verdict
 
 
 class ArtifactOut(Orm):
     id: str
+    run_id: str | None  # for a comment: the run it was delivered to
     name: str
     content: str
     created_at: datetime
@@ -184,3 +192,8 @@ class ItemDetail(ItemOut):
 class Answer(BaseModel):
     option: str
     comment: str = ""
+
+
+class CommentIn(BaseModel):
+    # Below steps.ARTIFACT_LIMIT, so a prompt never clips a comment.
+    body: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10_000)]

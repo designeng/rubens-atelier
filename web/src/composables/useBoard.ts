@@ -25,18 +25,31 @@ export const canShowMoreDone = (total: number, shown: number, limit: number): bo
   total > shown && limit < MAX_DONE;
 const NO_GITHUB: GithubApp = { configured: false, install_url: null, installations: [] };
 
-// The open story and its drawer tab live in the URL hash ("#item=<id>&tab=runs") so they can be shared as a link.
+// The project, the open story and its drawer tab live in the URL hash ("#project=<slug>&item=<id>&tab=runs") so they can be shared as a link.
 export type ItemTab = "overview" | "runs" | "workspace";
 const TABS: ItemTab[] = ["overview", "runs", "workspace"];
 
-export function parseHash(hash: string): { item: string | null; tab: ItemTab } {
+export function parseHash(hash: string): { project: string | null; item: string | null; tab: ItemTab } {
   const q = new URLSearchParams(hash.replace(/^#/, ""));
   const tab = q.get("tab") as ItemTab | null;
-  return { item: q.get("item") || null, tab: tab && TABS.includes(tab) ? tab : "overview" };
+  return {
+    project: q.get("project") || null,
+    item: q.get("item") || null,
+    tab: tab && TABS.includes(tab) ? tab : "overview",
+  };
 }
 
-export function itemHash(id: string, tab: ItemTab = "overview"): string {
-  return `#item=${encodeURIComponent(id)}` + (tab === "overview" ? "" : `&tab=${tab}`);
+/** The hash for a board link; the overview tab is left out, and so is anything not given. */
+export function boardHash(parts: { project?: string | null; item?: string | null; tab?: ItemTab }): string {
+  const q: string[] = [];
+  if (parts.project) q.push(`project=${encodeURIComponent(parts.project)}`);
+  if (parts.item) q.push(`item=${encodeURIComponent(parts.item)}`);
+  if (parts.item && parts.tab && parts.tab !== "overview") q.push(`tab=${parts.tab}`);
+  return q.length ? `#${q.join("&")}` : "";
+}
+
+export function itemHash(id: string, tab: ItemTab = "overview", project?: string | null): string {
+  return boardHash({ project, item: id, tab });
 }
 
 /** Board state and actions; App.vue creates it once and provides it to the components. */
@@ -124,12 +137,18 @@ export function useBoard() {
     try {
       projects.value = await api.listProjects();
       models.value = await api.listModels();
-      const want = storage.get("project");
-      slug.value = projects.value.find((p) => p.slug === want)?.slug ?? projects.value[0]?.slug ?? "";
+      const known = (s: string | null) => projects.value.find((p) => p.slug === s)?.slug;
+      slug.value =
+        known(parseHash(location.hash).project) ?? known(storage.get("project")) ?? projects.value[0]?.slug ?? "";
+      if (slug.value) storage.set("project", slug.value);
     } finally {
       loaded.value = true;
     }
     await refresh();
+    if (slug.value && parseHash(location.hash).project !== slug.value) {
+      const { item: id, tab } = parseHash(location.hash);
+      history.replaceState(null, "", boardHash({ project: slug.value, item: id, tab }));
+    }
     syncFromHash();
   }
 
@@ -145,27 +164,39 @@ export function useBoard() {
   }
 
   function selectProject(value: string): void {
+    switchProject(value);
+    const hash = boardHash({ project: value });
+    if (location.hash !== hash) history.pushState(null, "", hash);
+    refresh().catch(fail);
+  }
+
+  // Makes `value` the current project without touching the history.
+  function switchProject(value: string): void {
     slug.value = value;
     doneLimit.value = DONE_PAGE;
     proposedNotes.value = 0;
     storage.set("project", value);
-    closeItem();
-    refresh().catch(fail);
+    openItemId.value = null;
+    item.value = null;
   }
 
   const itemTab = ref<ItemTab>(parseHash(location.hash).tab);
   const hashId = () => parseHash(location.hash).item;
 
   function syncFromHash(): void {
-    const { item: id, tab } = parseHash(location.hash);
+    const { project, item: id, tab } = parseHash(location.hash);
     itemTab.value = tab;
+    if (project && project !== slug.value && projects.value.some((p) => p.slug === project)) {
+      switchProject(project);
+      refresh().catch(fail);
+    }
     if (id === openItemId.value) return;
     if (id) openItem(id, tab).catch(fail);
     else closeItem();
   }
 
   async function openItem(id: string, tab: ItemTab = "overview"): Promise<void> {
-    if (hashId() !== id) history.pushState(null, "", itemHash(id, tab));
+    if (hashId() !== id) history.pushState(null, "", itemHash(id, tab, slug.value));
     itemTab.value = tab;
     openItemId.value = id;
     const it = await api.getItem(id);
@@ -173,7 +204,7 @@ export function useBoard() {
   }
 
   function closeItem(): void {
-    if (hashId()) history.pushState(null, "", location.pathname + location.search);
+    if (hashId()) history.pushState(null, "", boardHash({ project: slug.value }));
     openItemId.value = null;
     item.value = null;
   }
@@ -181,7 +212,7 @@ export function useBoard() {
   // Switching tabs replaces the history entry: back closes the story rather than stepping through tabs.
   function setItemTab(tab: ItemTab): void {
     itemTab.value = tab;
-    if (openItemId.value) history.replaceState(null, "", itemHash(openItemId.value, tab));
+    if (openItemId.value) history.replaceState(null, "", itemHash(openItemId.value, tab, slug.value));
   }
 
   function showMoreDone(): void {
@@ -208,6 +239,15 @@ export function useBoard() {
   const cancelItem = (id: string) => act(api.cancelItem(id));
   const reopenItem = (id: string) => act(api.reopenItem(id));
   const openPr = (id: string) => act(api.openPr(id));
+  // True once sent: a form keeps the text of a comment that failed.
+  const commentItem = (id: string, body: string): Promise<boolean> =>
+    api.commentItem(id, body).then(
+      () => refresh().catch(fail).then(() => true),
+      (e) => {
+        fail(e);
+        return false;
+      },
+    );
   const deleteItem = (id: string) =>
     act(
       api.deleteItem(id).then(() => {
@@ -236,6 +276,7 @@ export function useBoard() {
   async function createProject(project: ProjectIn): Promise<void> {
     await api.createProject(project);
     storage.set("project", project.slug);
+    history.pushState(null, "", boardHash({ project: project.slug }));
     await loadProjects();
   }
 
@@ -319,6 +360,7 @@ export function useBoard() {
     cancelItem,
     reopenItem,
     openPr,
+    commentItem,
     deleteItem,
     runItemNow,
     answer,

@@ -11,10 +11,11 @@ import os
 import socket
 
 from celery import Celery
-from celery.signals import worker_process_init, worker_ready
+from celery.signals import worker_process_init, worker_ready, worker_shutdown
 from redis.asyncio import Redis
 
 from .config import settings
+from .worker_heartbeat import Heartbeat
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +94,22 @@ def check_sandbox() -> dict:
 @worker_ready.connect
 def _check_sandbox_on_start(**_):
     check_sandbox()
+
+
+_heartbeat: Heartbeat | None = None
+
+
+@worker_ready.connect
+def _start_heartbeat(sender=None, **_):
+    global _heartbeat
+    _heartbeat = Heartbeat(settings.redis_url, getattr(sender, "concurrency", None))
+    _heartbeat.start()
+
+
+@worker_shutdown.connect
+def _stop_heartbeat(**_):
+    if _heartbeat:
+        _heartbeat.stop()
 
 
 async def _with_store(fn):

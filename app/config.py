@@ -78,14 +78,38 @@ class Settings(BaseSettings):
     # unsandboxed escape hatch. Needs bubblewrap/socat on Linux. On by default: without it Bash
     # ignores the secret-file read rules and can read .env, /proc/1/environ and process argv.
     sandbox: bool = True
+    # Hosts the agent's shell may reach, for Claude and Codex alike (JSON list): an exact host, or
+    # `*.example.com` for its subdomains. Anything else is blocked; empty = no network at all.
+    # Only applies under the sandbox. The default covers cloning and package installs.
+    allowed_domains: list[str] = [
+        "github.com",
+        "*.github.com",
+        "*.githubusercontent.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+    ]
     # Start agents with as little context as possible: a short system prompt instead of Claude
-    # Code's preset, only the allowed tools' definitions, no CLAUDE.md or skills preloaded (the
-    # agent reads the repo's docs itself when it needs them). Can be overridden per task.
+    # Code's preset, no CLAUDE.md or skills preloaded (the agent reads the repo's docs itself when
+    # it needs them). Can be overridden per task. Any agent gets only the allowed tools' definitions.
     lean_context: bool = False
+    # A workflow state with `resume` continues the role's session only while its last request read
+    # at most this many tokens; past it the visit starts a new session from the artifacts. Every
+    # request re-reads the whole session, so a long one costs more per turn than a fresh start.
+    # Work cut short (turn limit, lost worker, subscription limit) always continues. 0 = no limit.
+    resume_max_context_tokens: int = 60_000
     default_max_turns: int = 50
     default_max_budget_usd: float = 5.0
     default_verify_attempts: int = 2
     verify_timeout_seconds: int = 30 * 60
+
+    # Other providers, chosen by the model id's prefix (see app/providers.py).
+    # `openrouter/<slug>` runs Claude Code against OpenRouter.
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api"
+    # `codex/<model>` runs the Codex CLI. No key = the CLI's saved login (`codex login`).
+    codex_api_key: str = ""
+    codex_binary: str = "codex"
 
     # GitHub issue workflow. The token needs contents, issues and pull-requests write
     # access; it is used only by the harness (clone/push/API), never exposed to the agent.

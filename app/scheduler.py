@@ -94,6 +94,23 @@ class Scheduler:
         if (score := await self.r.zscore(READY, m)) is not None:
             await self.r.zadd(READY, {m: score + (old - new) * PRIORITY_WEIGHT}, xx=True)
 
+    async def is_queued(self, item_id: str, version: int) -> bool:
+        """The step waits in the ready queue for a slot (the only state `run_now` can start)."""
+        return await self.r.zscore(READY, member(item_id, version)) is not None
+
+    async def redispatch_if_lost(self, item_id: str, version: int, after: float) -> bool:
+        """A step holding a slot for `after` seconds whose agent never started: its message to the
+        worker was probably lost. Send it again and give it a fresh slot lease."""
+        m = member(item_id, version)
+        expiry = await self.r.zscore(ACTIVE, m)
+        if expiry is None or await self.r.hexists(ACTIVE_TASK, m):
+            return False
+        if time.time() - (expiry - settings.dispatch_ttl_seconds) < after:
+            return False
+        await self.r.zadd(ACTIVE, {m: time.time() + settings.dispatch_ttl_seconds}, xx=True)
+        await self.enqueue(item_id, version)
+        return True
+
     async def is_pending(self, item_id: str, version: int) -> bool:
         m = member(item_id, version)
         return await self.r.zscore(READY, m) is not None or await self.r.zscore(ACTIVE, m) is not None

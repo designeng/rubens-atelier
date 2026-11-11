@@ -57,6 +57,7 @@ R — только чтение, W — меняет состояние, D — н
 | `update_item` | W | `PATCH /items/{id}` | Переданные поля меняются; `clear` (`model`, `lean_context`, `budget_usd`) возвращает к умолчанию. Пустой вызов — ошибка «nothing to change» |
 | `item_action` | W | `POST /items/{id}/{action}` | `start`, `run-now`, `cancel`, `reopen`, `open-pr` |
 | `delete_item` | D | `DELETE /items/{id}` | Удаляет упавшую или отменённую историю со всей историей |
+| `comment_item` | W | `POST /items/{id}/comments` | Комментарий к агентскому шагу: прогон доходит до конца, затем та же роль возобновляет сессию и получает комментарий до перехода дальше. Дополнительный прогон идёт в бюджет, но не в `max_visits` |
 | `answer_request` | W | `POST /requests/{id}/answer` | `option` из списка запроса и `comment`, который станет артефактом для следующего агента |
 | `get_item_git` | R | `GET /items/{id}/git` | `git status`, коммиты и изменённые файлы относительно базовой ветки; `diff=true` — полный diff |
 | `get_run_log` | R | `GET /tasks/{id}/events` + `GET /tasks/{id}` | События сессии агента (текст, вызовы инструментов, verify), статус, причина падения, стоимость. Строки обрезаются до 2000 символов; `next_after` — для следующей страницы |

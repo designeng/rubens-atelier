@@ -15,6 +15,13 @@ from .store import TaskStore
 
 WINDOW = timedelta(hours=24)
 TASKS_SAMPLE = 200  # newest tasks counted in harness_tasks
+# Run column → `kind` label of harness_run_tokens_sum.
+TOKENS = {
+    "input_tokens": "input",
+    "cache_read_tokens": "cache_read",
+    "cache_write_tokens": "cache_write",
+    "output_tokens": "output",
+}
 
 
 def _fmt(name: str, help_: str, type_: str, samples: list[tuple[dict[str, str], float]]) -> list[str]:
@@ -33,14 +40,21 @@ async def collect(store: TaskStore, db: Database) -> str:
     async with db.session() as s:
         rows = (
             await s.execute(
-                select(Run.status, Run.cost_usd, Run.created_at, Run.finished_at).where(
-                    Run.created_at >= utcnow() - WINDOW
-                )
+                select(
+                    Run.status,
+                    Run.cost_usd,
+                    Run.created_at,
+                    Run.finished_at,
+                    Run.failed_tools,
+                    *(getattr(Run, column) for column in TOKENS),
+                ).where(Run.created_at >= utcnow() - WINDOW)
             )
         ).all()
-    runs = Counter(status for status, *_ in rows)
-    cost = sum(c or 0.0 for _, c, _, _ in rows)
-    durations = [(aware(f) - aware(c)).total_seconds() for _, _, c, f in rows if f is not None]
+    runs = Counter(r[0] for r in rows)
+    cost = sum(r[1] or 0.0 for r in rows)
+    durations = [(aware(r[3]) - aware(r[2])).total_seconds() for r in rows if r[3] is not None]
+    failed_tools = sum(int(r[4] or 0) for r in rows)
+    tokens = {kind: sum(int(r[5 + i] or 0) for r in rows) for i, kind in enumerate(TOKENS.values())}
     finished = runs["succeeded"] + runs["failed"]
     ratio = runs["succeeded"] / finished if finished else 0.0
 
@@ -56,6 +70,14 @@ async def collect(store: TaskStore, db: Database) -> str:
         [({"status": k}, v) for k, v in sorted(runs.items())],
     )
     lines += _fmt("harness_run_cost_usd_sum", f"Cost of factory runs {window}.", "gauge", [({}, round(cost, 6))])
+    lines += _fmt(
+        "harness_run_tokens_sum", f"Tokens of factory runs {window}, by kind.", "gauge",
+        [({"kind": k}, v) for k, v in tokens.items()],
+    )
+    lines += _fmt(
+        "harness_run_failed_tool_calls_sum", f"Failed tool calls of factory runs {window}.", "gauge",
+        [({}, failed_tools)],
+    )
     lines += _fmt(
         "harness_run_duration_seconds_sum", f"Total duration of finished runs {window}.", "gauge",
         [({}, round(sum(durations), 3))],

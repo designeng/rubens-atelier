@@ -7,10 +7,11 @@ from sqlalchemy import event, select, update
 
 from app import steps
 from app.archive import archive_task
+from app.board_api.helpers import _column
 from app.checks import poll_checks
 from app.config import settings
 from app.db import Artifact, HumanRequest, ItemEvent, Note, Project, Run, TaskTranscript, WorkItem, utcnow
-from app.engine import Engine, EngineError
+from app.engine import COMMENT_PREFIX, Engine, EngineError
 from app.execution import item_workspace, remove_item_workspace
 from app.models import FailureReason
 from app.runner import AgentOutcome
@@ -141,7 +142,7 @@ class ScriptedRunner:
         self.calls.append({"role": role, "prompt": spec.prompt, "resume": resume, "spec": spec})
         session = f"{role}-{n}"
         await emit("session", {"session_id": session})
-        if role == "implement":
+        if role in ("implement", "resolve_conflicts"):
             if not self.implement_ok:
                 return AgentOutcome(session, None, True, error="max turns")
             (cwd / "hello.txt").write_text(f"hi {n}\n")
@@ -175,6 +176,48 @@ async def test_pr_body_names_the_item_model_for_every_role(make_factory):
     body = f.gh.prs[0]["body"]
     for role in ("planner", "implementer", "reviewer"):
         assert f"{role} `claude-opus-5-5`" in body
+
+
+class ReportingRunner(ScriptedRunner):
+    """Claude Code's `session` event names the model it really started on."""
+
+    def __init__(self, reported):
+        super().__init__()
+        self.reported = reported
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        async def reporting(type_, data):
+            await emit(type_, {**data, "model": self.reported} if type_ == "session" else data)
+
+        return await super().__call__(spec, cwd=cwd, resume=resume, emit=reporting)
+
+
+async def run_models(f, item_id):
+    async with f.db.session() as s:
+        return {r.role: r.model for r in await s.scalars(select(Run).where(Run.item_id == item_id))}
+
+
+async def test_run_records_the_model_the_runtime_reported(make_factory, caplog):
+    f = make_factory(ReportingRunner("claude-sonnet-5-5"))
+    item_id = await f.new_item(model="claude-opus-5-5")
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert set((await run_models(f, item_id)).values()) == {"claude-sonnet-5-5"}
+    assert "reviewer asked for model claude-opus-5-5 but ran on claude-sonnet-5-5" in caplog.text
+    assert "reviewer `claude-sonnet-5-5`" in f.gh.prs[0]["body"]
+
+
+async def test_run_keeps_the_provider_prefix_when_the_model_matches(make_factory, caplog):
+    f = make_factory(ReportingRunner("anthropic/claude-opus-5"))
+    item_id = await f.new_item(model="openrouter/anthropic/claude-opus-5")
+
+    assert await f.engine.start(item_id)
+    await f.drain()
+
+    assert set((await run_models(f, item_id)).values()) == {"openrouter/anthropic/claude-opus-5"}
+    assert "asked for model" not in caplog.text
 
 
 async def test_story_happy_path(make_factory, origin):
@@ -257,7 +300,52 @@ async def test_review_feedback_loops_back_to_the_same_implementer_session(make_f
     # The resumed session already has the plan and its own summary: only the review is new.
     assert '<artifact name="planner">' not in second_impl["prompt"]
     assert '<artifact name="implementer">' not in second_impl["prompt"]
+    # Nor does it need its instructions or the task again.
+    assert second_impl["prompt"].startswith('You are continuing as the implementer on story "Add greeting"')
+    assert "Definition of done" not in second_impl["prompt"] and "Create hello.txt" not in second_impl["prompt"]
     assert second_impl["spec"].lean_context is False
+
+
+class LongSessions(ScriptedRunner):
+    """Every implementer session reads `tokens` of context on its last request."""
+
+    def __init__(self, tokens, **kw):
+        super().__init__(**kw)
+        self.tokens = tokens
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        out = await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+        if spec.metadata["state"] == "implement":
+            await emit("context", {"tokens": self.tokens})
+            await emit("tool_result", {"tool_use_id": "t", "is_error": True, "content": "refused"})
+            out.usage = {"input_tokens": 5, "cache_read_tokens": 9000, "cache_write_tokens": 700, "output_tokens": 300}
+        return out
+
+
+async def test_a_large_implementer_session_is_not_resumed(make_factory, monkeypatch):
+    monkeypatch.setattr(settings, "resume_max_context_tokens", 60_000)
+    f = make_factory(LongSessions(80_000, reviews=["changes_requested", "approved"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    second = f.runner.of("implement")[1]
+    assert second["resume"] is None  # a fresh session, carried by all the artifacts
+    for part in ("Definition of done", '<artifact name="planner">', "Review 0: changes_requested"):
+        assert part in second["prompt"]
+    async with f.db.session() as s:
+        run = await s.scalar(select(Run).where(Run.item_id == item_id, Run.state == "implement"))
+    assert (run.context_tokens, run.failed_tools, run.cache_read_tokens, run.output_tokens) == (80_000, 1, 9000, 300)
+
+
+async def test_a_small_implementer_session_is_resumed(make_factory, monkeypatch):
+    monkeypatch.setattr(settings, "resume_max_context_tokens", 60_000)
+    f = make_factory(LongSessions(40_000, reviews=["changes_requested", "approved"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert f.runner.of("implement")[1]["resume"] == "implement-0"
 
 
 async def test_project_memory_reaches_fresh_prompts_and_agents_propose_notes(make_factory):
@@ -446,6 +534,21 @@ async def test_implementer_out_of_turns_continues_its_session(make_factory):
     async with f.db.session() as s:
         verdicts = (await s.scalars(select(Run.verdict).where(Run.state == "implement").order_by(Run.version))).all()
     assert verdicts == ["turn_limit", "done"]
+
+
+async def test_a_session_cut_by_the_turn_limit_continues_however_large(make_factory, monkeypatch):
+    class LargeOutOfTurns(OutOfTurnsOnce):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            await emit("context", {"tokens": 150_000})
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    monkeypatch.setattr(settings, "resume_max_context_tokens", 60_000)
+    f = make_factory(LargeOutOfTurns())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert f.runner.of("implement")[1]["resume"] == "implement-long"
 
 
 async def test_lean_story_still_continues_a_session_cut_by_the_turn_limit(make_factory):
@@ -705,13 +808,15 @@ async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, 
     await f.engine.start(item_id)
     await f.drain()
 
-    assert await f.path(item_id) == [*HAPPY_PATH[:3], "implement", "sync_base", *HAPPY_PATH[3:]]
-    resolve = f.runner.of("implement")[1]
+    assert await f.path(item_id) == [*HAPPY_PATH[:3], "resolve_conflicts", "sync_base", *HAPPY_PATH[3:]]
+    resolve = f.runner.of("resolve_conflicts")[0]
     assert resolve["resume"] == "implement-0"
+    assert resolve["spec"].metadata["state"] == "resolve_conflicts"
+    assert resolve["prompt"].startswith("You are continuing as the implementer")  # its session knows the rest
     assert "conflicts in:\n- hello.txt" in resolve["prompt"] and "Do not abort the merge" in resolve["prompt"]
 
     branch = (await f.item(item_id)).branch
-    assert git(origin, "show", f"{branch}:hello.txt") == "hi 1\n"  # the implementer's resolution
+    assert git(origin, "show", f"{branch}:hello.txt") == "hi 0\n"  # the implementer's resolution
     assert git(origin, "show", f"{branch}:other.txt") == "unrelated\n"  # main's work came along
     assert git(origin, "log", "--merges", "--format=%s", branch).strip()  # concluded as a merge commit
     # The PR now merges cleanly: main is an ancestor of the branch.
@@ -742,9 +847,9 @@ async def test_update_brings_an_open_pr_up_to_date(make_factory, origin, tmp_pat
 async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, origin, tmp_path):
     class LeavesMarkers(ConflictingMerge):
         async def __call__(self, spec, *, cwd, resume, emit):
-            if spec.metadata["state"] == "implement" and len(self.of("implement")) == 1:
-                self.calls.append({"role": "implement", "prompt": spec.prompt, "resume": resume, "spec": spec})
-                return AgentOutcome("implement-1", "gave up", False)  # merge still in progress
+            if spec.metadata["state"] == "resolve_conflicts" and not self.of("resolve_conflicts"):
+                self.calls.append({"role": "resolve_conflicts", "prompt": spec.prompt, "resume": resume, "spec": spec})
+                return AgentOutcome("resolve-0", "gave up", False)  # merge still in progress
             return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
 
     f = make_factory(LeavesMarkers(origin, tmp_path))
@@ -753,11 +858,96 @@ async def test_sync_base_does_not_commit_unresolved_conflicts(make_factory, orig
     await f.drain()
 
     path = await f.path(item_id)
-    assert path[:6] == ["plan", "implement", "sync_base", "implement", "sync_base", "implement"]
+    assert path[:6] == ["plan", "implement", "sync_base", "resolve_conflicts", "sync_base", "resolve_conflicts"]
     async with f.db.session() as s:
         reports = (await s.scalars(select(Artifact.content).where(Artifact.name == "sync_base"))).all()
     assert reports[1].startswith("The merge of origin/main still has conflicts")
     assert "<<<<<<<" not in git(origin, "show", f"{(await f.item(item_id)).branch}:hello.txt")
+
+
+async def test_conflicts_nobody_resolves_escalate_without_using_implement_visits(make_factory, origin, tmp_path):
+    class NeverResolves(ConflictingMerge):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            if spec.metadata["state"] == "resolve_conflicts":
+                self.calls.append({"role": "resolve_conflicts", "prompt": spec.prompt, "resume": resume, "spec": spec})
+                return AgentOutcome("resolve", "gave up", False)
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    f = make_factory(NeverResolves(origin, tmp_path))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert len(f.runner.of("resolve_conflicts")) == 3
+    assert len(f.runner.of("implement")) == 1
+
+
+async def to_awaiting_merge_after_refusal(f) -> str:
+    """An automerge story whose merge GitHub refused: its PR waits in awaiting_merge."""
+    f.gh.merge_refusal = 405
+    item_id = await f.new_item(auto_merge=True)
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    return item_id
+
+
+async def test_automerge_sends_a_conflicting_pr_back_to_in_progress(make_factory, origin, tmp_path):
+    f = make_factory(ScriptedRunner())
+    item_id = await to_awaiting_merge_after_refusal(f)
+    land_on_main(origin, tmp_path, "hello.txt", "HELLO from main\n")
+    f.gh.pr_state["mergeable"] = False
+    f.gh.merge_refusal = None
+
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == [(item_id, "update")]
+
+    item = await f.item(item_id)
+    assert item.state == "sync_base" and _column(f.engine, item) == "working"
+    assert await f.open_request(item_id) is None
+    assert (await steps.latest_artifacts(f.engine, item_id))["merge"] == "PR #1 conflicts with main."
+
+    await f.drain()
+
+    tail = ["awaiting_merge", "sync_base", "resolve_conflicts", "sync_base", "review", "publish", "ci", "merge", "done"]
+    assert (await f.path(item_id))[-9:] == tail
+    assert f.runner.of("resolve_conflicts")[0]["resume"] == "implement-0"
+    assert len(f.gh.merges) == 2
+
+
+@pytest.mark.parametrize("auto_merge, mergeable", [(False, False), (True, None), (True, True)])
+async def test_pr_keeps_waiting_unless_automerge_sees_a_conflict(make_factory, origin, auto_merge, mergeable):
+    f = make_factory(ScriptedRunner())
+    f.gh.merge_refusal = 405
+    item_id = await f.new_item(auto_merge=auto_merge)
+    await f.engine.start(item_id)
+    await f.drain()
+    f.gh.pr_state["mergeable"] = mergeable
+
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == []
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    assert (await f.open_request(item_id)) is not None
+
+
+async def test_merged_pr_wins_over_a_stale_conflict_report(make_factory, origin):
+    f = make_factory(ScriptedRunner())
+    item_id = await to_awaiting_merge_after_refusal(f)
+    f.gh.pr_state = {"state": "closed", "merged_at": "2026-10-29T10:00:00Z", "mergeable": False}
+
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == [(item_id, "merged")]
+
+
+async def test_conflict_github_keeps_reporting_stops_at_a_human(make_factory, origin):
+    """The local merge is clean, so no agent step's limit would ever end this loop."""
+    f = make_factory(ScriptedRunner())
+    item_id = await to_awaiting_merge_after_refusal(f)
+    f.gh.pr_state["mergeable"] = False
+
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert (await f.path(item_id)).count("sync_base") == 8
+    assert not f.runner.of("resolve_conflicts")
 
 
 async def test_merged_pr_moves_the_story_to_done_by_itself(make_factory):
@@ -955,3 +1145,138 @@ async def test_reconcile_loads_only_steps_a_worker_can_be_running(make_factory):
     finally:
         event.remove(WorkItem, "load", on_load)
     assert loaded == [working]
+
+
+class Commenting(ScriptedRunner):
+    """A person comments while the given runs, by (state, call number), are in progress."""
+
+    def __init__(self, comments, **kw):
+        super().__init__(**kw)
+        self.comments = comments
+        self.engine = None
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        state = spec.metadata["state"]
+        if text := self.comments.get((state, len(self.of(state)))):
+            await self.engine.comment(spec.metadata["item_id"], text)
+        return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+
+@pytest.fixture
+def commenting(make_factory):
+    def make(comments, **kw):
+        f = make_factory(Commenting(comments, **kw))
+        f.runner.engine = f.engine
+        return f
+
+    return make
+
+
+async def comments_of(f, item_id):
+    async with f.db.session() as s:
+        rows = await s.scalars(
+            select(Artifact).where(Artifact.item_id == item_id, Artifact.name.startswith(COMMENT_PREFIX))
+        )
+        return list(rows)
+
+
+async def test_a_comment_sends_the_role_back_to_its_session_before_moving_on(commenting):
+    f = commenting({("review", 0): "Also check the error path."})
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    # The verdict of the first review didn't count: the story went back to review, not to publish.
+    assert await f.path(item_id) == ["plan", "implement", "sync_base", "review", "review", "publish", "ci", "merge",
+                                     "awaiting_merge"]
+    first, second = f.runner.of("review")
+    assert first["resume"] is None  # a review normally starts afresh...
+    assert second["resume"] == "review-0"  # ...but a comment goes to the session it concerns
+    assert second["prompt"].startswith(steps.FOLLOW_UP) and "Also check the error path." in second["prompt"]
+    (comment,) = await comments_of(f, item_id)
+    assert comment.run_id is not None
+
+
+async def test_comments_use_up_no_visits(commenting):
+    # implement has max_visits 4: six runs in a row would go to needs_human if they counted.
+    f = commenting({("implement", n): f"note {n}" for n in range(5)})
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "awaiting_merge"
+    assert len(f.runner.of("implement")) == 6
+    assert (await f.path(item_id)).count("implement") == 6
+
+
+async def test_a_comment_on_a_waiting_step_goes_into_its_first_prompt(commenting):
+    f = commenting({})
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.engine.comment(item_id, "Keep it small.")
+    await f.drain()
+
+    (plan,) = f.runner.of("plan")  # no second run for what the first one has read
+    assert "Keep it small." in plan["prompt"]
+    assert "Keep it small." in f.runner.of("review")[0]["prompt"]  # later roles read it as an artifact
+
+
+async def test_a_comment_on_a_failed_run_goes_to_the_next_agent_step(make_factory):
+    class CommentThenOutOfTurns(OutOfTurnsOnce):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            if spec.metadata["state"] == "implement" and not self.of("implement"):
+                await f.engine.comment(spec.metadata["item_id"], "Use the new helper.")
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    f = make_factory(CommentThenOutOfTurns())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    # The workflow's own retry reads the comment: no run on top of it.
+    cut, retry = f.runner.of("implement")
+    assert retry["resume"] == "implement-long"
+    assert not retry["prompt"].startswith(steps.FOLLOW_UP) and "Use the new helper." in retry["prompt"]
+    assert (await f.path(item_id))[:3] == ["plan", "implement", "implement"]
+
+
+async def test_a_comment_survives_the_worker_dying(make_factory):
+    class CommentThenDie(DiesMidImplement):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            if spec.metadata["state"] == "implement" and self.deaths:
+                await f.engine.comment(spec.metadata["item_id"], "Mind the encoding.")
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    f = make_factory(CommentThenDie())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await die_and_redeliver(f, item_id)
+    await f.drain()
+
+    cut, resumed, follow_up = f.runner.of("implement")
+    assert resumed["prompt"] == steps.CONTINUE
+    assert follow_up["prompt"].startswith(steps.FOLLOW_UP) and "Mind the encoding." in follow_up["prompt"]
+    assert (await f.item(item_id)).state == "awaiting_merge"
+
+
+async def test_the_budget_stops_a_follow_up_and_the_comment_keeps_waiting(commenting):
+    f = commenting({("review", 0): "One more thing."})
+    item_id = await f.new_item(budget_usd=2.0)  # plan 0.5 + implement 1 + review 0.5 use it up
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert len(f.runner.of("review")) == 1
+    (comment,) = await comments_of(f, item_id)
+    assert comment.run_id is None
+
+
+async def test_comments_are_refused_outside_agent_steps(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    with pytest.raises(EngineError, match="no agent step"):
+        await f.engine.comment(item_id, "too early")
+    await f.engine.start(item_id)
+    await f.drain()
+    with pytest.raises(EngineError, match="no agent step"):
+        await f.engine.comment(item_id, "too late")  # awaiting_merge: the inbox request takes comments

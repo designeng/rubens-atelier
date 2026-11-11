@@ -68,7 +68,8 @@ export interface Todo {
 export interface Progress {
   step: string;
   kind: "agent" | "action" | "check" | string;
-  queued?: boolean;
+  queued?: boolean; // waits in the scheduler's queue for a slot
+  dispatched?: boolean; // holds a slot, but no worker has started the agent yet
   task_id?: string;
   status?: string;
   started_at?: string | null;
@@ -170,12 +171,21 @@ export interface RunOut {
   status: string;
   verdict: string | null;
   cost_usd: number | null;
+  model?: string | null;
+  // Tokens over the run's API requests; null before the run ends or for runs from before they were kept.
+  input_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  output_tokens?: number | null;
+  context_tokens?: number | null; // what the run's last request read
+  failed_tools?: number | null; // tool calls that failed: refused commands, errors
   created_at: string;
   error: string | null; // the `error` artifact of a run that ended in the error verdict
 }
 
 export interface ArtifactOut {
   id: string;
+  run_id: string | null; // for a comment: the run it was delivered to
   name: string;
   content: string;
   created_at: string;
@@ -258,6 +268,8 @@ export interface SchedulerStatus {
   active: string[];
   ready: string[];
   quota: Record<string, unknown>;
+  // Celery workers that reported in within the last 30 seconds.
+  workers: { id: string; concurrency: number | null; started_at: number }[];
 }
 
 export interface Installation {

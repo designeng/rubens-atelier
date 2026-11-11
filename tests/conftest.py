@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -18,9 +19,15 @@ from app.workflow import load_workflows
 
 @pytest.fixture(autouse=True)
 def _settings(tmp_path, monkeypatch):
+    # The suite ignores the shell's harness config: a developer's .env exports, or the blank
+    # HARNESS_* an agent working on the harness itself gets. Tests that need one set it.
+    for name in [n for n in os.environ if n.startswith("HARNESS_")]:
+        monkeypatch.delenv(name)
     monkeypatch.setattr(settings, "workspaces_root", tmp_path / "workspaces")
     monkeypatch.setattr(settings, "database_url", f"sqlite+aiosqlite:///{tmp_path / 'factory.db'}")
     monkeypatch.setattr(settings, "github_token", "test-token")
+    monkeypatch.setattr(settings, "api_token", "")  # HARNESS_API_TOKEN in the environment would demand auth
+    monkeypatch.setattr(settings, "bash_allowed_commands", [])  # Codex refuses runs when this is set
     monkeypatch.setattr(settings, "issue_verify_command", "")
     monkeypatch.setattr(settings, "lean_context", False)  # a local .env may turn it on
     monkeypatch.setattr(execution, "WATCHDOG_INTERVAL", 0.05)

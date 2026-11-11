@@ -72,6 +72,7 @@ async def test_run_now_skips_the_pause_and_limits_but_not_a_rejected_window(sche
     await scheduler.run_now("b", 1)
     assert dispatched == ["busy", "b"]
     assert await scheduler.is_pending("b", 1)  # holds a slot now
+    assert not await scheduler.is_queued("b", 1)  # but no longer waits for one
     assert (await scheduler.status())["ready"] == ["a:1"]
     with pytest.raises(SchedulerError, match="not waiting"):
         await scheduler.run_now("b", 1)
@@ -239,3 +240,19 @@ async def test_lean_rate_limited_step_resumes_the_cut_session(db, store, redis, 
 
     assert (await f.item(item_id)).state == "awaiting_merge"
     assert f.runner.of("implement")[1]["resume"] == "implement-cut"
+
+
+async def test_redispatch_if_lost_sends_a_silent_step_again(scheduler, redis, dispatched):
+    await scheduler.submit("a", 1, "A")
+    assert dispatched == ["a"]
+    assert not await scheduler.redispatch_if_lost("a", 1, after=600)  # dispatched just now
+
+    await redis.zadd(ACTIVE, {"a:1": time.time() + settings.dispatch_ttl_seconds - 601}, xx=True)
+    assert await scheduler.redispatch_if_lost("a", 1, after=600)
+    assert dispatched == ["a", "a"]
+    assert not await scheduler.redispatch_if_lost("a", 1, after=600)  # fresh lease now
+
+    await redis.zadd(ACTIVE, {"a:1": time.time() + settings.dispatch_ttl_seconds - 601}, xx=True)
+    await scheduler.started("a", 1, "task-1")
+    assert not await scheduler.redispatch_if_lost("a", 1, after=600)  # the agent started
+    assert not await scheduler.redispatch_if_lost("nope", 1, after=600)

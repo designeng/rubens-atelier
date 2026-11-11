@@ -80,6 +80,36 @@ async def test_exhausted_budget_stops_the_run_before_the_agent_starts(db, store)
     assert error.name == "error" and "budget of the story 'S' is used up" in error.content
 
 
+async def test_budget_refuses_a_model_that_reports_no_cost(db, store):
+    project, _, story = await _seed(db, story_budget=2.0)
+    story.model = "codex/gpt-5.5"
+    runner = FakeRunner()
+
+    assert await _step(db, store, project, story, runner) == FailureReason.budget.value
+
+    assert runner.calls == []
+    async with db.session() as s:
+        (error,) = await s.scalars(select(Artifact).where(Artifact.item_id == story.id))
+    assert "reports no cost" in error.content
+
+
+async def test_a_model_that_reports_no_cost_runs_without_a_budget(db, store):
+    project, _, story = await _seed(db)
+    story.model = "codex/gpt-5.5"
+    runner = FakeRunner()
+    await _step(db, store, project, story, runner)
+    assert len(runner.calls) == 1
+
+
+async def test_changing_provider_leaves_the_session_and_sends_the_whole_context(db, store):
+    project, _, story = await _seed(db)
+    story.model, story.sessions = "codex/gpt-5.5", {"implementer": "claude-session"}
+    runner = FakeRunner()
+    await _step(db, store, project, story, runner)
+    assert runner.calls[0]["resume"] is None
+    assert "already seen" not in runner.calls[0]["prompt"]
+
+
 async def test_project_or_epic_limit_blocks_the_child(db, store):
     for kwargs in ({"project_budget": 1.0}, {"epic_budget": 1.0}):
         project, _, story = await _seed(db, spent=[("story", 1.0)], **kwargs)

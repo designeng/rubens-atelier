@@ -250,13 +250,15 @@ def test_sandbox_is_on_by_default(monkeypatch):
 def test_lean_context(monkeypatch):
     from app.config import settings
     from app.models import TaskCreate
-    from app.runner import LEAN_SYSTEM_PROMPT, build_options
+    from app.runner import AGENT_RULES, LEAN_SYSTEM_PROMPT, build_options
 
     monkeypatch.setattr(settings, "lean_context", False)
     monkeypatch.setattr(settings, "bash_allowed_commands", ["pytest"])
     opts = build_options(TaskCreate(prompt="x"), Path("."), None)
-    assert opts.system_prompt == {"type": "preset", "preset": "claude_code"}
-    assert opts.tools is None and opts.setting_sources == ["project"]
+    assert opts.system_prompt == {"type": "preset", "preset": "claude_code", "append": AGENT_RULES}
+    assert opts.setting_sources == ["project"]
+    # Only the allowed tools' definitions, lean or not.
+    assert opts.tools == ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
 
     opts = build_options(TaskCreate(prompt="x", lean_context=True, system_prompt="extra"), Path("."), None)
     assert opts.system_prompt == LEAN_SYSTEM_PROMPT + "\n\nextra"
@@ -266,7 +268,56 @@ def test_lean_context(monkeypatch):
     assert opts.sandbox["enabled"] and json.loads(opts.settings)["permissions"]["deny"]
 
     monkeypatch.setattr(settings, "lean_context", True)
-    assert build_options(TaskCreate(prompt="x", lean_context=False), Path("."), None).tools is None
+    assert build_options(TaskCreate(prompt="x", lean_context=False), Path("."), None).setting_sources == ["project"]
+    assert AGENT_RULES in LEAN_SYSTEM_PROMPT
+
+
+def test_agent_rules_follow_the_tasks_system_prompt_and_disallowed_tools_drop_out():
+    from app.models import TaskCreate
+    from app.runner import AGENT_RULES, build_options
+
+    spec = TaskCreate(prompt="x", system_prompt="extra", disallowed_tools=["Write", "Edit", "Bash(rm:*)"])
+    opts = build_options(spec, Path("."), None)
+    assert opts.system_prompt["append"] == AGENT_RULES + "\n\nextra"
+    assert opts.tools == ["Read", "Glob", "Grep", "Bash"]  # a narrowed Bash stays
+    assert opts.disallowed_tools == ["Write", "Edit", "Bash(rm:*)"]
+
+
+def test_usage_meter_counts_each_request_once_with_its_final_output():
+    from app.runner import UsageMeter, add_usage
+
+    meter = UsageMeter()
+    assert meter.total() is None
+    first = {"input_tokens": 3, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 200, "output_tokens": 5}
+    meter.add("m1", first)
+    meter.add("m1", {**first, "output_tokens": 40})  # the same response's next block
+    meter.add("m2", {"input_tokens": 1, "cache_read_input_tokens": 1200, "output_tokens": 7})
+    meter.add("m3", None)
+    total = meter.total()
+    assert total == {"input_tokens": 4, "cache_read_tokens": 2200, "cache_write_tokens": 200, "output_tokens": 47}
+    assert add_usage(total, None) == total and add_usage(None, None) is None
+    assert add_usage(total, total)["cache_read_tokens"] == 4400
+
+
+async def test_usage_is_summed_over_verify_retries_and_failed_tool_calls_are_counted(store):
+    class UsageRunner(FakeRunner):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            out = await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+            await emit("context", {"tokens": 1000 * len(self.calls)})
+            await emit("tool_result", {"tool_use_id": "t", "is_error": True, "content": "refused"})
+            await emit("tool_result", {"tool_use_id": "u", "is_error": False, "content": "ok"})
+            out.usage = {"input_tokens": 1, "cache_read_tokens": 100, "cache_write_tokens": 10, "output_tokens": 5}
+            return out
+
+    task_id = await store.create(TaskCreate(prompt="hello", verify_command="test -f ok", verify_attempts=1))
+    runner = UsageRunner(script=lambda n, spec, cwd, resume: n == 1 and (cwd / "ok").write_text(""))
+    await execute_task(task_id, store, "w1", runner=runner)
+
+    info = await store.get(task_id)
+    assert info.status == TaskStatus.succeeded and len(runner.calls) == 2
+    assert info.usage == {"input_tokens": 2, "cache_read_tokens": 200, "cache_write_tokens": 20, "output_tokens": 10}
+    assert info.failed_tools == 2
+    assert info.context_tokens == 2000  # the latest request's
 
 
 def test_context_tokens_counts_cached_input_too():

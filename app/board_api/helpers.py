@@ -57,8 +57,11 @@ async def _progress(
     else:
         run = runs.get((item.id, item.version))
     if run is None:
-        queued = bool(engine.scheduler and await engine.scheduler.is_pending(item.id, item.version))
-        return {"step": st.agent, "kind": "agent", "queued": queued}
+        sched = engine.scheduler
+        queued = bool(sched and await sched.is_queued(item.id, item.version))
+        # Holds a slot but its agent task doesn't exist yet: the worker hasn't picked it up.
+        dispatched = not queued and bool(sched and await sched.is_pending(item.id, item.version))
+        return {"step": st.agent, "kind": "agent", "queued": queued, "dispatched": dispatched}
     progress = await engine.store.progress(run.task_id) if live is None else live.get(run.task_id)
     return {"step": st.agent, "kind": "agent", "task_id": run.task_id, **(progress or {})}
 

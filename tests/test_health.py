@@ -113,6 +113,9 @@ async def test_metrics_aggregates_runs_and_queue(client, redis, db):
             task_id=f"t{version}",
             status=status,
             cost_usd=cost,
+            cache_read_tokens=1000 * version if cost is not None else None,
+            output_tokens=10 if cost is not None else None,
+            failed_tools=version % 2 or None,
             created_at=created,
             finished_at=created + timedelta(seconds=seconds) if seconds is not None else None,
         )
@@ -138,6 +141,10 @@ async def test_metrics_aggregates_runs_and_queue(client, redis, db):
     assert m['harness_runs{status="failed"}'] == 1
     assert m['harness_runs{status="running"}'] == 1
     assert m["harness_run_cost_usd_sum"] == 3.0
+    assert m['harness_run_tokens_sum{kind="cache_read"}'] == 6000  # runs 1-3; 4 has none, 5 is too old
+    assert m['harness_run_tokens_sum{kind="output"}'] == 30
+    assert m['harness_run_tokens_sum{kind="cache_write"}'] == 0
+    assert m["harness_run_failed_tool_calls_sum"] == 2  # runs 1 and 3
     assert m["harness_run_duration_seconds_sum"] == 100
     assert m["harness_run_duration_seconds_count"] == 3
     assert m["harness_run_success_ratio"] == pytest.approx(2 / 3, abs=1e-5)
