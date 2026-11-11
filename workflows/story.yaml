@@ -7,6 +7,7 @@ initial: plan
 states:
   plan:
     agent: planner
+    effort: medium
     disallowed_tools: [Write, Edit]
     verdicts: [ready, needs_clarification, too_big]
     resume: true
@@ -23,6 +24,8 @@ states:
     agent: implementer
     effort: medium
     verify: true
+    # Continues its session while that is small (HARNESS_RESUME_MAX_CONTEXT_TOKENS), else starts
+    # afresh from the artifacts: a long session is re-read on every request.
     resume: true
     max_visits: 4
     on_exhausted: needs_human
@@ -51,6 +54,7 @@ states:
 
   review:
     agent: reviewer
+    effort: medium
     disallowed_tools: [Write, Edit]
     verdicts: [approved, changes_requested, needs_human]
     next: {approved: publish, changes_requested: implement, needs_human: needs_human, error: needs_human}

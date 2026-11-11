@@ -297,3 +297,13 @@ def test_extra_env_goes_over_the_agents_env(monkeypatch):
     monkeypatch.setitem(os.environ, "HARNESS_X", "1")
     opts = build_options(TaskCreate(prompt="x"), Path("."), None, {"ANTHROPIC_API_KEY": ""})
     assert opts.env["ANTHROPIC_API_KEY"] == "" and opts.env["HARNESS_X"] == ""
+
+
+def test_codex_usage_splits_cached_input_off():
+    from app.codex import codex_usage
+
+    assert codex_usage(None) is None
+    usage = {"input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 50}
+    assert codex_usage(usage) == {
+        "input_tokens": 200, "cache_read_tokens": 800, "cache_write_tokens": 0, "output_tokens": 50
+    }

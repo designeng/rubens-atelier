@@ -90,9 +90,14 @@ class Settings(BaseSettings):
         "registry.npmjs.org",
     ]
     # Start agents with as little context as possible: a short system prompt instead of Claude
-    # Code's preset, only the allowed tools' definitions, no CLAUDE.md or skills preloaded (the
-    # agent reads the repo's docs itself when it needs them). Can be overridden per task.
+    # Code's preset, no CLAUDE.md or skills preloaded (the agent reads the repo's docs itself when
+    # it needs them). Can be overridden per task. Any agent gets only the allowed tools' definitions.
     lean_context: bool = False
+    # A workflow state with `resume` continues the role's session only while its last request read
+    # at most this many tokens; past it the visit starts a new session from the artifacts. Every
+    # request re-reads the whole session, so a long one costs more per turn than a fresh start.
+    # Work cut short (turn limit, lost worker, subscription limit) always continues. 0 = no limit.
+    resume_max_context_tokens: int = 60_000
     default_max_turns: int = 50
     default_max_budget_usd: float = 5.0
     default_verify_attempts: int = 2

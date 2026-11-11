@@ -35,12 +35,31 @@ MAX_EVENT_STR = 8_000
 HIDDEN_ENV_PREFIXES = ("HARNESS_",)
 HIDDEN_ENV = ("GITHUB_TOKEN", "GH_TOKEN", "VIRTUAL_ENV")
 
+# How to work in the harness's sandbox, in every agent's system prompt (so a resumed session keeps
+# it). Each refused command or file dumped through Bash costs a turn that re-reads the whole context.
+AGENT_RULES = """\
+How to work here:
+- The current directory is the repository root. Run commands from it: a command that starts
+  with `cd` is often refused.
+- Read files with Read (offset/limit for long ones), search with Grep and Glob, change them with
+  Edit and Write. Use Bash only to run programs: tests, linters, builds, git. Don't read or edit
+  files through cat, sed, heredocs or `python -c`.
+- One plain command per Bash call; a pipe into `tail` or `head` is fine. The sandbox refuses
+  commands with shell variables, `$(...)`, subshells or `env` prefixes, and chains that mix them.
+- The environment is already set up for the sandbox (UV_CACHE_DIR included): don't change or
+  unset environment variables.
+- Keep output short: run the tests you need, quietly (`-q`), and trim long output with `tail`.
+- Bash runs in a sandbox: writes outside the repository fail."""
+
 # Replaces Claude Code's preset under `lean_context`; the task prompt carries the rest.
-LEAN_SYSTEM_PROMPT = """\
+LEAN_SYSTEM_PROMPT = f"""\
 You are a software engineer working autonomously in the git repository in the current directory.
-Nobody answers questions during the run. Read files with Read, search with Glob and Grep, change
-them with Edit and Write, and use Bash only to run commands (tests, linters, git). Bash runs in a
-sandbox: writes outside the repository fail. Keep your messages short."""
+Nobody answers questions during the run. Keep your messages short.
+
+{AGENT_RULES}"""
+
+# Token kinds of an agent call, as stored on a run.
+USAGE_KEYS = ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens")
 
 
 @dataclass
@@ -53,6 +72,40 @@ class AgentOutcome:
     num_turns: int | None = None
     structured_output: Any = None
     failure: FailureReason | None = None  # set with is_error; None there means model_error
+    usage: dict[str, int] | None = None  # USAGE_KEYS summed over the call's API requests
+
+
+class UsageMeter:
+    """Sums token usage over a call's API requests. One response arrives as several messages (one
+    per block) with the same id; its output count may grow between them, so the largest is kept."""
+
+    def __init__(self) -> None:
+        self.requests: dict[str, dict[str, int]] = {}
+
+    def add(self, message_id: str | None, usage: dict[str, Any] | None) -> None:
+        if not usage:
+            return
+        row = {
+            "input_tokens": int(usage.get("input_tokens") or 0),
+            "cache_read_tokens": int(usage.get("cache_read_input_tokens") or 0),
+            "cache_write_tokens": int(usage.get("cache_creation_input_tokens") or 0),
+            "output_tokens": int(usage.get("output_tokens") or 0),
+        }
+        key = message_id or f"anonymous-{len(self.requests)}"
+        if key in self.requests:
+            row["output_tokens"] = max(row["output_tokens"], self.requests[key]["output_tokens"])
+        self.requests[key] = row
+
+    def total(self) -> dict[str, int] | None:
+        if not self.requests:
+            return None
+        return {k: sum(r[k] for r in self.requests.values()) for k in USAGE_KEYS}
+
+
+def add_usage(a: dict[str, int] | None, b: dict[str, int] | None) -> dict[str, int] | None:
+    if a is None or b is None:
+        return a or b
+    return {k: a.get(k, 0) + b.get(k, 0) for k in USAGE_KEYS}
 
 
 class AgentRunner(Protocol):
@@ -133,20 +186,21 @@ def build_options(
     lean = spec.lean_context if spec.lean_context is not None else settings.lean_context
     allowed = effective_tools(spec.allowed_tools if spec.allowed_tools is not None else settings.default_allowed_tools)
     system_prompt: str | dict[str, Any]
+    extra = f"\n\n{spec.system_prompt}" if spec.system_prompt else ""
     if lean:
-        system_prompt = LEAN_SYSTEM_PROMPT + (f"\n\n{spec.system_prompt}" if spec.system_prompt else "")
+        system_prompt = LEAN_SYSTEM_PROMPT + extra
     else:
-        system_prompt = {"type": "preset", "preset": "claude_code"}
-        if spec.system_prompt:
-            system_prompt["append"] = spec.system_prompt
+        system_prompt = {"type": "preset", "preset": "claude_code", "append": AGENT_RULES + extra}
     return ClaudeAgentOptions(
         cwd=str(cwd),
         resume=resume,
         env=agent_env() | (env or {}),
         add_dirs=[uv_cache_dir()],
         system_prompt=system_prompt,
-        # Lean: only the allowed tools' definitions reach the context, not every built-in one.
-        tools=tool_names(allowed) if lean else None,
+        # Only the allowed tools' definitions reach the context: the others (Task, WebFetch, Cron,
+        # TodoWrite…) go unused, yet every request would re-read them (~10k tokens).
+        # A tool disallowed outright (a reviewer's Write, Edit) is left out as well.
+        tools=[t for t in tool_names(allowed) if t not in (spec.disallowed_tools or [])],
         # Load the repo's CLAUDE.md / .claude/settings.json, but not the host user's settings.
         # Lean loads nothing: the sandbox and deny rules come from `sandbox` and `settings` below.
         setting_sources=[] if lean else ["project"],
@@ -205,6 +259,7 @@ async def run_claude(
     calls: dict[str, dict[str, Any]] = {}
     last_failure: str | None = None
     last_message: str | None = None
+    meter = UsageMeter()
 
     async for msg in query(prompt=spec.prompt, options=build_options(spec, cwd, resume, env)):
         match msg:
@@ -215,6 +270,7 @@ async def run_claude(
                 turns += 1
                 await emit("turn", {"turn": turns})
                 # One API response arrives as several messages (one per block) with the same usage.
+                meter.add(msg.message_id, msg.usage)
                 tokens = context_tokens(msg.usage)
                 if tokens is not None and msg.message_id != last_message:
                     last_message = msg.message_id
@@ -254,7 +310,12 @@ async def run_claude(
 
     if result is None:
         return AgentOutcome(
-            session_id, None, True, error="agent exited without a result", failure=FailureReason.model_error
+            session_id,
+            None,
+            True,
+            error="agent exited without a result",
+            failure=FailureReason.model_error,
+            usage=meter.total(),
         )
     return AgentOutcome(
         session_id=session_id,
@@ -265,5 +326,6 @@ async def run_claude(
         num_turns=result.num_turns,
         structured_output=result.structured_output,
         failure=failure_reason(result) if result.is_error else None,
+        usage=meter.total(),
     )
 

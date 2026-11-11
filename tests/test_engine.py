@@ -300,7 +300,52 @@ async def test_review_feedback_loops_back_to_the_same_implementer_session(make_f
     # The resumed session already has the plan and its own summary: only the review is new.
     assert '<artifact name="planner">' not in second_impl["prompt"]
     assert '<artifact name="implementer">' not in second_impl["prompt"]
+    # Nor does it need its instructions or the task again.
+    assert second_impl["prompt"].startswith('You are continuing as the implementer on story "Add greeting"')
+    assert "Definition of done" not in second_impl["prompt"] and "Create hello.txt" not in second_impl["prompt"]
     assert second_impl["spec"].lean_context is False
+
+
+class LongSessions(ScriptedRunner):
+    """Every implementer session reads `tokens` of context on its last request."""
+
+    def __init__(self, tokens, **kw):
+        super().__init__(**kw)
+        self.tokens = tokens
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        out = await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+        if spec.metadata["state"] == "implement":
+            await emit("context", {"tokens": self.tokens})
+            await emit("tool_result", {"tool_use_id": "t", "is_error": True, "content": "refused"})
+            out.usage = {"input_tokens": 5, "cache_read_tokens": 9000, "cache_write_tokens": 700, "output_tokens": 300}
+        return out
+
+
+async def test_a_large_implementer_session_is_not_resumed(make_factory, monkeypatch):
+    monkeypatch.setattr(settings, "resume_max_context_tokens", 60_000)
+    f = make_factory(LongSessions(80_000, reviews=["changes_requested", "approved"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    second = f.runner.of("implement")[1]
+    assert second["resume"] is None  # a fresh session, carried by all the artifacts
+    for part in ("Definition of done", '<artifact name="planner">', "Review 0: changes_requested"):
+        assert part in second["prompt"]
+    async with f.db.session() as s:
+        run = await s.scalar(select(Run).where(Run.item_id == item_id, Run.state == "implement"))
+    assert (run.context_tokens, run.failed_tools, run.cache_read_tokens, run.output_tokens) == (80_000, 1, 9000, 300)
+
+
+async def test_a_small_implementer_session_is_resumed(make_factory, monkeypatch):
+    monkeypatch.setattr(settings, "resume_max_context_tokens", 60_000)
+    f = make_factory(LongSessions(40_000, reviews=["changes_requested", "approved"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert f.runner.of("implement")[1]["resume"] == "implement-0"
 
 
 async def test_project_memory_reaches_fresh_prompts_and_agents_propose_notes(make_factory):
@@ -489,6 +534,21 @@ async def test_implementer_out_of_turns_continues_its_session(make_factory):
     async with f.db.session() as s:
         verdicts = (await s.scalars(select(Run.verdict).where(Run.state == "implement").order_by(Run.version))).all()
     assert verdicts == ["turn_limit", "done"]
+
+
+async def test_a_session_cut_by_the_turn_limit_continues_however_large(make_factory, monkeypatch):
+    class LargeOutOfTurns(OutOfTurnsOnce):
+        async def __call__(self, spec, *, cwd, resume, emit):
+            await emit("context", {"tokens": 150_000})
+            return await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+
+    monkeypatch.setattr(settings, "resume_max_context_tokens", 60_000)
+    f = make_factory(LargeOutOfTurns())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert f.runner.of("implement")[1]["resume"] == "implement-long"
 
 
 async def test_lean_story_still_continues_a_session_cut_by_the_turn_limit(make_factory):
@@ -752,7 +812,7 @@ async def test_sync_base_hands_merge_conflicts_to_the_implementer(make_factory, 
     resolve = f.runner.of("resolve_conflicts")[0]
     assert resolve["resume"] == "implement-0"
     assert resolve["spec"].metadata["state"] == "resolve_conflicts"
-    assert "You are the implementer" in resolve["prompt"]
+    assert resolve["prompt"].startswith("You are continuing as the implementer")  # its session knows the rest
     assert "conflicts in:\n- hello.txt" in resolve["prompt"] and "Do not abort the merge" in resolve["prompt"]
 
     branch = (await f.item(item_id)).branch

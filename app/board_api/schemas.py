@@ -144,6 +144,13 @@ class RunOut(Orm):
     status: str
     verdict: str | None
     cost_usd: float | None
+    model: str | None = None
+    input_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    output_tokens: int | None = None
+    context_tokens: int | None = None  # what the run's last request read
+    failed_tools: int | None = None  # tool calls that failed: refused commands, errors
     created_at: datetime
     error: str | None = None  # the `error` artifact of a run that ended in the error verdict
 
