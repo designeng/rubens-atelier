@@ -13,6 +13,26 @@ export function formatTokens(n: number): string {
   return n < 1000 ? `${n} tokens` : `${(n / 1000).toFixed(1)}k tokens`;
 }
 
+// 5_520_000 -> "5.5M", 84_000 -> "84k": a compact token count.
+export function compactTokens(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  return `${n}`;
+}
+
+// A run's token usage in one line, e.g. "context 84k · read 2.1M · write 120k · out 30k · 5 failed tool calls";
+// null for a run that recorded none (still running, or from before usage was kept).
+export function runUsage(r: RunOut): string | null {
+  const parts: string[] = [];
+  if (r.context_tokens != null) parts.push(`context ${compactTokens(r.context_tokens)}`);
+  if (r.cache_read_tokens != null) parts.push(`read ${compactTokens(r.cache_read_tokens)}`);
+  if (r.cache_write_tokens) parts.push(`write ${compactTokens(r.cache_write_tokens)}`);
+  if (r.input_tokens) parts.push(`in ${compactTokens(r.input_tokens)}`);
+  if (r.output_tokens != null) parts.push(`out ${compactTokens(r.output_tokens)}`);
+  if (r.failed_tools) parts.push(`${r.failed_tools} failed tool call${r.failed_tools === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
 // p: the item's `progress` from the API (only set while the item is in the working column);
 // paused: the scheduler's queue is paused, so a queued step waits for the operator, not a slot.
 export function progressSummary(p: Progress, now = Date.now(), paused = false): string {

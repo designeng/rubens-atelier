@@ -283,4 +283,18 @@ async def run_codex(spec: TaskCreate, *, cwd: Path, resume: str | None, emit: Em
         num_turns=turns,
         structured_output=structured,
         failure=failure,
+        usage=codex_usage(usage),
     )
+
+
+def codex_usage(usage: dict[str, Any] | None) -> dict[str, int] | None:
+    """Codex's turn usage in the harness's terms: its input count includes the cached part."""
+    if not usage:
+        return None
+    cached = int(usage.get("cached_input_tokens") or 0)
+    return {
+        "input_tokens": max(int(usage.get("input_tokens") or 0) - cached, 0),
+        "cache_read_tokens": cached,
+        "cache_write_tokens": 0,
+        "output_tokens": int(usage.get("output_tokens") or 0),
+    }

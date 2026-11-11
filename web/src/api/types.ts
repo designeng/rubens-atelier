@@ -171,6 +171,14 @@ export interface RunOut {
   status: string;
   verdict: string | null;
   cost_usd: number | null;
+  model?: string | null;
+  // Tokens over the run's API requests; null before the run ends or for runs from before they were kept.
+  input_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  output_tokens?: number | null;
+  context_tokens?: number | null; // what the run's last request read
+  failed_tools?: number | null; // tool calls that failed: refused commands, errors
   created_at: string;
   error: string | null; // the `error` artifact of a run that ended in the error verdict
 }

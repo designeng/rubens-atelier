@@ -19,7 +19,7 @@ from .config import settings
 from .github import GitHub
 from .models import FailureReason, TaskCreate, TaskStatus
 from .providers import run_routed
-from .runner import AgentOutcome, AgentRunner, Emit
+from .runner import AgentOutcome, AgentRunner, Emit, add_usage
 from .scheduler import record_rate_limit
 from .store import TaskStore, describe_tool
 
@@ -95,7 +95,7 @@ async def run_with_verify(
     """Run the agent, then the verify command; on failure resume the same session
     with the output until it passes or attempts run out."""
     outcome = await run_agent(spec, ws.prompt, ws.cwd, ws.resume, runner, emit, store)
-    cost, turns = outcome.cost_usd or 0.0, outcome.num_turns or 0
+    cost, turns, usage = outcome.cost_usd or 0.0, outcome.num_turns or 0, outcome.usage
 
     command = spec.verify_command or (settings.issue_verify_command if spec.issue else None)
     attempts = spec.verify_attempts if spec.verify_attempts is not None else settings.default_verify_attempts
@@ -118,8 +118,9 @@ async def run_with_verify(
         )
         outcome = await run_agent(spec, fix_prompt, ws.cwd, outcome.session_id, runner, emit, store)
         cost, turns = cost + (outcome.cost_usd or 0.0), turns + (outcome.num_turns or 0)
+        usage = add_usage(usage, outcome.usage)
 
-    outcome.cost_usd, outcome.num_turns = cost, turns
+    outcome.cost_usd, outcome.num_turns, outcome.usage = cost, turns, usage
     return outcome
 
 
@@ -179,6 +180,8 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
                     [{"content": t.get("content", ""), "status": t.get("status", "")} for t in data["input"]["todos"]]
                 )
             await store.set_fields(task_id, **fields)
+        if type_ == "tool_result" and data.get("is_error"):
+            await store.incr_field(task_id, "failed_tools")
         if type_ == "verify":
             await store.set_fields(task_id, activity=f"verify: {data['command']} → exit {data['exit_code']}")
         if type_ == "rate_limit":
@@ -229,6 +232,7 @@ async def _run(task_id, spec, ws, store, worker_id, runner, gh, fail) -> None:
             cost_usd=outcome.cost_usd,
             num_turns=outcome.num_turns,
             pr_url=pr_url,
+            usage=json.dumps(outcome.usage) if outcome.usage else None,
         )
         if outcome.is_error:
             await store.set_fields(task_id, **{k: str(v) for k, v in fields.items() if v is not None})

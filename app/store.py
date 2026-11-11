@@ -143,6 +143,9 @@ class TaskStore:
             failure_reason=raw.get("failure_reason"),
             cost_usd=float(raw["cost_usd"]) if raw.get("cost_usd") else None,
             num_turns=int(raw["num_turns"]) if raw.get("num_turns") else None,
+            usage=json.loads(raw["usage"]) if raw.get("usage") else None,
+            context_tokens=int(raw["context_tokens"]) if raw.get("context_tokens") else None,
+            failed_tools=int(raw["failed_tools"]) if raw.get("failed_tools") else None,
             branch=raw.get("branch"),
             pr_url=raw.get("pr_url"),
             metadata=spec.metadata,
@@ -166,6 +169,9 @@ class TaskStore:
 
     async def set_fields(self, task_id: str, **fields: str) -> None:
         await self.r.hset(task_key(task_id), mapping=fields)
+
+    async def incr_field(self, task_id: str, field: str, by: int = 1) -> None:
+        await self.r.hincrby(task_key(task_id), field, by)
 
     async def progress(self, task_id: str) -> dict[str, Any] | None:
         """Live view of a run for the board: turn, context size, current activity, the agent's todo list."""

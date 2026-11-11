@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { RunOut } from "../../api/types";
-import { formatUsd } from "../../format";
+import { formatUsd, runUsage } from "../../format";
 import Icon from "../ui/Icon.vue";
 
 // Each agent step of the story, with a way into its session.
@@ -35,6 +35,9 @@ const emit = defineEmits<{ "toggle-session": [taskId: string] }>();
           </button>
         </div>
         <div v-if="reruns.get(r.id)" class="run-why subtle">ran again after {{ reruns.get(r.id) }}</div>
+        <div v-if="runUsage(r)" class="run-usage subtle" title="Tokens: context of the last request, cache reads and writes, uncached input, output">
+          {{ runUsage(r) }}
+        </div>
         <div v-if="r.error" class="run-error">{{ r.error }}</div>
       </li>
     </ol>
@@ -74,6 +77,11 @@ const emit = defineEmits<{ "toggle-session": [taskId: string] }>();
 }
 .run-why {
   font-size: var(--fs-sm);
+  margin-top: 2px;
+}
+.run-usage {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
   margin-top: 2px;
 }
 .run-error {

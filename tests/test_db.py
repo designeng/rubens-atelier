@@ -52,6 +52,9 @@ def _create_pre_alembic(conn, *, drop: str | None = None) -> None:
     legacy.tables["work_items"]._columns.remove(legacy.tables["work_items"].c.lean_context)  # migration 0004
     legacy.remove(legacy.tables["notes"])  # migration 0005
     legacy.tables["runs"]._columns.remove(legacy.tables["runs"].c.model)  # migration 0006
+    for column in ("input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens", "context_tokens",
+                   "failed_tools"):
+        legacy.tables["runs"]._columns.remove(legacy.tables["runs"].c[column])  # migration 0007
     legacy.create_all(conn)
     if drop:
         conn.execute(text(f"ALTER TABLE work_items DROP COLUMN {drop}"))
