@@ -255,6 +255,12 @@ export interface SchedulerLimits {
   force: boolean;
 }
 
+export interface Health {
+  // null: no worker has reported yet.
+  sandbox: boolean | null;
+  sandbox_detail?: string;
+}
+
 export interface SchedulerStatus {
   capacity: number;
   reason: string;
