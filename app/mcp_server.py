@@ -21,7 +21,10 @@ Manage a software factory where Claude Code agents work on stories: plan, implem
 open a PR, pass CI, merge. A project is a GitHub repo; its stories move through a workflow
 (states plan → implement → sync_base → review → publish → ci → merge → awaiting_merge).
 Start with list_projects, then get_board. Stories waiting for a person show up in get_inbox;
-answer them with answer_request using one of the request's options. Each project keeps a memory of
+answer them with answer_request using one of the request's options. Never wait for a story to be
+merged to start the ones that depend on it: give those `blocked_by` and `auto_start=True` (create_plan,
+create_item, update_item) and they start by themselves once their blockers have succeeded, i.e. once
+the factory sees the PR merged on GitHub. Each project keeps a memory of
 lessons for its agents (list_notes); notes agents propose stay `proposed` until approved."""
 
 # Fields of a board card worth showing a model; the full card is in get_item.
