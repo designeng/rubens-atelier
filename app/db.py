@@ -93,6 +93,8 @@ class WorkItem(Base):
     budget_usd: Mapped[float | None]
     # Ids of items that must succeed before this one can be started.
     blocked_by: Mapped[list[str]] = mapped_column(default=list)
+    # Start by itself from the backlog as soon as every blocker has succeeded (see Engine.start_when_ready).
+    auto_start: Mapped[bool] = mapped_column(default=False)
     # Claude session per role, so a role can resume its own context on the next visit.
     sessions: Mapped[dict[str, Any]] = mapped_column(default=dict)
     # Where the item came from, e.g. {"issue": 42} for a GitHub issue.

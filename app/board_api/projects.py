@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from .. import github_app
 from ..budget import project_spending
 from ..config import settings
-from ..db import HumanRequest, Note, Project, WorkItem
+from ..db import HumanRequest, Note, Project, WorkItem, new_id
 from ..engine import EngineError
 from ..github import GitHub
 from .deps import Db, Eng, _project
@@ -23,7 +23,18 @@ from .helpers import (
     _preload_runs,
     _project_out,
 )
-from .schemas import Column, ImportResult, ItemIn, ItemOut, ProjectIn, ProjectOut, ProjectPatch, RequestOut
+from .schemas import (
+    Column,
+    ImportResult,
+    ItemIn,
+    ItemOut,
+    PlanIn,
+    PlanOut,
+    ProjectIn,
+    ProjectOut,
+    ProjectPatch,
+    RequestOut,
+)
 
 router = APIRouter()
 
@@ -112,25 +123,8 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
     except EngineError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(e)) from None
     async with db.session() as s:
-        if body.parent_id:
-            parent = await s.get(WorkItem, body.parent_id)
-            if parent is None or parent.project_id != project.id:
-                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "parent not found in this project")
-        blocked_by = await _check_blockers(s, None, project.id, body.blocked_by)
-        item = WorkItem(
-            project_id=project.id,
-            parent_id=body.parent_id,
-            kind=body.kind,
-            title=body.title,
-            body=body.body,
-            workflow=body.workflow,
-            priority=body.priority,
-            model=body.model,
-            lean_context=body.lean_context,
-            budget_usd=body.budget_usd,
-            blocked_by=blocked_by,
-            source={"issue": body.issue} if body.issue else {},
-        )
+        await _check_parent(s, project.id, body.parent_id)
+        item = _new_item(project.id, body, await _check_blockers(s, None, project.id, body.blocked_by))
         if body.start and (waiting := await engine.unfinished_blockers(s, item)):
             # Refused before anything is stored, so no half-created item is left behind.
             raise HTTPException(status.HTTP_409_CONFLICT, f"blocked by: {', '.join(waiting)}")
@@ -138,7 +132,108 @@ async def create_item(slug: str, body: ItemIn, db: Db, engine: Eng) -> ItemOut:
         await s.commit()
     if body.start:
         await engine.start(item.id)
+    elif body.auto_start:
+        await engine.start_when_ready([item.id])
     return await _get_item_out(db, engine, item.id)
+
+
+@router.post("/projects/{slug}/plan", status_code=status.HTTP_201_CREATED)
+async def create_plan(slug: str, body: PlanIn, db: Db, engine: Eng) -> PlanOut:
+    """Create an epic (optional) and its items in one go. An item's `blocked_by` names items of the
+    plan by `key`, or existing items of the project by id; items without a `parent_id` go under the
+    epic. All or nothing: a bad reference, a cycle or a `start` that would be refused stores nothing.
+    Items with `auto_start` and no unfinished blockers start right away, the others as their blockers
+    succeed."""
+    project = await _project(db, slug)
+    keys = [i.key for i in body.items]
+    if dupes := sorted({k for k in keys if keys.count(k) > 1}):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"duplicate keys: {', '.join(dupes)}")
+    for spec in body.items:
+        try:
+            engine.workflow(spec.workflow)
+        except EngineError as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{spec.key}: {e}") from None
+    ids = {k: new_id() for k in keys}
+    local = {k: [b for b in dict.fromkeys(spec.blocked_by) if b in ids] for k, spec in zip(keys, body.items)}
+    if cycle := _find_cycle(local):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"blockers form a cycle: {' -> '.join(cycle)}")
+
+    async with db.session() as s:
+        epic = None
+        if body.epic:
+            epic = WorkItem(id=new_id(), project_id=project.id, kind="epic", workflow="story", **body.epic.model_dump())
+            s.add(epic)
+        items: dict[str, WorkItem] = {}
+        for spec in body.items:
+            await _check_parent(s, project.id, spec.parent_id)
+            existing = [b for b in spec.blocked_by if b not in ids]
+            # Existing items never wait for new ones, so they cannot close a cycle through the plan.
+            existing = await _check_blockers(s, None, project.id, existing)
+            item = _new_item(project.id, spec, [ids[b] for b in local[spec.key]] + existing)
+            item.id = ids[spec.key]
+            if item.parent_id is None and epic is not None:
+                item.parent_id = epic.id
+            if spec.start:
+                waiting = [f"{b} (this plan)" for b in local[spec.key]] + await engine.unfinished_blockers(
+                    s, WorkItem(blocked_by=existing)
+                )
+                if waiting:
+                    raise HTTPException(status.HTTP_409_CONFLICT, f"{spec.key}: blocked by: {', '.join(waiting)}")
+            items[spec.key] = item
+        s.add_all(items.values())
+        await s.commit()
+
+    for spec in body.items:
+        if spec.start:
+            await engine.start(ids[spec.key])
+    await engine.start_when_ready(ids[spec.key] for spec in body.items if spec.auto_start and not spec.start)
+    return PlanOut(
+        epic=await _get_item_out(db, engine, epic.id) if epic else None,
+        items={k: await _get_item_out(db, engine, ids[k]) for k in keys},
+    )
+
+
+def _find_cycle(graph: dict[str, list[str]]) -> list[str] | None:
+    """A cycle of `graph` (node -> the nodes it waits for) as a path that ends where it starts, or None."""
+    done: set[str] = set()
+
+    def visit(node: str, path: list[str]) -> list[str] | None:
+        if node in path:
+            return path[path.index(node):] + [node]
+        if node in done:
+            return None
+        for nxt in graph[node]:
+            if cycle := visit(nxt, [*path, node]):
+                return cycle
+        done.add(node)
+        return None
+
+    return next(filter(None, (visit(node, []) for node in graph)), None)
+
+
+async def _check_parent(s, project_id: str, parent_id: str | None) -> None:
+    if parent_id:
+        parent = await s.get(WorkItem, parent_id)
+        if parent is None or parent.project_id != project_id:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "parent not found in this project")
+
+
+def _new_item(project_id: str, body: ItemIn, blocked_by: list[str]) -> WorkItem:
+    return WorkItem(
+        project_id=project_id,
+        parent_id=body.parent_id,
+        kind=body.kind,
+        title=body.title,
+        body=body.body,
+        workflow=body.workflow,
+        priority=body.priority,
+        model=body.model,
+        lean_context=body.lean_context,
+        budget_usd=body.budget_usd,
+        blocked_by=blocked_by,
+        auto_start=body.auto_start,
+        source={"issue": body.issue} if body.issue else {},
+    )
 
 
 # Issue authors whose text is trusted; anyone else (or an unknown association) is "external".

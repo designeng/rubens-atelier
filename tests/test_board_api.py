@@ -552,6 +552,96 @@ def test_blocked_by_validation_and_patch(client):
     assert client.post(f"/items/{a['id']}/start").status_code == 202
 
 
+def test_auto_start_item_starts_once_its_blockers_succeed(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    first = client.post("/projects/app/items", json={"title": "First"}).json()
+    other = client.post("/projects/app/items", json={"title": "Other"}).json()
+    blockers = [first["id"], other["id"]]
+    second = client.post(
+        "/projects/app/items", json={"title": "Second", "blocked_by": blockers, "auto_start": True}
+    ).json()
+    manual = client.post("/projects/app/items", json={"title": "Manual", "blocked_by": [first["id"]]}).json()
+    assert second["auto_start"] is True and second["column"] == "backlog"
+
+    for item in (first, other):
+        client.post(f"/items/{item['id']}/start")
+    _finish(client, first["id"])
+    # One of two blockers done: still waiting; the dependent without auto_start only becomes ready.
+    assert client.get(f"/items/{second['id']}").json()["state"] is None
+    assert client.get(f"/items/{manual['id']}").json()["ready"] is True
+
+    _finish(client, other["id"])
+    second = client.get(f"/items/{second['id']}").json()
+    assert second["state"] == "plan" and second["column"] == "working"
+    (event,) = client.get(f"/items/{second['id']}").json()["events"]
+    assert event["actor"] == "engine"
+    assert client.get(f"/items/{manual['id']}").json()["state"] is None
+
+
+def test_auto_start_with_nothing_to_wait_for_starts_at_once(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    assert client.post("/projects/app/items", json={"title": "Free", "auto_start": True}).json()["state"] == "plan"
+
+    first = client.post("/projects/app/items", json={"title": "First"}).json()
+    second = client.post("/projects/app/items", json={"title": "Second", "blocked_by": [first["id"]]}).json()
+    assert client.patch(f"/items/{second['id']}", json={"auto_start": True}).json()["state"] is None
+    assert client.patch(f"/items/{second['id']}", json={"auto_start": None}).status_code == 422
+    # Dropping the last unfinished blocker of an auto_start item starts it.
+    assert client.patch(f"/items/{second['id']}", json={"blocked_by": []}).json()["state"] == "plan"
+
+
+def test_plan_creates_epic_and_items_with_local_blockers(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    old = client.post("/projects/app/items", json={"title": "Old"}).json()
+    r = client.post("/projects/app/plan", json={
+        "epic": {"title": "Login", "budget_usd": 10},
+        "items": [
+            {"key": "db", "title": "Schema", "start": True},
+            {"key": "api", "title": "API", "blocked_by": ["db"], "auto_start": True},
+            {"key": "ui", "title": "UI", "blocked_by": ["api", old["id"]], "auto_start": True, "priority": 10},
+            {"key": "free", "title": "Docs", "auto_start": True},
+        ],
+    })
+    assert r.status_code == 201, r.text
+    plan = r.json()
+    epic, items = plan["epic"], plan["items"]
+    assert epic["kind"] == "epic" and epic["budget_usd"] == 10 and epic["state"] is None
+    assert all(i["parent_id"] == epic["id"] for i in items.values())
+    assert items["api"]["blocked_by"] == [items["db"]["id"]]
+    assert items["ui"]["blocked_by"] == [items["api"]["id"], old["id"]] and items["ui"]["priority"] == 10
+    assert {k: i["state"] for k, i in items.items()} == {"db": "plan", "api": None, "ui": None, "free": "plan"}
+
+    _finish(client, items["db"]["id"])
+    assert client.get(f"/items/{items['api']['id']}").json()["state"] == "plan"
+    assert client.get(f"/items/{items['ui']['id']}").json()["state"] is None
+
+
+def test_plan_is_all_or_nothing(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    client.post("/projects", json={"slug": "other", "repo": "acme/other"})
+    foreign = client.post("/projects/other/items", json={"title": "Foreign"}).json()
+
+    def plan(*items, epic=None):
+        return client.post("/projects/app/plan", json={"epic": epic, "items": list(items)})
+
+    r = plan({"key": "a", "title": "A", "blocked_by": ["b"]}, {"key": "b", "title": "B", "blocked_by": ["a"]})
+    assert r.status_code == 422 and "a -> b -> a" in r.json()["detail"]
+    assert plan({"key": "a", "title": "A", "blocked_by": ["a"]}).status_code == 422
+    assert plan({"key": "a", "title": "A"}, {"key": "a", "title": "A2"}).status_code == 422
+    assert plan({"key": "a", "title": "A", "blocked_by": ["typo"]}).status_code == 422
+    assert plan({"key": "a", "title": "A", "blocked_by": [foreign["id"]]}).status_code == 422
+    assert plan({"key": "a", "title": "A", "parent_id": foreign["id"]}).status_code == 422
+    assert plan({"key": "a", "title": "A", "workflow": "nope"}).status_code == 422
+    assert plan({"key": "bad key", "title": "A"}).status_code == 422
+    r = plan({"key": "a", "title": "A"}, {"key": "b", "title": "B", "blocked_by": ["a"], "start": True},
+             epic={"title": "E"})
+    assert r.status_code == 409 and "b: blocked by: a" in r.json()["detail"]
+
+    board = client.get("/projects/app/board").json()
+    assert board["backlog"] == [] and board["working"] == []
+    assert client.enqueued == []
+
+
 def test_scheduler_reports_live_workers(client, redis):
     import asyncio
     import json
