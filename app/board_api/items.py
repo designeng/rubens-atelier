@@ -60,7 +60,7 @@ async def update_item(item_id: str, body: ItemPatch, db: Db, engine: Eng) -> Ite
             raise HTTPException(status.HTTP_404_NOT_FOUND, "item not found")
         old_priority = item.priority
         for field, value in body.model_dump(exclude_unset=True).items():
-            if value is None and field in ("title", "body", "priority", "blocked_by"):
+            if value is None and field in ("title", "body", "priority", "blocked_by", "auto_start"):
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"{field} cannot be null")
             if field == "blocked_by":
                 value = await _check_blockers(s, item.id, item.project_id, value)
@@ -68,7 +68,11 @@ async def update_item(item_id: str, body: ItemPatch, db: Db, engine: Eng) -> Ite
         await s.commit()
         if engine.scheduler and item.priority != old_priority:
             await engine.scheduler.reprioritize(item.id, item.version, old_priority, item.priority)
-        return await _item_with_progress(engine, s, item)
+        if not (item.auto_start and item.state is None):
+            return await _item_with_progress(engine, s, item)
+    # Turning auto_start on, or dropping the last unfinished blocker, starts the item now.
+    await engine.start_when_ready([item_id])
+    return await _get_item_out(db, engine, item_id)
 
 
 @router.get("/items/{item_id}/git")

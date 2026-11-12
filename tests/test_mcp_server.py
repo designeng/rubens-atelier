@@ -65,6 +65,18 @@ async def test_story_from_creation_to_inbox_answer(tools, client):
     assert "state" not in reopened
 
 
+async def test_create_plan(tools):
+    await tools("create_project", slug="app", repo="acme/app")
+    plan = await tools(
+        "create_plan", project="app", epic={"title": "Login"},
+        items=[{"key": "a", "title": "A", "auto_start": True},
+               {"key": "b", "title": "B", "blocked_by": ["a"], "auto_start": True}],
+    )
+    assert plan["epic"]["kind"] == "epic"
+    assert plan["items"]["a"]["state"] == "plan" and "state" not in plan["items"]["b"]
+    assert plan["items"]["b"]["auto_start"] is True and plan["items"]["b"]["blocked"]
+
+
 async def test_comment_item_reaches_the_story_and_shows_as_waiting(tools):
     await tools("create_project", slug="app", repo="acme/app")
     item = await tools("create_item", project="app", title="T", start=True)

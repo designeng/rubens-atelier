@@ -7,7 +7,7 @@ A thin client of the HTTP API (HARNESS_API_URL, bearer HARNESS_API_TOKEN), so it
     claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
 """
 
-from typing import Any, Literal
+from typing import Any, Literal, Required, TypedDict
 
 import httpx
 from mcp.server.mcpserver import MCPServer
@@ -27,7 +27,7 @@ lessons for its agents (list_notes); notes agents propose stay `proposed` until 
 # Fields of a board card worth showing a model; the full card is in get_item.
 CARD_FIELDS = (
     "id", "kind", "title", "state", "priority", "model", "pr_url", "spent_usd", "budget_usd",
-    "blocked", "ready", "attention", "progress",
+    "blocked", "ready", "auto_start", "attention", "progress",
 )
 EVENT_TEXT_LIMIT = 2000
 
@@ -189,16 +189,56 @@ async def create_item(
     budget_usd: float | None = None,
     blocked_by: list[str] = [],
     start: bool = False,
+    auto_start: bool = False,
 ) -> dict:
     """Create a story in the backlog; `start=True` also starts it. `priority` is -100..100 (Low -10,
     Normal 0, High 10, Urgent 50). `issue` links a GitHub issue the PR will close. `blocked_by`
-    lists story ids of the same project that must succeed first."""
+    lists story ids of the same project that must succeed first. `auto_start=True` starts the story
+    by itself as soon as all of them have succeeded (right away if they already have).
+    For several stories that depend on each other, use create_plan."""
     payload = {
         "title": title, "body": body, "kind": kind, "priority": priority, "parent_id": parent_id,
         "issue": issue, "model": model, "lean_context": lean_context, "budget_usd": budget_usd,
-        "blocked_by": blocked_by, "start": start,
+        "blocked_by": blocked_by, "start": start, "auto_start": auto_start,
     }
     return _card(await _call("POST", f"/projects/{project}/items", json=payload))
+
+
+class PlanEpic(TypedDict, total=False):
+    title: Required[str]
+    body: str
+    priority: int
+    model: str
+    lean_context: bool
+    budget_usd: float
+
+
+class PlanItem(TypedDict, total=False):
+    key: Required[str]
+    title: Required[str]
+    body: str
+    kind: Literal["story", "task"]
+    priority: int
+    parent_id: str
+    issue: int
+    model: str
+    lean_context: bool
+    budget_usd: float
+    blocked_by: list[str]
+    start: bool
+    auto_start: bool
+
+
+@mcp.tool(annotations=WRITE)
+async def create_plan(project: str, items: list[PlanItem], epic: PlanEpic | None = None) -> dict:
+    """Create an epic (optional) and its stories in one call, all or nothing. Each item has a `key`
+    of your choosing (letters, digits, `_.-`); its `blocked_by` names other items of the plan by key,
+    or existing stories by id. Items go under the epic unless they set `parent_id`. Other fields are as
+    in create_item: `auto_start=True` makes an item start by itself once its blockers have succeeded,
+    so a whole chain runs without further calls. Returns the epic and the stories by key."""
+    out = await _call("POST", f"/projects/{project}/plan", json={"epic": epic, "items": items})
+    return {"epic": _card(out["epic"]) if out["epic"] else None,
+            "items": {k: _card(v) for k, v in out["items"].items()}}
 
 
 @mcp.tool(annotations=WRITE)
@@ -211,12 +251,14 @@ async def update_item(
     lean_context: bool | None = None,
     budget_usd: float | None = None,
     blocked_by: list[str] | None = None,
+    auto_start: bool | None = None,
     clear: list[Literal["model", "lean_context", "budget_usd"]] = [],
 ) -> dict:
     """Edit a story; omitted fields stay. List fields in `clear` to go back to the default.
-    A running story picks up the changes from its next agent step."""
+    A running story picks up the changes from its next agent step. `auto_start=True` on a backlog
+    story starts it once its blockers have succeeded (right away if they already have)."""
     fields = {"title": title, "body": body, "priority": priority, "model": model, "lean_context": lean_context,
-              "budget_usd": budget_usd, "blocked_by": blocked_by}
+              "budget_usd": budget_usd, "blocked_by": blocked_by, "auto_start": auto_start}
     return _card(await _call("PATCH", f"/items/{item_id}", json=_patch(fields, clear)))
 
 
@@ -224,7 +266,8 @@ async def update_item(
 async def item_action(item_id: str, action: Literal["start", "run-now", "cancel", "reopen", "open-pr"]) -> dict:
     """Move a story:
     - start: begin the workflow of a backlog story (refused while its blockers have not succeeded, and
-      for a story imported from an outside author's issue, which a person must confirm on the board);
+      for a story imported from an outside author's issue, which a person must confirm on the board;
+      to start it once the blockers succeed, set `auto_start` with update_item);
     - run-now: hand its waiting agent step a slot now, even if the scheduler is paused or full;
     - cancel: stop it (a running agent stops within seconds);
     - reopen: return a failed or cancelled story to the backlog;

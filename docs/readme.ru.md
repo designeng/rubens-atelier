@@ -130,12 +130,13 @@ Agent-прогон, закончившийся без результата, от
 |---|---|---|
 | `POST` | `/projects` | `{slug, repo, base_branch?, verify_command?, auto_merge?, budget_usd?}` |
 | `PATCH` | `/projects/{slug}` | `{base_branch?, verify_command?, auto_merge?, budget_usd?}`; `null` очищает значение; `slug`, `repo` и `installation_id` менять нельзя |
-| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, budget_usd?, priority?, blocked_by?, start?}`. `priority` (-100..100, по умолчанию 0) — срочность из диалога «New story» (Low -10, Normal 0, High 10, Urgent 50): среди шагов, ждущих слот, больший идёт первым; работающих агентов не вытесняет, лимиты проекта действуют. `blocked_by` — до 20 элементов того же проекта, которые должны успешно завершиться до старта этого (иначе `start` отвечает 409 с их именами; упавший или отменённый блокер продолжает блокировать, пока его не переоткроют и он не завершится успешно, или пока его не уберут из списка; цикл — 422). Зависимые элементы сами не стартуют; когда все блокеры завершились успешно, борд помечает их `ready` (бейдж READY) |
+| `POST` | `/projects/{slug}/items` | `{title, body, kind?, workflow?, parent_id?, issue?, budget_usd?, priority?, blocked_by?, start?, auto_start?}`. `priority` (-100..100, по умолчанию 0) — срочность из диалога «New story» (Low -10, Normal 0, High 10, Urgent 50): среди шагов, ждущих слот, больший идёт первым; работающих агентов не вытесняет, лимиты проекта действуют. `blocked_by` — до 20 элементов того же проекта, которые должны успешно завершиться до старта этого (иначе `start` отвечает 409 с их именами; упавший или отменённый блокер продолжает блокировать, пока его не переоткроют и он не завершится успешно, или пока его не уберут из списка; цикл — 422). Зависимый элемент с `auto_start` стартует сам, как только все блокеры завершились успешно (сразу, если уже завершились); остальные остаются в backlog, и борд помечает их `ready` (бейдж READY) |
+| `POST` | `/projects/{slug}/plan` | `{epic?: {title, body?, priority?, model?, lean_context?, budget_usd?}, items: [{key, …поля выше}]}` создаёт эпик и до 100 элементов разом, всё или ничего. `blocked_by` элемента ссылается на элементы плана по `key` или на существующие по id; элементы без `parent_id` попадают в эпик. Цикл или неизвестная ссылка — 422, `start` у элемента с незавершёнными блокерами — 409. Ответ `{epic, items: {key: item}}` |
 | `POST` | `/projects/{slug}/import-issues` | Кладёт открытые GitHub issues репозитория (без PR, до 1000) в backlog историями, привязанными к своему issue, так что PR его закроет; ничего не запускается. Issue, у которого уже есть элемент в любом состоянии, пропускается. Issue автора, который не OWNER, MEMBER или COLLABORATOR репозитория (или с неизвестной ролью), импортируется с пометкой `external`: его текст недоверенный, на доске виден бейдж «External author», а запуск отвечает 409, пока не подтверждён через `?confirm_external=true` (доска спрашивает в диалоге). Истории, импортированные до появления пометки, не помечаются. Возвращает `{imported, skipped}`; его вызывает кнопка «Import issues» на доске |
 | `GET` | `/projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed. В done лежат `done_limit` последних по `updated_at` элементов (параметр запроса, по умолчанию 50, максимум 500); общее число приходит в заголовке `X-Done-Total`, а число предложенных агентами заметок, ждущих проверки, — в `X-Proposed-Notes` |
 | `GET` | `/projects/{slug}/inbox` | Открытые запросы к человеку |
 | `GET` | `/items/{id}` | Item, история переходов, запуски, артефакты, открытый запрос |
-| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?, budget_usd?, blocked_by?}`, также в борде (**Edit**; модель — через выбор **Model**, он сохраняет сразу). Шаг, ждущий слот, стартует уже с изменениями, работающий подхватит их со следующего agent-шага; новый priority сразу переставляет его в очереди |
+| `PATCH` | `/items/{id}` | `{title?, body?, priority?, model?, budget_usd?, blocked_by?, auto_start?}`, также в борде (**Edit**; модель — через выбор **Model**, он сохраняет сразу). Шаг, ждущий слот, стартует уже с изменениями, работающий подхватит их со следующего agent-шага; новый priority сразу переставляет его в очереди |
 | `GET` | `/models` | Модели для выбора в борде (`HARNESS_MODELS`) и `HARNESS_DEFAULT_MODEL` |
 | `POST` | `/items/{id}/start`, `/items/{id}/cancel` | |
 | `POST` | `/items/{id}/exec` + `GET /items/{id}/exec/{exec_id}` | Выполнить shell-команду в рабочей копии задачи (терминал доски; в панели истории есть блок Terminal, если у неё есть ветка). По умолчанию выключено: нужны `HARNESS_TERMINAL_ENABLED=true` и `HARNESS_API_TOKEN`; отказ, пока там работает агент; выполняется на воркере без `HARNESS_*` в окружении, убивается через `HARNESS_TERMINAL_TIMEOUT_SECONDS` |
@@ -218,7 +219,7 @@ Push идёт в ветку с PR, а не в `main`: production-готовно�
 
 Вместо одного PAT проект может работать через GitHub App: доступ только к репозиториям, выбранным при установке, и токены на 1 час.
 
-1. Создайте App на github.com/settings/apps/new: права Contents, Issues, Pull requests (read/write), Checks и Actions (read), доступ «Only on this account». В Setup URL укажите `<host>/board` и включите «Redirect on update».
+1. Создайте App на github.com/settings/apps/new: права Contents, Issues, Pull requests (read/write), Checks, Commit statuses и Actions (read), доступ «Only on this account». В Setup URL укажите `<host>/board` и включите «Redirect on update».
 2. Сгенерируйте private key и задайте `HARNESS_GITHUB_APP_ID`, `HARNESS_GITHUB_APP_SLUG`, `HARNESS_GITHUB_APP_PRIVATE_KEY` (или `_FILE`).
 3. На доске откройте меню проекта → «New project…», затем «Install the app or change repositories». После установки нажмите «Refresh», выберите установку и репозиторий.
 
@@ -230,7 +231,7 @@ Push идёт в ветку с PR, а не в `main`: production-готовно�
 
 1. Придумайте случайный секрет (`openssl rand -hex 32`) и задайте `HARNESS_GITHUB_WEBHOOK_SECRET`.
 2. Payload URL `<host>/github/webhook`, content type `application/json`, тот же секрет. События: Check runs, Check suites, Statuses, Pull requests.
-   - GitHub App: настройки App → Webhook (Active). Для Statuses нужно дополнительное право «Commit statuses: read».
+   - GitHub App: настройки App → Webhook (Active). Для Statuses нужно право «Commit statuses: read» (см. настройку App выше).
    - PAT: Settings → Webhooks репозитория.
 3. Перезапустите beat: опрос становится запасным, раз в `HARNESS_CHECKS_FALLBACK_POLL_SECONDS` (по умолчанию 300 с), — на случай потерянных доставок и для `no_checks`/`timeout`, которые поэтому срабатывают с опозданием до этого интервала.
 

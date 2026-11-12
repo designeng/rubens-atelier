@@ -9,13 +9,15 @@
 API должен быть запущен (`make dev` или `docker compose up`).
 
 ```bash
-claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+claude mcp add -s user factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
 ```
+
+`-s user` делает сервер доступным в сессиях любого проекта; без него Claude Code запоминает сервер только для текущей папки. `--directory` указывает на эту репу, поэтому команда работает откуда угодно.
 
 Удалённый harness:
 
 ```bash
-claude mcp add factory \
+claude mcp add -s user factory \
   -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… \
   -- uv run --directory /path/to/agent-harness python -m app.mcp_server
 ```
@@ -53,8 +55,9 @@ R — только чтение, W — меняет состояние, D — н
 | `get_board` | R | `GET /projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed с сокращёнными карточками; `done_limit` (по умолчанию 20), `done_total` и `proposed_notes` (заметки, ждущие проверки) |
 | `get_inbox` | R | `GET /projects/{slug}/inbox` | Открытые запросы к человеку, старые первыми |
 | `get_item` | R | `GET /items/{id}` | История целиком: тело, переходы, runs (с `task_id`), артефакты, открытый запрос. Артефакты — только последняя версия каждого, все — с `all_artifacts=true` |
-| `create_item` | W | `POST /projects/{slug}/items` | `title`, `body`, `kind`, `priority` (-100..100), `parent_id`, `issue`, `model`, `lean_context`, `budget_usd`, `blocked_by`; `start=true` сразу запускает |
-| `update_item` | W | `PATCH /items/{id}` | Переданные поля меняются; `clear` (`model`, `lean_context`, `budget_usd`) возвращает к умолчанию. Пустой вызов — ошибка «nothing to change» |
+| `create_item` | W | `POST /projects/{slug}/items` | `title`, `body`, `kind`, `priority` (-100..100), `parent_id`, `issue`, `model`, `lean_context`, `budget_usd`, `blocked_by`; `start=true` сразу запускает, `auto_start=true` запускает, как только все блокеры завершатся успешно |
+| `create_plan` | W | `POST /projects/{slug}/plan` | Эпик (необязательно) и его истории одним вызовом, всё или ничего. У каждой истории свой `key`, в `blocked_by` — ключи историй плана или id существующих. Истории без `parent_id` попадают в эпик. С `auto_start` цепочка идёт сама |
+| `update_item` | W | `PATCH /items/{id}` | Переданные поля меняются (включая `auto_start`); `clear` (`model`, `lean_context`, `budget_usd`) возвращает к умолчанию. Пустой вызов — ошибка «nothing to change» |
 | `item_action` | W | `POST /items/{id}/{action}` | `start`, `run-now`, `cancel`, `reopen`, `open-pr` |
 | `delete_item` | D | `DELETE /items/{id}` | Удаляет упавшую или отменённую историю со всей историей |
 | `comment_item` | W | `POST /items/{id}/comments` | Комментарий к агентскому шагу: прогон доходит до конца, затем та же роль возобновляет сессию и получает комментарий до перехода дальше. Дополнительный прогон идёт в бюджет, но не в `max_visits` |

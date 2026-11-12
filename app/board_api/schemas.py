@@ -10,6 +10,7 @@ Kind = Literal["epic", "story", "task"]
 Column = Literal["backlog", "working", "needs_human", "done", "failed"]
 
 MAX_BLOCKERS = 20
+MAX_PLAN_ITEMS = 100
 
 
 class Orm(BaseModel):
@@ -68,7 +69,40 @@ class ItemIn(BaseModel):
     blocked_by: list[str] = Field(
         default_factory=list, max_length=MAX_BLOCKERS, description="Items that must succeed first"
     )
-    start: bool = False
+    start: bool = Field(default=False, description="Start now; refused while a blocker has not succeeded")
+    auto_start: bool = Field(default=False, description="Start by itself once every blocker has succeeded")
+
+
+class EpicIn(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    body: str = ""
+    priority: int = Field(default=0, ge=-100, le=100)
+    model: ModelName | None = None
+    lean_context: bool | None = None
+    budget_usd: float | None = Field(default=None, gt=0, description="Most its stories may cost together")
+
+
+class PlanItemIn(ItemIn):
+    key: str = Field(
+        pattern=r"^[\w.-]{1,64}$", description="The item's name within the plan, for blocked_by of other items"
+    )
+    blocked_by: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_BLOCKERS,
+        description="Keys of items of this plan, or ids of existing items, that must succeed first",
+    )
+
+
+class PlanIn(BaseModel):
+    """An epic (optional) and its items, created at once: blocked_by may name items of the same plan by key."""
+
+    epic: EpicIn | None = None
+    items: list[PlanItemIn] = Field(min_length=1, max_length=MAX_PLAN_ITEMS)
+
+
+class PlanOut(BaseModel):
+    epic: "ItemOut | None"
+    items: dict[str, "ItemOut"] = Field(description="By key")
 
 
 class ItemPatch(BaseModel):
@@ -85,6 +119,7 @@ class ItemPatch(BaseModel):
     title: str = Field(default=None, min_length=1, max_length=300)
     body: str = Field(default=None)
     blocked_by: list[str] = Field(default=None, max_length=MAX_BLOCKERS)
+    auto_start: bool = Field(default=None, description="Start by itself once every blocker has succeeded")
 
 
 class ItemOut(Orm):
@@ -105,6 +140,7 @@ class ItemOut(Orm):
     # What the item's runs and its descendants' runs have cost so far.
     spent_usd: float = 0.0
     blocked_by: list[str] = []
+    auto_start: bool = False
     updated_at: datetime
     column: Column = "backlog"
     # GitHub issue the story came from or should close (item.source["issue"]).

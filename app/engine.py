@@ -333,7 +333,44 @@ class Engine:
         elif st.terminal == "succeeded":
             # The work is merged. Failed and cancelled items keep their workspace: reopen reuses it.
             await self._cleanup(item.id)
+            await self._start_dependents(item)
         return True
+
+    async def start_when_ready(self, item_ids: Iterable[str]) -> list[str]:
+        """Start those of the items that are in the backlog with `auto_start` on and whose blockers
+        have all succeeded; the ids of the ones started. An item that cannot start (an outsider's
+        story awaiting confirmation, or one another caller started first) is left as it is."""
+        started = []
+        for item_id in item_ids:
+            async with self.db.session() as s:
+                item = await s.get(WorkItem, item_id)
+                if item is None or item.state is not None or not item.auto_start:
+                    continue
+                if await self.unfinished_blockers(s, item):
+                    continue
+            try:
+                if await self.start(item_id, actor="engine"):
+                    started.append(item_id)
+            except EngineError as e:
+                log.info("item %s did not start by itself: %s", item_id, e)
+        return started
+
+    async def _start_dependents(self, item: WorkItem) -> None:
+        """The blocker `item` succeeded: start its dependents that wait for it with `auto_start`."""
+        try:
+            async with self.db.session() as s:
+                # Filtered in Python: JSON queries differ between SQLite and Postgres, and projects are small.
+                rows = await s.execute(
+                    select(WorkItem.id, WorkItem.blocked_by).where(
+                        WorkItem.project_id == item.project_id, WorkItem.state.is_(None), WorkItem.auto_start
+                    )
+                )
+                waiting = [r.id for r in rows if item.id in (r.blocked_by or [])]
+            if started := await self.start_when_ready(waiting):
+                log.info("item %s succeeded, started %s", item.id, ", ".join(started))
+        except Exception:
+            # The blocker's own transition is committed; a dependent can still be started by hand.
+            log.exception("could not start the dependents of item %s", item.id)
 
     async def is_succeeded(self, item_id: str) -> bool:
         async with self.db.session() as s:
