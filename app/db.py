@@ -84,6 +84,8 @@ class WorkItem(Base):
     base_branch: Mapped[str | None] = mapped_column(String(200))
     pr_url: Mapped[str | None] = mapped_column(String(500))
     head_sha: Mapped[str | None] = mapped_column(String(40))  # last pushed commit, for CI checks
+    # Whether GitHub says the PR conflicts with its base, as of the last poll; None = unknown or no PR.
+    pr_conflicts: Mapped[bool | None]
     priority: Mapped[int] = mapped_column(default=0)  # higher runs first
     # Model for every agent step of this item; None = the workflow state's or the default model.
     model: Mapped[str | None] = mapped_column(String(100))

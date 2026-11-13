@@ -133,6 +133,7 @@ class ItemOut(Orm):
     version: int
     branch: str | None
     pr_url: str | None
+    pr_conflicts: bool | None = None
     priority: int
     model: str | None
     lean_context: bool | None = None

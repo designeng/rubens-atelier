@@ -7,7 +7,7 @@ from sqlalchemy import event, select, update
 
 from app import steps
 from app.archive import archive_task
-from app.board_api.helpers import _column
+from app.board_api.helpers import _column, _item_out
 from app.checks import poll_checks
 from app.config import settings
 from app.db import Artifact, HumanRequest, ItemEvent, Note, Project, Run, TaskTranscript, WorkItem, utcnow
@@ -1305,3 +1305,33 @@ async def test_comments_are_refused_outside_agent_steps(make_factory):
     await f.drain()
     with pytest.raises(EngineError, match="no agent step"):
         await f.engine.comment(item_id, "too late")  # awaiting_merge: the inbox request takes comments
+
+
+@pytest.mark.parametrize("mergeable, expected", [(False, True), (True, False), (None, None)])
+async def test_board_learns_of_a_pr_conflict_while_ci_is_pending(make_factory, mergeable, expected):
+    f = make_factory(ScriptedRunner())
+    f.gh.checks[0].update(status="in_progress", conclusion=None)
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    assert (await f.item(item_id)).state == "ci"
+    assert (await f.item(item_id)).pr_conflicts is None
+
+    f.gh.pr_state["mergeable"] = mergeable
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == []
+
+    item = await f.item(item_id)
+    assert item.pr_conflicts is expected
+    assert _item_out(f.engine, item).pr_conflicts is expected
+
+
+async def test_pr_conflict_is_noted_while_awaiting_merge(make_factory, origin):
+    f = make_factory(ScriptedRunner())
+    f.gh.merge_refusal = 405
+    item_id = await f.new_item(auto_merge=False)
+    await f.engine.start(item_id)
+    await f.drain()
+    f.gh.pr_state["mergeable"] = False
+
+    assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == []
+    assert (await f.item(item_id)).pr_conflicts is True

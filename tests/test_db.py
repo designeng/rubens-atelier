@@ -56,6 +56,7 @@ def _create_pre_alembic(conn, *, drop: str | None = None) -> None:
                    "failed_tools"):
         legacy.tables["runs"]._columns.remove(legacy.tables["runs"].c[column])  # migration 0007
     legacy.tables["work_items"]._columns.remove(legacy.tables["work_items"].c.auto_start)  # migration 0008
+    legacy.tables["work_items"]._columns.remove(legacy.tables["work_items"].c.pr_conflicts)  # migration 0009
     legacy.create_all(conn)
     if drop:
         conn.execute(text(f"ALTER TABLE work_items DROP COLUMN {drop}"))

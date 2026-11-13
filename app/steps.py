@@ -355,7 +355,7 @@ async def _action(item, project, st: State, cwd, engine, gh) -> str:
     verdict = await action(ctx)
     async with engine.db.session() as s:
         await s.execute(
-            update(WorkItem).where(WorkItem.id == item.id).values(pr_url=item.pr_url, head_sha=item.head_sha)
+            update(WorkItem).where(WorkItem.id == item.id).values(pr_url=item.pr_url, head_sha=item.head_sha, pr_conflicts=None)
         )
         if ctx.report:
             s.add(Artifact(item_id=item.id, name=st.action, content=ctx.report))

@@ -54,6 +54,9 @@ const urgency = computed(() => (props.item.priority > 0 ? urgencyLabel(props.ite
       >
         <Icon name="pr" :size="13" /> PR
       </a>
+      <span v-if="item.pr_url && item.pr_conflicts" class="chip warn" title="GitHub reports conflicts between the PR and its base branch">
+        Needs conflict resolution
+      </span>
     </div>
     <ProgressBlock v-if="item.progress" :progress="item.progress" :paused="b.isPaused()" />
     <button

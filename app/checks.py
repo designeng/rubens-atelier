@@ -15,7 +15,7 @@ import re
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from .db import Artifact, Project, WorkItem, aware, utcnow
 from .engine import Engine
@@ -37,6 +37,9 @@ class CheckContext:
     item: WorkItem
     state: State
     waited: float  # seconds since the item entered the state
+    # Set by a check that looked at the PR: does GitHub report conflicts with the base (None = not known yet)?
+    pr_conflicts: bool | None = None
+    pr_seen: bool = False
 
 
 @dataclass
@@ -82,10 +85,31 @@ async def ci(ctx: CheckContext) -> tuple[str | None, str]:
     if not results:
         if ctx.waited >= ctx.state.grace_seconds:
             return "no_checks", f"No CI checks reported on {sha[:12]}."
+        await _look_at_pr(ctx)
         return None, ""
     if all(r.done for r in results):
         return "passed", f"CI passed on {sha[:12]}: " + ", ".join(r.name for r in results)
+    await _look_at_pr(ctx)
     return None, ""
+
+
+async def _look_at_pr(ctx: CheckContext) -> None:
+    """While the item waits, note whether its PR conflicts with the base, for the board. Best effort:
+    CI's own verdict never depends on it."""
+    match = re.search(r"/pull/(\d+)", ctx.item.pr_url or "")
+    if not match:
+        return
+    try:
+        pr = await ctx.gh.get_pr(ctx.project.repo, int(match[1]))
+    except Exception:
+        log.warning("could not read PR %s of item %s", match[1], ctx.item.id, exc_info=True)
+        return
+    ctx.pr_seen, ctx.pr_conflicts = True, _conflicts(pr)
+
+
+def _conflicts(pr: dict) -> bool | None:
+    """`mergeable` is None while GitHub is still computing it."""
+    return None if pr.get("mergeable") is None else pr["mergeable"] is False
 
 
 async def _describe(gh: GitHub, repo: str, sha: str, failed: list[Result]) -> str:
@@ -113,6 +137,7 @@ async def merge(ctx: CheckContext) -> tuple[str | None, str]:
         return "merged", f"PR #{pr['number']} was merged on GitHub."
     if pr.get("state") == "closed":
         return "abandon", f"PR #{pr['number']} was closed on GitHub without merging."
+    ctx.pr_seen, ctx.pr_conflicts = True, _conflicts(pr)
     if ctx.project.auto_merge and pr.get("mergeable") is False:
         return "update", f"PR #{pr['number']} conflicts with {ctx.item.base_branch}."
     return None, ""
@@ -131,6 +156,12 @@ async def celery_enqueue(item_ids: list[str]) -> None:
 def watched_states(engine: Engine) -> set[str]:
     """Names of the states whose items `poll_checks` evaluates."""
     return {n for wf in engine.workflows.values() for n, st in wf.states.items() if st.check or st.watch}
+
+
+async def _save_pr_conflicts(engine: Engine, item_id: str, value: bool | None) -> None:
+    async with engine.db.session() as s:
+        await s.execute(update(WorkItem).where(WorkItem.id == item_id).values(pr_conflicts=value))
+        await s.commit()
 
 
 async def poll_checks(
@@ -173,6 +204,8 @@ async def poll_checks(
                         clients[project.installation_id] = github_factory(project)
                     context = CheckContext(clients[project.installation_id], project, item, st, waited)
                     verdict, details = await check(context)
+                    if context.pr_seen and context.pr_conflicts != item.pr_conflicts:
+                        await _save_pr_conflicts(engine, item.id, context.pr_conflicts)
                 except Exception:
                     # Transient (GitHub hiccup) until proven otherwise: try again next poll.
                     log.exception("check %s for item %s failed", name, item.id)
@@ -187,6 +220,8 @@ async def poll_checks(
                     await s.commit()
             if await engine.advance(item.id, item.version, verdict, actor=f"check:{name}"):
                 moved.append((item.id, verdict))
+                if verdict != "merged":  # the work goes on, so what we knew of the PR is stale
+                    await _save_pr_conflicts(engine, item.id, None)
     finally:
         for gh in clients.values():
             await gh.aclose()

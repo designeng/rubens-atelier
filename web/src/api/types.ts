@@ -91,6 +91,7 @@ export interface ItemOut {
   version: number;
   branch: string | null;
   pr_url: string | null;
+  pr_conflicts?: boolean | null;
   priority: number;
   model: string | null;
   lean_context: boolean | null;
