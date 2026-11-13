@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 970 306" width="970" height="306" role="img" aria-labelledby="title desc">
   <title id="title">Поток задачи</title>
-  <desc id="desc">POST /tasks enqueues a task in the Celery broker on Redis; a Celery worker runs it with the Claude Agent SDK and writes status to a task hash and agent events to a Redis Stream; GET /tasks/{id} reads the hash, GET /tasks/{id}/stream serves the events over SSE with replay.</desc>
+  <desc id="desc">POST /tasks enqueues a task in the Celery broker on Redis; a Celery worker runs it with the coding agent the model id picks (Claude Code via the Claude Agent SDK, or the Codex CLI) and writes status to a task hash and agent events to a Redis Stream; GET /tasks/{id} reads the hash, GET /tasks/{id}/stream serves the events over SSE with replay.</desc>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; fill: #1f2328; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
@@ -58,8 +58,8 @@
   <rect class="box" x="640" y="46" width="130" height="52" rx="10"/>
   <text class="label" x="705" y="77" text-anchor="middle">Celery worker</text>
   <rect class="accent" x="810" y="40" width="144" height="64" rx="12"/>
-  <text class="label" x="882" y="68" text-anchor="middle">Claude Agent SDK</text>
-  <text class="sub" x="882" y="87" text-anchor="middle">Claude Code</text>
+  <text class="label" x="882" y="68" text-anchor="middle">Агент-кодер</text>
+  <text class="sub" x="882" y="87" text-anchor="middle">Claude Code · Codex</text>
 
   <!-- requests -->
   <path class="line" d="M220 72 H334" marker-end="url(#arrow)"/>

@@ -4,18 +4,18 @@
 
 <img width="1511" height="641" alt="image" src="https://github.com/user-attachments/assets/8bd804ca-ece8-4e1d-9fb3-c2a9a1d8ee4e" />
 
-A software factory in the spirit of Rubens' workshop. Claude Code agents work as apprentices: they plan, implement, pass CI and open the PR. You are the master who reviews it and signs off with a merge. It works on GitHub issues and on projects built from scratch.
+A software factory in the spirit of Rubens' workshop. Coding agents work as apprentices: they plan, implement, pass CI and open the PR. You are the master who reviews it and signs off with a merge. It works on GitHub issues and on projects built from scratch.
 
-Under the hood it is an HTTP service that runs Claude Code ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)) as long-running background tasks on FastAPI, Celery and Redis.
+Under the hood it is an HTTP service that runs coding agents as long-running background tasks on FastAPI, Celery and Redis. The model id picks the agent: Claude Code ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)) by default, Claude Code against OpenRouter, or the Codex CLI (see [Providers](#providers)).
 
 The core flow: an agent picks up a GitHub issue, implements it, runs the checks, pushes a branch and opens a PR.
 
-<p align="center"><img src="docs/architecture.svg" alt="Task flow: client → Redis → Celery worker → Claude Agent SDK" width="100%"></p>
+<p align="center"><img src="docs/architecture.svg" alt="Task flow: client → Redis → Celery worker → coding agent" width="100%"></p>
 
 ## Running
 
 ```bash
-cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
+cp .env.example .env          # ANTHROPIC_API_KEY (or another provider's key), HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
 docker compose up -d --build  # redis, postgres, migrate (one-off), api :8000, worker, beat
 ```
 
@@ -23,7 +23,7 @@ Board: http://localhost:8000/board (when the server sets `HARNESS_API_TOKEN`, th
 
 Without `HARNESS_API_TOKEN` the API accepts only requests from this machine: a loopback client, a loopback `Host` (no DNS rebinding) and no `Origin` of another site. That is enough for `make dev`. Under compose the host's requests reach the container from the Docker gateway, so set the token there. Behind a reverse proxy on the same host, the proxy must send `X-Forwarded-For`, or set the token. Compose publishes Redis and Postgres on `127.0.0.1` only.
 
-The agent inside the container needs `ANTHROPIC_API_KEY`. You can set `CLAUDE_CODE_OAUTH_TOKEN` instead; `claude setup-token` issues one. The login from the host keychain does not reach the container.
+The agent inside the container needs a key for its provider. For Claude Code (the default) that is `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` instead, which `claude setup-token` issues; the login from the host keychain does not reach the container. OpenRouter needs `HARNESS_OPENROUTER_API_KEY` and Codex `HARNESS_CODEX_API_KEY` (see [Providers](#providers)).
 
 Local development: `make dev` starts Redis and Postgres in Docker, migrates the schema (`make migrate`), then the api, worker and beat on the host (Ctrl-C stops all three). See `make help` for the other targets.
 

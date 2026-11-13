@@ -2,18 +2,18 @@
 
 [English](../README.md) · **Русский**
 
-Software factory в духе мастерской Рубенса: агенты Claude Code работают подмастерьями (план, реализация, CI, PR), а мастер — человек — ревьюит и ставит подпись мержем. Работает и с GitHub issues, и для разработки с нуля.
+Software factory в духе мастерской Рубенса: агенты-кодеры работают подмастерьями (план, реализация, CI, PR), а мастер — человек — ревьюит и ставит подпись мержем. Работает и с GitHub issues, и для разработки с нуля.
 
-HTTP-сервис для запуска Claude Code ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)) как долгих фоновых задач: FastAPI, Celery и Redis.
+HTTP-сервис для запуска агентов-кодеров как долгих фоновых задач: FastAPI, Celery и Redis. Агента выбирает id модели: по умолчанию Claude Code ([Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)), Claude Code через OpenRouter или Codex CLI (см. [Провайдеры](#провайдеры)).
 
 Главный сценарий: агент берёт issue из GitHub, реализует его, прогоняет проверки, пушит ветку и открывает PR.
 
-<p align="center"><img src="architecture.ru.svg" alt="Поток задачи: клиент → Redis → Celery worker → Claude Agent SDK" width="100%"></p>
+<p align="center"><img src="architecture.ru.svg" alt="Поток задачи: клиент → Redis → Celery worker → агент-кодер" width="100%"></p>
 
 ## Запуск
 
 ```bash
-cp .env.example .env          # ANTHROPIC_API_KEY, HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
+cp .env.example .env          # ANTHROPIC_API_KEY (или ключ другого провайдера), HARNESS_API_TOKEN, HARNESS_GITHUB_TOKEN
 docker compose up -d --build  # redis, postgres, migrate (разовый), api :8000, worker, beat
 ```
 
@@ -21,7 +21,7 @@ docker compose up -d --build  # redis, postgres, migrate (разовый), api :
 
 Без `HARNESS_API_TOKEN` API принимает только запросы с этой машины: клиент с loopback-адреса, loopback в `Host` (защита от DNS rebinding) и без `Origin` чужого сайта. Для `make dev` этого достаточно. В compose запросы с хоста приходят в контейнер с адреса Docker-шлюза, поэтому там токен нужен. За reverse proxy на той же машине прокси должен передавать `X-Forwarded-For`, иначе задайте токен. Redis и Postgres в compose опубликованы только на `127.0.0.1`.
 
-Агенту в контейнере нужен `ANTHROPIC_API_KEY`. Вместо него можно указать `CLAUDE_CODE_OAUTH_TOKEN`, его выдаёт `claude setup-token`. Логин из keychain хоста в контейнер не попадает.
+Агенту в контейнере нужен ключ его провайдера. Для Claude Code (по умолчанию) это `ANTHROPIC_API_KEY` или вместо него `CLAUDE_CODE_OAUTH_TOKEN`, который выдаёт `claude setup-token`; логин из keychain хоста в контейнер не попадает. OpenRouter нужен `HARNESS_OPENROUTER_API_KEY`, Codex — `HARNESS_CODEX_API_KEY` (см. [Провайдеры](#провайдеры)).
 
 Локально без Docker, со своими Redis и Postgres:
 
