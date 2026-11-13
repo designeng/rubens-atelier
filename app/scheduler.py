@@ -27,6 +27,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
 from redis.asyncio import Redis
@@ -62,6 +63,17 @@ async def record_rate_limit(redis: Redis, info: dict[str, Any]) -> None:
     state = {k: info.get(k) for k in ("status", "utilization", "resets_at")} | {"at": time.time()}
     await redis.hset(QUOTA, window, json.dumps(state))
 
+
+
+def _limit_reached(window: str, resets_at: float | None) -> str:
+    """'five_hour limit reached, resets at 2026-11-13 17:00 UTC+02:00 (in 1h 23m)'."""
+    if not resets_at:
+        return f"{window} limit reached"
+    when = datetime.fromtimestamp(resets_at).astimezone()
+    mins = max(0, round((resets_at - time.time()) / 60))
+    left = f"{mins // 1440}d " * (mins >= 1440) + f"{mins % 1440 // 60}h " * (mins >= 60) + f"{mins % 60}m"
+    off = when.strftime("%z")
+    return f"{window} limit reached, resets at {when:%Y-%m-%d %H:%M} UTC{off[:3]}:{off[3:]} (in {left})"
 
 class SchedulerError(Exception):
     pass
@@ -188,7 +200,7 @@ class Scheduler:
             q = json.loads(raw)
             resets_at = q.get("resets_at")
             if q.get("status") == "rejected" and not (resets_at and resets_at <= now):
-                return f"{window} limit reached" + (f", resets at {int(resets_at)}" if resets_at else "")
+                return _limit_reached(window, resets_at)
         return None
 
     async def capacity(self) -> tuple[int, str]:
@@ -207,7 +219,7 @@ class Scheduler:
             if q.get("status") == "rejected" or (
                 util is not None and util >= settings.quota_pause_at and not limits["force"]
             ):
-                return 0, f"{window} limit reached" + (f", resets at {int(resets_at)}" if resets_at else "")
+                return 0, _limit_reached(window, resets_at)
             if q.get("status") == "allowed_warning" and util is None:
                 limit, why = 1, f"{window} limit is close"
             elif util is not None and util >= settings.quota_throttle_at:
