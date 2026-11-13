@@ -3,7 +3,7 @@
 RUN = uv run --env-file .env
 PORT ?= 8000
 
-.PHONY: help sync infra migrate revision prune-index api worker beat dev stop test lint web-build web-dev web-test mcp
+.PHONY: help sync infra migrate revision prune-index api worker beat dev stop test lint web-build web-dev web-test mcp clean-branches
 
 help:
 	@echo "make sync   git pull --rebase, then git push; stops and lists the files on conflict"
@@ -96,3 +96,21 @@ web-dev:
 
 web-test:
 	cd web && pnpm install --frozen-lockfile && pnpm typecheck && pnpm test
+
+BASE ?= origin/main
+
+clean-branches:
+	@set -e; \
+	git fetch --prune origin; \
+	current=$$(git rev-parse --abbrev-ref HEAD); \
+	branches=$$(git for-each-ref --merged "$(BASE)" --format='%(refname:short)' refs/heads \
+		| grep -v -x -e main -e master -e "$$current" || true); \
+	worktrees=$$(git worktree list --porcelain | sed -n 's|^branch refs/heads/||p'); \
+	found=0; \
+	for b in $$branches; do \
+		if echo "$$worktrees" | grep -q -x -F "$$b"; then \
+			echo "Skipping $$b (checked out in a worktree)"; continue; \
+		fi; \
+		git branch -D "$$b" || echo "Failed to delete $$b"; found=1; \
+	done; \
+	if [ "$$found" = 0 ]; then echo "No merged local branches to delete."; fi
