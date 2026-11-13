@@ -46,6 +46,7 @@ from .workflow import DONE, ERROR, State, verdict_schema
 log = logging.getLogger(__name__)
 
 ARTIFACT_LIMIT = 12_000
+DIFF_LIMIT = 40_000  # about 10k tokens; a larger change is read file by file
 RATE_LIMITED = "rate_limited"  # internal: retry the step later, don't advance
 RESTART = "restart"  # internal: the worker died mid-run; run the step again, resuming its session
 
@@ -389,6 +390,9 @@ async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: Sta
         ]
     for a in rows:
         prompt += f'\n<artifact name="{a.name}">\n{a.content[-ARTIFACT_LIMIT:]}\n</artifact>\n'
+    if st.diff and item.base_branch:
+        change = await gitops.change_summary(item_workspace(item.id), item.base_branch, DIFF_LIMIT)
+        prompt += f'\n<change base="origin/{item.base_branch}">\n{change}\n</change>\n'
     return prompt
 
 

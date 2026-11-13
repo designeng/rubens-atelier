@@ -120,6 +120,26 @@ async def merge(cwd: Path, ref: str, message: str) -> list[str]:
     raise GitError(f"git merge {ref} failed ({code}): {out[-2000:]}")
 
 
+async def change_summary(cwd: Path, base: str, limit: int) -> str:
+    """The branch's commits, diffstat and diff against `origin/<base>` (from the merge base, as
+    a PR shows them), the diff cut at `limit` characters with a note on how to read the rest."""
+    ref = f"origin/{base}...HEAD"
+
+    async def git(*args: str) -> str:
+        _, out = await run("git", "--no-optional-locks", *args, cwd=cwd, timeout=60)
+        return out.strip()
+
+    commits = await git("log", "--format=%h %s", f"origin/{base}..HEAD")
+    stat = await git("diff", "--stat", ref)
+    diff = await git("diff", ref)
+    if len(diff) > limit:
+        diff = (
+            diff[:limit]
+            + f"\n… [diff cut at {limit} of {len(diff)} characters: run `git diff {ref} -- <file>` for the rest]"
+        )
+    return f"Commits:\n{commits or '(none)'}\n\nFiles:\n{stat or '(no changes)'}\n\n{diff}"
+
+
 async def snapshot(cwd: Path, base: str | None, diff: bool = False, limit: int = 60_000) -> dict[str, str | bool]:
     """Read-only picture of a workspace for the board: branch, uncommitted changes, commits and
     changes against the base branch, optionally the full diff. Takes no locks, writes nothing."""

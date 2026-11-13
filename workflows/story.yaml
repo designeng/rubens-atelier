@@ -8,7 +8,8 @@ states:
   plan:
     agent: planner
     effort: medium
-    disallowed_tools: [Write, Edit]
+    # Read, Grep and Glob are enough to plan; Bash's definition alone is ~4k tokens per request.
+    disallowed_tools: [Write, Edit, Bash]
     verdicts: [ready, needs_clarification, too_big]
     resume: true
     max_visits: 3
@@ -56,6 +57,7 @@ states:
     agent: reviewer
     effort: medium
     disallowed_tools: [Write, Edit]
+    diff: true  # the change comes in the prompt; Bash stays for running tests
     verdicts: [approved, changes_requested, needs_human]
     next: {approved: publish, changes_requested: implement, needs_human: needs_human, error: needs_human}
 
