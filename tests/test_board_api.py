@@ -660,3 +660,11 @@ def test_scheduler_reports_live_workers(client, redis):
     # The API reads the same keys.
     asyncio.run(redis.set(worker_heartbeat.PREFIX + "w1", json.dumps(info), ex=30))
     assert [w["id"] for w in client.get("/scheduler").json()["workers"]] == [hb.worker_id]
+
+
+def test_events_wait_returns_empty_after_timeout(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    r = client.get("/projects/app/events", params={"wait": 0.2})
+    assert r.status_code == 200 and r.json()["events"] == []
+    assert client.get("/projects/app/events", params={"wait": 301}).status_code == 422
+    assert client.get("/projects/nope/events").status_code == 404

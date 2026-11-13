@@ -55,7 +55,10 @@ async def prepare(gh: GitHub, issue: IssueRef, cwd: Path, extra_prompt: str) -> 
     branch = branch_name(issue)
 
     await gh.set_labels(issue.repo, issue.number, add=[IN_PROGRESS], remove=[settings.issue_label, FAILED])
-    await gitops.clone(gh.clone_url(issue.repo), cwd, ref=base, token=await gh.git_token())
+    await gitops.clone(
+        gh.clone_url(issue.repo), cwd, ref=base, token=await gh.git_token(),
+        seed_identity=(settings.git_author_name, settings.git_author_email),
+    )
     await gitops.configure_identity(cwd, settings.git_author_name, settings.git_author_email)
     await gitops.checkout_new_branch(cwd, branch)
 

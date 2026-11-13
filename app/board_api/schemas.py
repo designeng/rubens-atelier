@@ -217,6 +217,26 @@ class RequestOut(Orm):
     created_at: datetime
 
 
+class TransitionOut(BaseModel):
+    id: int
+    item_id: str
+    title: str
+    from_state: str | None
+    to_state: str
+    verdict: str | None
+    actor: str
+    at: datetime
+    # What the new state means: "agent", "action", "check", "human" (needs a person), "terminal",
+    # or "backlog" for a reopened item.
+    kind: str
+    outcome: str | None = None  # terminal states: succeeded | failed | cancelled
+
+
+class TransitionsOut(BaseModel):
+    cursor: int  # pass back as `after` to get the events that follow
+    events: list[TransitionOut]
+
+
 class ItemDetail(ItemOut):
     body: str
     runs: list[RunOut]

@@ -124,7 +124,7 @@ Agent-прогон, закончившийся без результата, от
 
 **CI-gate.** `check: ci` смотрит GitHub check runs и commit statuses на запушенном head-коммите PR, когда webhook сообщает о завершённой проверке (см. [GitHub webhook](#github-webhook)), и в любом случае раз в `HARNESS_CHECKS_POLL_SECONDS` (`HARNESS_CHECKS_FALLBACK_POLL_SECONDS`, если webhook'и включены). Если что-то упало, item возвращается в `implement`. Артефакт `ci` содержит имена упавших проверок, ссылки и хвост лога GitHub Actions. После фикса PR обновляется тем же push'ем. Если за `grace_seconds` не появилось ни одной проверки, это `no_checks`: в story такой item сразу идёт на merge. Если за `timeout_seconds` нет результата, item уходит к человеку.
 
-Шаги передают друг другу **артефакты**: итог implementer'а, ревью, комментарии человека, ошибки. Каждый следующий промпт получает последнюю версию каждого артефакта. Workspace (clone и ветка `agent/<kind>-<id>`) общий для всех шагов item'а. Когда item приходит в терминальное состояние `succeeded` (PR смержен), движок ставит в очередь `harness.cleanup_workspace`, и worker удаляет workspace. У упавших и отменённых item'ов он сохраняется: при reopen используется снова.
+Шаги передают друг другу **артефакты**: итог implementer'а, ревью, комментарии человека, ошибки. Каждый следующий промпт получает последнюю версию каждого артефакта. Workspace (clone и ветка `agent/<kind>-<id>`) общий для всех шагов item'а. В репозиторий без единого коммита harness сначала пушит пустой `Initial commit` в базовую ветку, так что проект можно начать со свежесозданного репозитория. Когда item приходит в терминальное состояние `succeeded` (PR смержен), движок ставит в очередь `harness.cleanup_workspace`, и worker удаляет workspace. У упавших и отменённых item'ов он сохраняется: при reopen используется снова.
 
 | Метод | Путь | |
 |---|---|---|
@@ -184,16 +184,21 @@ Agent-прогон, закончившийся без результата, от
 
 ## MCP-сервер
 
-`app/mcp_server.py` даёт любому MCP-клиенту (Claude Code, Claude Desktop, …) управлять фабрикой через инструменты: проекты (`list_projects`, `create_project`, `update_project`, `import_issues`), доска и истории (`get_board`, `get_inbox`, `get_item`, `create_item`, `update_item`, `item_action` для start / run-now / cancel / reopen / open-pr, `delete_item`, `comment_item`, `answer_request`, `get_item_git`, `get_run_log`), scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models`, память проекта (`list_notes`, `create_note`, `update_note`, `delete_note`, `copy_notes`, `export_notes`, `import_notes`) и workspaces (`list_workspaces`, `prune_workspaces`, по умолчанию dry run). Читающие и разрушающие инструменты помечены соответствующими MCP-аннотациями; терминал доски не выставлен.
+`app/mcp_server.py` даёт любому MCP-клиенту (Claude Code, Claude Desktop, …) управлять фабрикой через инструменты: проекты (`list_projects`, `create_project`, `update_project`, `import_issues`), доска и истории (`get_board`, `get_inbox`, `wait_for`, `forecast_cost`, `get_item`, `create_item`, `create_plan`, `update_item`, `item_action` для start / run-now / cancel / reopen / open-pr, `delete_item`, `comment_item`, `answer_request`, `get_item_git`, `get_run_log`), scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models`, память проекта (`list_notes`, `create_note`, `update_note`, `delete_note`, `copy_notes`, `export_notes`, `import_notes`) и workspaces (`list_workspaces`, `prune_workspaces`, по умолчанию dry run). Читающие и разрушающие инструменты помечены соответствующими MCP-аннотациями; терминал доски не выставлен.
 
-Это клиент HTTP API, а не второй бэкенд: он ходит на `HARNESS_API_URL` (по умолчанию `http://localhost:8000`) с `HARNESS_API_TOKEN` из окружения или `.env`, поэтому API должен быть запущен (`make dev` или compose), и каждый вызов проходит те же проверки, что и доска. Транспорт — stdio:
+Это клиент HTTP API, а не второй бэкенд, поэтому каждый вызов проходит те же проверки, что и доска. API отдаёт его по streamable HTTP на `/mcp` за тем же токеном (без токена — только локальные запросы):
 
 ```bash
-claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
-make mcp   # то же самое вручную
+claude mcp add -s user --transport http factory http://localhost:8000/mcp
+# удалённо: claude mcp add -s user --transport http factory https://factory.example/mcp --header "Authorization: Bearer …"
 ```
 
-Для удалённого harness передайте адрес и токен: `claude mcp add factory -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… -- uv run --directory … python -m app.mcp_server`.
+`-s user` делает сервер доступным во всех проектах, а не только в текущей папке. Есть и stdio: он ходит на `HARNESS_API_URL` (по умолчанию `http://localhost:8000`) с `HARNESS_API_TOKEN`:
+
+```bash
+claude mcp add -s user factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+make mcp   # то же самое вручную
+```
 
 Все инструменты, их эндпоинты и что не выставлено: [mcp-server.ru.md](mcp-server.ru.md).
 

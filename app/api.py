@@ -11,11 +11,15 @@ from urllib.parse import urlsplit
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sse_starlette import EventSourceResponse
+from starlette.routing import Route
+from starlette.types import Receive, Scope, Send
 
-from . import board_api, checks, memory, metrics, sandbox_check, terminal, webhooks, workspaces
+from . import board_api, checks, mcp_server, memory, metrics, sandbox_check, terminal, webhooks, workspaces
 from .archive import events_after, load_transcript
 from .config import settings
 from .db import Database
@@ -47,7 +51,18 @@ async def lifespan(app: FastAPI):
     app.state.engine = Engine(
         app.state.db, load_workflows(settings.workflows_dir), app.state.store, celery_enqueue, app.state.scheduler
     )
-    yield
+    # A fresh session manager per lifespan: one can be run only once. Stateless, so any API replica
+    # can answer any request. Hosts are checked by `McpEndpoint` (the token, or local-only), as for
+    # the rest of the API, so the SDK's own localhost-only host check would only get in the way.
+    mcp_server.mcp.streamable_http_app(
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    app.state.mcp_http = StreamableHTTPASGIApp(mcp_server.mcp.session_manager)
+    async with mcp_server.mcp.session_manager.run():
+        with mcp_server.in_process(app):
+            yield
     await app.state.db.dispose()
     await app.state.redis.aclose()
 
@@ -108,7 +123,21 @@ def get_db(request: Request) -> Database:
 
 Db = Annotated[Database, Depends(get_db)]
 
+class McpEndpoint:
+    """The MCP server over streamable HTTP, behind the same token check as the API."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        request = Request(scope, receive)
+        try:
+            require_token(request, await bearer(request))
+        except HTTPException as e:
+            await JSONResponse({"detail": e.detail}, e.status_code)(scope, receive, send)
+            return
+        await request.app.state.mcp_http(scope, receive, send)
+
+
 app = FastAPI(title="Claude Code agent harness", lifespan=lifespan)
+app.router.routes.append(Route("/mcp", McpEndpoint(), methods=["GET", "POST", "DELETE"]))
 app.include_router(board_api.router, dependencies=[Depends(require_token)])
 app.include_router(memory.router, dependencies=[Depends(require_token)])
 app.include_router(board_api.page)

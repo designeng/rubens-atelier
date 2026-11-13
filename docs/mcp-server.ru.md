@@ -2,17 +2,38 @@
 
 Сервер объявлен в [app/mcp_server.py](../app/mcp_server.py). Через него любой MCP-клиент (Claude Code, Claude Desktop, …) управляет фабрикой: проектами, историями, inbox, scheduler'ом и workspaces.
 
-Это клиент HTTP API, а не второй бэкенд. Каждый инструмент вызывает эндпоинт API, поэтому проходит те же проверки, что и доска (compare-and-set по версии, блокеры, бюджеты), и одинаково работает с `make dev`, compose и удалённым развёртыванием. Транспорт — stdio.
+Это клиент HTTP API, а не второй бэкенд. Каждый инструмент вызывает эндпоинт API, поэтому проходит те же проверки, что и доска (compare-and-set по версии, блокеры, бюджеты), и одинаково работает с `make dev`, compose и удалённым развёртыванием. Транспорты — streamable HTTP на `/mcp` самого API и stdio.
 
 ## Подключение
 
 API должен быть запущен (`make dev` или `docker compose up`).
 
+### HTTP (рекомендуется)
+
+API сам отдаёт MCP-сервер на `/mcp`, отдельный процесс не нужен:
+
+```bash
+claude mcp add -s user --transport http factory http://localhost:8000/mcp
+```
+
+`-s user` делает сервер доступным в сессиях любого проекта; без него Claude Code запоминает сервер только для текущей папки.
+
+Удалённый harness — тот же адрес и bearer-токен API:
+
+```bash
+claude mcp add -s user --transport http factory https://factory.example/mcp \
+  --header "Authorization: Bearer $HARNESS_API_TOKEN"
+```
+
+`/mcp` закрыт той же проверкой, что и остальной API: с `HARNESS_API_TOKEN` нужен токен, без него принимаются только локальные запросы. Сервер stateless (любая реплика API отвечает на любой запрос) и отвечает JSON. Вызовы инструментов идут в API внутри процесса, `HARNESS_API_URL` для него не нужен.
+
+### stdio
+
 ```bash
 claude mcp add -s user factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
 ```
 
-`-s user` делает сервер доступным в сессиях любого проекта; без него Claude Code запоминает сервер только для текущей папки. `--directory` указывает на эту репу, поэтому команда работает откуда угодно.
+`--directory` указывает на эту репу, поэтому команда работает откуда угодно.
 
 Удалённый harness:
 
@@ -33,7 +54,7 @@ claude mcp add -s user factory \
 | `HARNESS_API_URL` | `http://localhost:8000` | Адрес HTTP API |
 | `HARNESS_API_TOKEN` | пусто | Bearer-токен; пустой — запросы без авторизации |
 
-Обе читаются из окружения или `.env` в рабочей директории, как и остальные настройки (`app/config.py`).
+Обе читаются из окружения или `.env` в рабочей директории, как и остальные настройки (`app/config.py`). Нужны только stdio-варианту.
 
 ## Инструменты
 
@@ -52,8 +73,10 @@ R — только чтение, W — меняет состояние, D — н
 
 | Инструмент | | Эндпоинт | Что делает |
 |---|---|---|---|
-| `get_board` | R | `GET /projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed с сокращёнными карточками; `done_limit` (по умолчанию 20), `done_total` и `proposed_notes` (заметки, ждущие проверки) |
+| `get_board` | R | `GET /projects/{slug}/board` | Колонки backlog, working, needs_human, done, failed с сокращёнными карточками; `done_limit` (по умолчанию 20), `done_total`, `proposed_notes` (заметки, ждущие проверки) и `events_cursor` для `wait_for` |
 | `get_inbox` | R | `GET /projects/{slug}/inbox` | Открытые запросы к человеку, старые первыми |
+| `wait_for` | R | `GET /projects/{slug}/events` | Ждёт переходов историй проекта вместо опроса доски: возвращает переходы после курсора `after`, как только появится хотя бы один, или пустой список через `timeout_seconds` (до 300). Без `after` ждёт только новое; `events_cursor` из `get_board` или прошлый `cursor` не дают ничего пропустить. `kinds` — по виду состояния, в которое перешла история: по умолчанию `human` (нужен человек) и `terminal` (завершилась, см. `outcome`); `[]` — все переходы. `item_ids` — только эти истории |
+| `forecast_cost` | R | `GET /projects/{slug}/forecast` | Прогноз до планирования: медиана и p80 стоимости истории по успешно завершённым историям проекта (пока их меньше трёх — по всем проектам), сколько ещё, вероятно, потратят открытые истории, сколько бюджета останется после них и сколько историй в него влезет; `stories=N` — оценка для N новых и `warning`, если не влезут. `per_run_cap_usd` ограничивает один агентский шаг, а не историю |
 | `get_item` | R | `GET /items/{id}` | История целиком: тело, переходы, runs (с `task_id`), артефакты, открытый запрос. Артефакты — только последняя версия каждого, все — с `all_artifacts=true` |
 | `create_item` | W | `POST /projects/{slug}/items` | `title`, `body`, `kind`, `priority` (-100..100), `parent_id`, `issue`, `model`, `lean_context`, `budget_usd`, `blocked_by`; `start=true` сразу запускает, `auto_start=true` запускает, как только все блокеры завершатся успешно |
 | `create_plan` | W | `POST /projects/{slug}/plan` | Эпик (необязательно) и его истории одним вызовом, всё или ничего. У каждой истории свой `key`, в `blocked_by` — ключи историй плана или id существующих. Истории без `parent_id` попадают в эпик. С `auto_start` цепочка идёт сама |
@@ -107,4 +130,4 @@ R — только чтение, W — меняет состояние, D — н
 
 ## Тесты
 
-[tests/test_mcp_server.py](../tests/test_mcp_server.py) вызывает инструменты через `mcp.call_tool`, а их HTTP-запросы через `httpx.MockTransport` уходят в приложение in-process (фикстура `client`). Подменить транспорт можно атрибутом `mcp_server.transport`.
+[tests/test_mcp_server.py](../tests/test_mcp_server.py) вызывает инструменты через `mcp.call_tool`, а их HTTP-запросы через `httpx.MockTransport` уходят в приложение in-process (фикстура `client`). Подменить транспорт можно атрибутом `mcp_server.transport`. HTTP-вариант проверяется JSON-RPC запросами к `/mcp` через тот же `client`.

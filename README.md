@@ -131,7 +131,7 @@ The planner writes a `planner` artifact: approach, files, test plan, risks. The 
 
 **CI gate.** `check: ci` looks at GitHub check runs and commit statuses on the PR's pushed head commit when a webhook reports a finished check (see [GitHub webhook](#github-webhook)), and in any case every `HARNESS_CHECKS_POLL_SECONDS` (`HARNESS_CHECKS_FALLBACK_POLL_SECONDS` with webhooks on). If something fails, the item goes back to `implement`. The `ci` artifact contains the names of the failed checks, links and the tail of the GitHub Actions log. After the fix, the same push updates the PR. If no checks appear within `grace_seconds`, the result is `no_checks`: in a story, such an item goes straight to merge. If there is no result within `timeout_seconds`, the item goes to a human.
 
-Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps. When the item reaches a `succeeded` terminal state (the PR is merged), the engine enqueues `harness.cleanup_workspace` and the worker deletes the workspace. Failed and cancelled items keep it, because reopening them reuses it.
+Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps. A repository without a single commit is seeded with an empty `Initial commit` on the base branch first, so a project can start from a freshly created repo. When the item reaches a `succeeded` terminal state (the PR is merged), the engine enqueues `harness.cleanup_workspace` and the worker deletes the workspace. Failed and cancelled items keep it, because reopening them reuses it.
 
 | Method | Path | |
 |---|---|---|
@@ -173,16 +173,21 @@ Factory state lives in Postgres. Redis still holds the queue, agent events and l
 
 ## MCP server
 
-`app/mcp_server.py` exposes the factory to any MCP client (Claude Code, Claude Desktop, …) as tools: projects (`list_projects`, `create_project`, `update_project`, `import_issues`), the board and stories (`get_board`, `get_inbox`, `get_item`, `create_item`, `update_item`, `item_action` for start / run-now / cancel / reopen / open-pr, `delete_item`, `comment_item`, `answer_request`, `get_item_git`, `get_run_log`), the scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models`, project memory (`list_notes`, `create_note`, `update_note`, `delete_note`, `copy_notes`, `export_notes`, `import_notes`), and workspaces (`list_workspaces`, `prune_workspaces`, a dry run unless told otherwise). Read-only and destructive tools carry the matching MCP annotations; the board terminal is not exposed.
+`app/mcp_server.py` exposes the factory to any MCP client (Claude Code, Claude Desktop, …) as tools: projects (`list_projects`, `create_project`, `update_project`, `import_issues`), the board and stories (`get_board`, `get_inbox`, `wait_for`, `forecast_cost`, `get_item`, `create_item`, `create_plan`, `update_item`, `item_action` for start / run-now / cancel / reopen / open-pr, `delete_item`, `comment_item`, `answer_request`, `get_item_git`, `get_run_log`), the scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models`, project memory (`list_notes`, `create_note`, `update_note`, `delete_note`, `copy_notes`, `export_notes`, `import_notes`), and workspaces (`list_workspaces`, `prune_workspaces`, a dry run unless told otherwise). Read-only and destructive tools carry the matching MCP annotations; the board terminal is not exposed.
 
-It is a client of the HTTP API, not a second backend: it calls `HARNESS_API_URL` (default `http://localhost:8000`) with `HARNESS_API_TOKEN` from the environment or `.env`, so the API must be running (`make dev` or compose) and every call goes through the same checks as the board. It speaks stdio:
+It is a client of the HTTP API, not a second backend, so every call goes through the same checks as the board. The API serves it over streamable HTTP at `/mcp`, behind the API's token (local requests only when no token is set):
 
 ```bash
-claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
-make mcp   # the same, by hand
+claude mcp add -s user --transport http factory http://localhost:8000/mcp
+# remote: claude mcp add -s user --transport http factory https://factory.example/mcp --header "Authorization: Bearer …"
 ```
 
-Against a remote harness, pass the address and token: `claude mcp add factory -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… -- uv run --directory … python -m app.mcp_server`.
+`-s user` makes it available in every project, not just the current folder. It also speaks stdio, calling `HARNESS_API_URL` (default `http://localhost:8000`) with `HARNESS_API_TOKEN`:
+
+```bash
+claude mcp add -s user factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+make mcp   # the same, by hand
+```
 
 Every tool, its endpoint and what is left out: [docs/mcp-server.ru.md](docs/mcp-server.ru.md) (in Russian).
 
