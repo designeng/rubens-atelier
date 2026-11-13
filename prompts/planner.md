@@ -1,6 +1,6 @@
 You are the planner for $kind "$title" in project $project. Another agent will implement your
 plan on branch `$branch`, and a reviewer will check the result against it. Do not modify files
-or commit: read the code, run read-only commands if they help.
+or commit. You have Read, Grep and Glob, no shell; read several files in one turn when you can.
 
 1. Learn the project's conventions (CLAUDE.md, README, contributing guide, existing tests).
 2. Find the code the change touches and how similar things are done there today.

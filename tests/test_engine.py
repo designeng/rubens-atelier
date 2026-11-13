@@ -247,7 +247,7 @@ async def test_story_happy_path(make_factory, origin):
         assert f"{role} `{model}`" in pr["body"]
 
     (plan,) = f.runner.of("plan")
-    assert plan["spec"].disallowed_tools == ["Write", "Edit"]
+    assert plan["spec"].disallowed_tools == ["Write", "Edit", "Bash"]
     assert plan["spec"].output_schema["properties"]["verdict"]["enum"] == ["ready", "needs_clarification", "too_big"]
     assert '<artifact name="planner">' in f.runner.of("implement")[0]["prompt"]
     (review,) = f.runner.of("review")
@@ -388,6 +388,31 @@ async def test_project_memory_reaches_fresh_prompts_and_agents_propose_notes(mak
     assert [(n.title, n.tags, n.status, n.source_item_id) for n in proposed] == [
         ("Greetings end with a newline", ["ci"], "proposed", item_id)
     ]
+
+
+async def test_the_reviewer_gets_the_change_in_its_prompt_and_the_planner_no_shell(make_factory):
+    f = make_factory(ScriptedRunner(reviews=["changes_requested", "approved"]))
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    plan = f.runner.of("plan")[0]
+    assert "Bash" in plan["spec"].disallowed_tools and "<change" not in plan["prompt"]
+    first, second = (r["prompt"] for r in f.runner.of("review"))
+    assert '<change base="origin/main">' in first
+    assert "greeting 0" in first and "hello.txt" in first and "+hi 0" in first
+    assert "+hi 1" in second and "+hi 0" not in second  # the diff as it stands at each review
+
+
+async def test_a_large_change_is_cut_with_a_pointer_to_the_rest(make_factory, monkeypatch):
+    monkeypatch.setattr(steps, "DIFF_LIMIT", 20)
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    review = f.runner.of("review")[0]["prompt"]
+    assert "[diff cut at 20 of" in review and "git diff origin/main...HEAD -- <file>" in review
 
 
 async def test_lean_story_starts_each_visit_afresh(make_factory):

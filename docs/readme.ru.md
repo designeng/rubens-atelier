@@ -106,7 +106,7 @@ Workflow — это детерминированный конечный авто
 
 | | |
 |---|---|
-| `agent` | роль из [prompts/](../prompts/)`<role>.md` работает в workspace item'а; есть опции `verify`, `resume` (продолжить свою прошлую сессию), `verdicts`, `disallowed_tools` |
+| `agent` | роль из [prompts/](../prompts/)`<role>.md` работает в workspace item'а; есть опции `verify`, `resume` (продолжить свою прошлую сессию), `verdicts`, `disallowed_tools`, `diff` (коммиты и дифф ветки относительно base попадают в промпт, обрезка на 40k символов) |
 | `action` | встроенный шаг harness'а, например `open_pr` |
 | `check` | внешнее условие, которое проверяется по webhook'ам GitHub и beat'ом, не занимая воркер; сейчас это `ci` |
 | `human` | запрос во inbox с вариантами ответа; ответ продвигает item дальше |
@@ -116,7 +116,7 @@ Workflow — это детерминированный конечный авто
 
 Agent-прогон, закончившийся без результата, отдаёт вердиктом причину неудачи: `turn_limit`, `budget`, `model_error`, `verify_failed`, `timeout`, `crashed`, `workspace`, `restart_limit` (см. `FailureReason` в `app/models.py`). В agent-состоянии любую из них можно направить через `next`, остальные, как и раньше, уходят в `next.error`. В `story.yaml` реализатор, у которого кончились ходы, продолжает свою сессию ещё одним заходом в `implement`, это ограничено `max_visits`. Причина сохраняется и в harness-задаче (`failure_reason` в `/tasks/{id}` и в последнем событии `status`).
 
-[workflows/story.yaml](../workflows/story.yaml): `plan` (только чтение) → `implement` (с verify) → `sync_base` → `review` (свежая сессия, без Write/Edit) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (человек). Если у проекта включён `auto_merge`, шаг `merge` сам вливает проверенный PR с зелёным CI, и story завершается; иначе, или если GitHub отказывает в merge (branch protection, конфликты), PR ждёт человека, а артефакт `merge` объясняет причину. `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
+[workflows/story.yaml](../workflows/story.yaml): `plan` (только чтение, без shell: Read, Grep, Glob) → `implement` (с verify) → `sync_base` → `review` (свежая сессия, без Write/Edit, изменения прямо в промпте) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (человек). Если у проекта включён `auto_merge`, шаг `merge` сам вливает проверенный PR с зелёным CI, и story завершается; иначе, или если GitHub отказывает в merge (branch protection, конфликты), PR ждёт человека, а артефакт `merge` объясняет причину. `changes_requested` возвращает item в `implement`, и implementer продолжает свою сессию с замечаниями ревью.
 
 **sync_base** вливает свежую базовую ветку в ветку story. Так параллельные story строятся поверх уже вмёрженной работы друг друга, и их PR не конфликтуют. Используется merge, а не rebase, поэтому проверенная история не переписывается. При конфликте merge остаётся незавершённым, и story переходит в `resolve_conflicts`; артефакт `sync_base` перечисляет конфликтующие файлы. Там implementer разрешает конфликты и коммитит, с лимитом заходов отдельно от `implement`, после чего story снова проходит `sync_base` и ревью. В `awaiting_merge` вариант `update` запускает `sync_base` для открытого PR, когда базовая ветка ушла вперёд или GitHub сообщает о конфликтах. Если у проекта включён `auto_merge`, проверка `merge` делает это сама, когда GitHub сообщает о конфликтах, и story возвращается в In progress; без него PR ждёт, пока человек выберет `update`.
 

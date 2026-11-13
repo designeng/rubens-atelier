@@ -102,6 +102,8 @@ def test_strict_schema_requires_every_property_at_every_level():
 def test_limits_codex_cant_honour_are_refused(monkeypatch):
     assert unsupported(TaskCreate(prompt="x")) is None
     assert unsupported(TaskCreate(prompt="x", disallowed_tools=["Write", "Edit"])) is None
+    assert unsupported(TaskCreate(prompt="x", disallowed_tools=["Write", "Edit", "Bash"])) is None  # a planner
+    assert "Bash" in unsupported(TaskCreate(prompt="x", disallowed_tools=["Bash"]))  # it could still write
     assert "allowed_tools" in unsupported(TaskCreate(prompt="x", allowed_tools=["Read"]))
     assert "WebFetch" in unsupported(TaskCreate(prompt="x", disallowed_tools=["WebFetch"]))
     monkeypatch.setattr(settings, "bash_allowed_commands", ["pytest"])
