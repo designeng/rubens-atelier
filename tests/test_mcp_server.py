@@ -179,3 +179,76 @@ async def test_note_tools(tools):
     imported = await tools("import_notes", project="web", notes_file=file)
     assert imported["copied"][0]["status"] == "proposed"
     assert (await tools("get_board", project="web"))["proposed_notes"] == 1
+
+
+async def test_wait_for_returns_transitions_after_the_board_cursor(tools, client):
+    await tools("create_project", slug="app", repo="acme/app")
+    other = await tools("create_item", project="app", title="Other", start=True)
+    cursor = (await tools("get_board", project="app"))["events_cursor"]
+    assert cursor > 0  # Other's start
+
+    story = await tools("create_item", project="app", title="Story", start=True)
+    for verdict in ("needs_clarification",):
+        item = await tools("get_item", item_id=story["id"])
+        client.portal.call(app.state.engine.advance, story["id"], item["version"], verdict)
+
+    # Default: only transitions that need a person or finish a story.
+    got = await tools("wait_for", project="app", after=cursor, timeout_seconds=0)
+    assert [(e["title"], e["to_state"], e["kind"]) for e in got["events"]] == [("Story", "clarify", "human")]
+
+    everything = await tools("wait_for", project="app", after=cursor, kinds=[], timeout_seconds=0)
+    assert [(e["to_state"], e["kind"]) for e in everything["events"]] == [("plan", "agent"), ("clarify", "human")]
+    assert everything["cursor"] == got["cursor"]
+
+    # Nothing new after the cursor; without `after` nothing past is returned either.
+    assert (await tools("wait_for", project="app", after=got["cursor"], kinds=[], timeout_seconds=0))["events"] == []
+    now = await tools("wait_for", project="app", timeout_seconds=0)
+    assert now == {"cursor": got["cursor"], "events": []}
+
+    only_other = await tools("wait_for", project="app", after=0, item_ids=[other["id"]], kinds=[], timeout_seconds=0)
+    assert {e["title"] for e in only_other["events"]} == {"Other"}
+
+
+async def test_wait_for_reports_outcome_of_finished_stories(tools, client):
+    await tools("create_project", slug="app", repo="acme/app")
+    story = await tools("create_item", project="app", title="Story", start=True)
+    cursor = (await tools("get_board", project="app"))["events_cursor"]
+    await tools("item_action", item_id=story["id"], action="cancel")
+    (event,) = (await tools("wait_for", project="app", after=cursor, timeout_seconds=0))["events"]
+    assert (event["kind"], event["outcome"]) == ("terminal", "cancelled")
+
+
+MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+
+
+def _rpc(client, method, params=None, id=1, headers=MCP_HEADERS):
+    body = {"jsonrpc": "2.0", "id": id, "method": method, "params": params or {}}
+    return client.post("/mcp", headers=headers, json=body)
+
+
+def test_http_transport_serves_the_tools_in_process(client):
+    client.post("/projects", json={"slug": "app", "repo": "acme/app"})
+    init = _rpc(client, "initialize", {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"},
+    })
+    assert init.status_code == 200, init.text
+    assert "wait_for" in init.json()["result"]["instructions"]
+
+    names = {t["name"] for t in _rpc(client, "tools/list", id=2).json()["result"]["tools"]}
+    assert {"get_board", "wait_for", "forecast_cost", "create_plan"} <= names
+
+    called = _rpc(client, "tools/call", {"name": "list_projects", "arguments": {}}, id=3).json()["result"]
+    assert not called.get("isError"), called
+    assert called["structuredContent"]["result"][0]["slug"] == "app"
+
+
+def test_http_transport_needs_the_token(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_token", "s3cret")
+    assert _rpc(client, "tools/list").status_code == 401
+    bad = {**MCP_HEADERS, "Authorization": "Bearer nope"}
+    assert _rpc(client, "tools/list", headers=bad).status_code == 401
+    ok = _rpc(client, "tools/list", headers={**MCP_HEADERS, "Authorization": "Bearer s3cret"})
+    assert ok.status_code == 200 and ok.json()["result"]["tools"]
+    called = _rpc(client, "tools/call", {"name": "list_projects", "arguments": {}}, id=2,
+                  headers={**MCP_HEADERS, "Authorization": "Bearer s3cret"}).json()["result"]
+    assert not called.get("isError"), called  # its own calls to the API carry the token too

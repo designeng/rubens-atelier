@@ -46,6 +46,7 @@ from .workflow import DONE, ERROR, State, verdict_schema
 log = logging.getLogger(__name__)
 
 ARTIFACT_LIMIT = 12_000
+DIFF_LIMIT = 40_000  # about 10k tokens; a larger change is read file by file
 RATE_LIMITED = "rate_limited"  # internal: retry the step later, don't advance
 RESTART = "restart"  # internal: the worker died mid-run; run the step again, resuming its session
 
@@ -153,7 +154,10 @@ async def ensure_workspace(gh: GitHub, project: Project, item: WorkItem) -> Path
     base = project.base_branch or (await gh.get_repo(project.repo))["default_branch"]
     branch = f"agent/{item.kind}-{item.id[:8]}"
     cwd.parent.mkdir(parents=True, exist_ok=True)
-    await gitops.clone(gh.clone_url(project.repo), cwd, ref=base, token=await gh.git_token())
+    await gitops.clone(
+        gh.clone_url(project.repo), cwd, ref=base, token=await gh.git_token(),
+        seed_identity=(settings.git_author_name, settings.git_author_email),
+    )
     await gitops.configure_identity(cwd, settings.git_author_name, settings.git_author_email)
     await gitops.checkout_new_branch(cwd, branch)
     item.branch, item.base_branch = branch, base
@@ -389,6 +393,9 @@ async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: Sta
         ]
     for a in rows:
         prompt += f'\n<artifact name="{a.name}">\n{a.content[-ARTIFACT_LIMIT:]}\n</artifact>\n'
+    if st.diff and item.base_branch:
+        change = await gitops.change_summary(item_workspace(item.id), item.base_branch, DIFF_LIMIT)
+        prompt += f'\n<change base="origin/{item.base_branch}">\n{change}\n</change>\n'
     return prompt
 
 

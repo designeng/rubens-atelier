@@ -1,6 +1,8 @@
 """Projects, their items, the Kanban board and the inbox; GitHub App and model lookups."""
 
-from typing import Annotated
+import asyncio
+import time
+from typing import Annotated, Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Response, status
@@ -8,10 +10,10 @@ from sqlalchemy import func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from .. import github_app
-from ..budget import project_spending
+from ..budget import forecast, project_spending
 from ..config import settings
-from ..db import HumanRequest, Note, Project, WorkItem, new_id
-from ..engine import EngineError
+from ..db import HumanRequest, ItemEvent, Note, Project, WorkItem, new_id
+from ..engine import BACKLOG, Engine, EngineError
 from ..github import GitHub
 from .deps import Db, Eng, _project
 from .helpers import (
@@ -25,6 +27,8 @@ from .helpers import (
 )
 from .schemas import (
     Column,
+    TransitionOut,
+    TransitionsOut,
     ImportResult,
     ItemIn,
     ItemOut,
@@ -324,12 +328,14 @@ async def board(
         proposed = await s.scalar(
             select(func.count()).select_from(Note).where(Note.project_id == project.id, Note.status == "proposed")
         )
+        cursor = await _last_event_id(s, project.id)
         for item in [*open_items, *done_items]:
             out = await _item_with_progress(engine, s, item, dependents, blockers, runs, live, spending)
             columns[out.column].append(out)
     columns["done"].sort(key=lambda o: o.updated_at, reverse=True)
     response.headers["X-Done-Total"] = str(done_total)
     response.headers["X-Proposed-Notes"] = str(proposed)
+    response.headers["X-Events-Cursor"] = str(cursor)
     return columns
 
 
@@ -344,3 +350,94 @@ async def inbox(slug: str, db: Db) -> list[RequestOut]:
             .order_by(HumanRequest.created_at)
         )
         return [RequestOut.model_validate(r) for r in rows]
+
+
+EVENTS_WAIT_MAX = 300
+EVENTS_POLL_SECONDS = 1.0
+EVENTS_LIMIT = 200
+
+
+async def _last_event_id(s, project_id: str) -> int:
+    return await s.scalar(
+        select(func.coalesce(func.max(ItemEvent.id), 0))
+        .join(WorkItem, WorkItem.id == ItemEvent.item_id)
+        .where(WorkItem.project_id == project_id)
+    )
+
+
+def _event_out(engine: Engine, event: ItemEvent, item: WorkItem) -> TransitionOut:
+    wf = engine.workflows.get(item.workflow)
+    st = wf.states.get(event.to_state) if wf else None
+    if event.to_state == BACKLOG and st is None:
+        kind = "backlog"
+    else:
+        kind = st.kind if st else "unknown"
+    return TransitionOut(
+        id=event.id, item_id=item.id, title=item.title, from_state=event.from_state, to_state=event.to_state,
+        verdict=event.verdict, actor=event.actor, at=event.at, kind=kind, outcome=st.terminal if st else None,
+    )
+
+
+@router.get("/projects/{slug}/events")
+async def events(
+    slug: str,
+    db: Db,
+    engine: Eng,
+    after: Annotated[int | None, Query(ge=0, description="Cursor from a previous call or the board")] = None,
+    wait: Annotated[float, Query(ge=0, le=EVENTS_WAIT_MAX, description="Seconds to wait for a matching event")] = 0,
+    items: Annotated[list[str], Query(description="Only these items (default: all of the project)")] = [],
+    kinds: Annotated[
+        list[Literal["agent", "action", "check", "human", "terminal", "backlog"]],
+        Query(description="Only transitions into states of these kinds (default: all)"),
+    ] = [],
+) -> TransitionsOut:
+    """State transitions of the project's items after the cursor `after`, oldest first.
+    Without `after`, starts from now: returns no past events, only ones that happen while waiting.
+    With `wait`, holds the request until a matching event arrives or `wait` seconds pass.
+    The returned cursor moves past every event looked at, including ones the filters left out."""
+    project = await _project(db, slug)
+    deadline = time.monotonic() + wait
+    async with db.session() as s:
+        cursor = after if after is not None else await _last_event_id(s, project.id)
+    while True:
+        async with db.session() as s:
+            query = (
+                select(ItemEvent, WorkItem)
+                .join(WorkItem, WorkItem.id == ItemEvent.item_id)
+                .where(WorkItem.project_id == project.id, ItemEvent.id > cursor)
+                .order_by(ItemEvent.id)
+                .limit(EVENTS_LIMIT)
+            )
+            if items:
+                query = query.where(ItemEvent.item_id.in_(items))
+            rows = (await s.execute(query)).all()
+        found = []
+        for event, item in rows:
+            cursor = event.id
+            out = _event_out(engine, event, item)
+            if not kinds or out.kind in kinds:
+                found.append(out)
+        if found or time.monotonic() >= deadline:
+            return TransitionsOut(cursor=cursor, events=found)
+        await asyncio.sleep(min(EVENTS_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+
+
+@router.get("/projects/{slug}/forecast")
+async def cost_forecast(
+    slug: str,
+    db: Db,
+    engine: Eng,
+    stories: Annotated[int, Query(ge=0, le=1000, description="New stories about to be planned")] = 0,
+) -> dict:
+    """What `stories` new stories will likely cost, from what the project's succeeded stories cost
+    (all projects' while it has fewer than three), and how that fits the project budget next to
+    what its open stories will likely still spend."""
+    project = await _project(db, slug)
+    succeeded = engine.states_where(lambda st: st.terminal == "succeeded")
+    open_cond = engine.states_where(lambda st: st.terminal is None)
+    async with db.session() as s:
+        is_open = WorkItem.state.is_(None) if open_cond is None else or_(WorkItem.state.is_(None), open_cond)
+        open_items = (
+            await s.scalars(select(WorkItem).where(WorkItem.project_id == project.id, WorkItem.kind != "epic", is_open))
+        ).all()
+        return await forecast(s, project, succeeded, list(open_items), stories, settings.default_max_budget_usd)

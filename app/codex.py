@@ -54,6 +54,10 @@ def unsupported(spec: TaskCreate) -> str | None:
     if spec.allowed_tools is not None:
         return "allowed_tools is set, and Codex has no per-tool permissions"
     extra = set(spec.disallowed_tools or []) - WRITE_TOOLS
+    if WRITE_TOOLS <= set(spec.disallowed_tools or []):
+        # A read-only run's shell can't change anything; Bash is left out of Claude's runs only
+        # to save its definition's tokens (the planner), which Codex doesn't spend.
+        extra.discard("Bash")
     if extra:
         return f"disallowed_tools has {sorted(extra)}; Codex can only forbid {sorted(WRITE_TOOLS)}, as a whole"
     return None

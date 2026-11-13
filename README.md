@@ -113,7 +113,7 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 | | |
 |---|---|
-| `agent` | a role from [prompts/](prompts/)`<role>.md` works in the item's workspace; options `verify`, `resume` (continue its previous session), `verdicts`, `disallowed_tools` |
+| `agent` | a role from [prompts/](prompts/)`<role>.md` works in the item's workspace; options `verify`, `resume` (continue its previous session), `verdicts`, `disallowed_tools`, `diff` (the branch's commits and diff against the base go into the prompt, cut at 40k characters) |
 | `action` | a built-in harness step, e.g. `open_pr` |
 | `check` | an external condition evaluated without holding a worker, on GitHub webhooks and by beat; currently `ci` |
 | `human` | a request to the inbox with answer options; the answer moves the item on |
@@ -123,7 +123,7 @@ A workflow is a deterministic state machine in [workflows/](workflows/). The age
 
 An agent run that ends without a result gives its failure reason as the verdict: `turn_limit`, `budget`, `model_error`, `verify_failed`, `timeout`, `crashed`, `workspace`, `restart_limit` (see `FailureReason` in `app/models.py`). An agent state can route any of them in `next`; the rest go to `next.error` as before. In `story.yaml` an implementer that runs out of turns continues its session in another `implement` visit, bounded by `max_visits`. The reason is also stored on the harness task (`failure_reason` in `/tasks/{id}` and in the final `status` event).
 
-[workflows/story.yaml](workflows/story.yaml): `plan` (read-only) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (human). With the project's `auto_merge` on, `merge` merges the reviewed, green PR itself and the story is done; otherwise, or when GitHub refuses the merge (branch protection, conflicts), the PR waits for a human, and the `merge` artifact says why. `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
+[workflows/story.yaml](workflows/story.yaml): `plan` (read-only, no shell: Read, Grep, Glob) → `implement` (with verify) → `sync_base` → `review` (fresh session, no Write/Edit, the change in its prompt) → `publish` (push + PR) → `ci` → `merge` → `awaiting_merge` (human). With the project's `auto_merge` on, `merge` merges the reviewed, green PR itself and the story is done; otherwise, or when GitHub refuses the merge (branch protection, conflicts), the PR waits for a human, and the `merge` artifact says why. `changes_requested` sends the item back to `implement`, and the implementer continues its session with the review comments.
 
 **sync_base** merges the latest base branch into the story's branch, so stories running in parallel build on each other's merged work and their PRs don't conflict. It merges rather than rebases, so reviewed history stays intact. On a conflict the merge is left in progress and the story goes to `resolve_conflicts`; the `sync_base` artifact lists the conflicted files. There the implementer resolves them and commits, on a visit limit separate from `implement`'s, and then the story goes through `sync_base` and review again. In `awaiting_merge`, the `update` option runs `sync_base` for an open PR when the base branch has moved on or GitHub reports conflicts. With the project's `auto_merge` on, the `merge` check does this by itself when GitHub reports conflicts, and the story returns to In progress; without it, the PR waits for a person to choose `update`.
 
@@ -131,7 +131,7 @@ The planner writes a `planner` artifact: approach, files, test plan, risks. The 
 
 **CI gate.** `check: ci` looks at GitHub check runs and commit statuses on the PR's pushed head commit when a webhook reports a finished check (see [GitHub webhook](#github-webhook)), and in any case every `HARNESS_CHECKS_POLL_SECONDS` (`HARNESS_CHECKS_FALLBACK_POLL_SECONDS` with webhooks on). If something fails, the item goes back to `implement`. The `ci` artifact contains the names of the failed checks, links and the tail of the GitHub Actions log. After the fix, the same push updates the PR. If no checks appear within `grace_seconds`, the result is `no_checks`: in a story, such an item goes straight to merge. If there is no result within `timeout_seconds`, the item goes to a human.
 
-Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps. When the item reaches a `succeeded` terminal state (the PR is merged), the engine enqueues `harness.cleanup_workspace` and the worker deletes the workspace. Failed and cancelled items keep it, because reopening them reuses it.
+Steps pass **artifacts** to each other: the implementer's summary, the review, human comments, errors. Each next prompt gets the latest version of every artifact. The workspace (a clone on branch `agent/<kind>-<id>`) is shared by all of an item's steps. A repository without a single commit is seeded with an empty `Initial commit` on the base branch first, so a project can start from a freshly created repo. When the item reaches a `succeeded` terminal state (the PR is merged), the engine enqueues `harness.cleanup_workspace` and the worker deletes the workspace. Failed and cancelled items keep it, because reopening them reuses it.
 
 | Method | Path | |
 |---|---|---|
@@ -173,16 +173,21 @@ Factory state lives in Postgres. Redis still holds the queue, agent events and l
 
 ## MCP server
 
-`app/mcp_server.py` exposes the factory to any MCP client (Claude Code, Claude Desktop, …) as tools: projects (`list_projects`, `create_project`, `update_project`, `import_issues`), the board and stories (`get_board`, `get_inbox`, `get_item`, `create_item`, `update_item`, `item_action` for start / run-now / cancel / reopen / open-pr, `delete_item`, `comment_item`, `answer_request`, `get_item_git`, `get_run_log`), the scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models`, project memory (`list_notes`, `create_note`, `update_note`, `delete_note`, `copy_notes`, `export_notes`, `import_notes`), and workspaces (`list_workspaces`, `prune_workspaces`, a dry run unless told otherwise). Read-only and destructive tools carry the matching MCP annotations; the board terminal is not exposed.
+`app/mcp_server.py` exposes the factory to any MCP client (Claude Code, Claude Desktop, …) as tools: projects (`list_projects`, `create_project`, `update_project`, `import_issues`), the board and stories (`get_board`, `get_inbox`, `wait_for`, `forecast_cost`, `get_item`, `create_item`, `create_plan`, `update_item`, `item_action` for start / run-now / cancel / reopen / open-pr, `delete_item`, `comment_item`, `answer_request`, `get_item_git`, `get_run_log`), the scheduler (`scheduler_status`, `pause_scheduler`, `resume_scheduler`, `set_scheduler_limits`), `list_models`, project memory (`list_notes`, `create_note`, `update_note`, `delete_note`, `copy_notes`, `export_notes`, `import_notes`), and workspaces (`list_workspaces`, `prune_workspaces`, a dry run unless told otherwise). Read-only and destructive tools carry the matching MCP annotations; the board terminal is not exposed.
 
-It is a client of the HTTP API, not a second backend: it calls `HARNESS_API_URL` (default `http://localhost:8000`) with `HARNESS_API_TOKEN` from the environment or `.env`, so the API must be running (`make dev` or compose) and every call goes through the same checks as the board. It speaks stdio:
+It is a client of the HTTP API, not a second backend, so every call goes through the same checks as the board. The API serves it over streamable HTTP at `/mcp`, behind the API's token (local requests only when no token is set):
 
 ```bash
-claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
-make mcp   # the same, by hand
+claude mcp add -s user --transport http factory http://localhost:8000/mcp
+# remote: claude mcp add -s user --transport http factory https://factory.example/mcp --header "Authorization: Bearer …"
 ```
 
-Against a remote harness, pass the address and token: `claude mcp add factory -e HARNESS_API_URL=https://factory.example -e HARNESS_API_TOKEN=… -- uv run --directory … python -m app.mcp_server`.
+`-s user` makes it available in every project, not just the current folder. It also speaks stdio, calling `HARNESS_API_URL` (default `http://localhost:8000`) with `HARNESS_API_TOKEN`:
+
+```bash
+claude mcp add -s user factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+make mcp   # the same, by hand
+```
 
 Every tool, its endpoint and what is left out: [docs/mcp-server.ru.md](docs/mcp-server.ru.md) (in Russian).
 

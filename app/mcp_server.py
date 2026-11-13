@@ -4,9 +4,15 @@ A thin client of the HTTP API (HARNESS_API_URL, bearer HARNESS_API_TOKEN), so it
 `make dev` and a deployed compose stack alike and goes through the same checks as the board.
 
     uv run python -m app.mcp_server        # stdio transport
-    claude mcp add factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+    claude mcp add -s user factory -- uv run --directory /path/to/agent-harness python -m app.mcp_server
+
+The API also serves it over streamable HTTP at /mcp (see `in_process`), behind the API's token:
+
+    claude mcp add -s user --transport http factory http://localhost:8000/mcp
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Literal, Required, TypedDict
 
 import httpx
@@ -21,11 +27,13 @@ Manage a software factory where Claude Code agents work on stories: plan, implem
 open a PR, pass CI, merge. A project is a GitHub repo; its stories move through a workflow
 (states plan → implement → sync_base → review → publish → ci → merge → awaiting_merge).
 Start with list_projects, then get_board. Stories waiting for a person show up in get_inbox;
-answer them with answer_request using one of the request's options. Never wait for a story to be
-merged to start the ones that depend on it: give those `blocked_by` and `auto_start=True` (create_plan,
-create_item, update_item) and they start by themselves once their blockers have succeeded, i.e. once
-the factory sees the PR merged on GitHub. Each project keeps a memory of
-lessons for its agents (list_notes); notes agents propose stay `proposed` until approved."""
+answer them with answer_request using one of the request's options. To follow stories as they
+progress, call wait_for with get_board's `events_cursor` rather than polling the board.
+Never wait for a story to be merged to start the ones that depend on it: give those `blocked_by`
+and `auto_start=True` (create_plan, create_item, update_item) and they start by themselves once
+their blockers have succeeded, i.e. once the factory sees the PR merged on GitHub. Each project
+keeps a memory of lessons for its agents (list_notes); notes agents propose stay `proposed`
+until approved."""
 
 # Fields of a board card worth showing a model; the full card is in get_item.
 CARD_FIELDS = (
@@ -40,17 +48,35 @@ DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_
 
 mcp = MCPServer("rubens-atelier", instructions=INSTRUCTIONS)
 
-# Tests route requests to the app in-process; None = real network.
+# Tests and the API's /mcp route requests to the app in-process; None = real network.
 transport: httpx.AsyncBaseTransport | None = None
+# The base URL in-process calls go to; None = HARNESS_API_URL.
+base_url: str | None = None
 
 
-async def _request(method: str, path: str, *, json: Any = None, params: dict | None = None) -> httpx.Response:
+@contextmanager
+def in_process(asgi_app: Any) -> Iterator[None]:
+    """Send the tools' API calls straight to `asgi_app` (the API serving /mcp) instead of over the
+    network, as a local request: no HARNESS_API_URL to get right inside the API's container."""
+    global transport, base_url
+    saved = transport, base_url
+    transport, base_url = httpx.ASGITransport(app=asgi_app), "http://localhost"
+    try:
+        yield
+    finally:
+        transport, base_url = saved
+
+
+async def _request(
+    method: str, path: str, *, json: Any = None, params: dict | None = None, timeout: float = 30
+) -> httpx.Response:
     headers = {"Authorization": f"Bearer {settings.api_token}"} if settings.api_token else {}
-    async with httpx.AsyncClient(base_url=settings.api_url, headers=headers, transport=transport, timeout=30) as c:
+    api_url = base_url or settings.api_url
+    async with httpx.AsyncClient(base_url=api_url, headers=headers, transport=transport, timeout=timeout) as c:
         try:
             r = await c.request(method, path, json=json, params=params)
         except httpx.TransportError as e:
-            raise ToolError(f"factory API at {settings.api_url} is unreachable: {e}") from None
+            raise ToolError(f"factory API at {api_url} is unreachable: {e}") from None
     if r.is_error:
         try:
             detail = r.json().get("detail", r.text)
@@ -60,8 +86,10 @@ async def _request(method: str, path: str, *, json: Any = None, params: dict | N
     return r
 
 
-async def _call(method: str, path: str, *, json: Any = None, params: dict | None = None) -> Any:
-    r = await _request(method, path, json=json, params=params)
+async def _call(
+    method: str, path: str, *, json: Any = None, params: dict | None = None, timeout: float = 30
+) -> Any:
+    r = await _request(method, path, json=json, params=params, timeout=timeout)
     return r.json() if r.content else None
 
 
@@ -149,14 +177,53 @@ def _card(item: dict) -> dict:
 async def get_board(project: str, done_limit: int = 20) -> dict:
     """The project's stories by column: backlog, working, needs_human, done, failed. `done` holds
     only the `done_limit` most recent ones; `done_total` says how many there are. `proposed_notes`
-    counts notes agents proposed for the project's memory that wait for a person (list_notes)."""
+    counts notes agents proposed for the project's memory that wait for a person (list_notes).
+    `events_cursor` is the `after` to pass to wait_for to hear of everything that happens next."""
     r = await _request("GET", f"/projects/{project}/board", params={"done_limit": done_limit})
     board = {column: [_card(i) for i in items] for column, items in r.json().items()}
     return {
         **board,
         "done_total": int(r.headers.get("X-Done-Total", len(board.get("done", [])))),
         "proposed_notes": int(r.headers.get("X-Proposed-Notes", 0)),
+        "events_cursor": int(r.headers.get("X-Events-Cursor", 0)),
     }
+
+
+EventKind = Literal["agent", "action", "check", "human", "terminal", "backlog"]
+
+
+@mcp.tool(annotations=READ)
+async def wait_for(
+    project: str,
+    after: int | None = None,
+    item_ids: list[str] = [],
+    kinds: list[EventKind] = ["human", "terminal"],
+    timeout_seconds: float = 240,
+) -> dict:
+    """Wait until stories of the project change state, instead of polling get_board / get_inbox.
+    Returns the transitions after the cursor `after` (oldest first) as soon as there is at least
+    one, or none once `timeout_seconds` (at most 300) pass; call again with the returned `cursor`.
+    Without `after`, waits for what happens from now on; pass get_board's `events_cursor` (or the
+    previous `cursor`) not to miss anything in between. `item_ids` limits it to those stories.
+    `kinds` picks the transitions worth waking up for, by the kind of state entered: `human`
+    (a story waits for a person: answer via get_inbox / answer_request), `terminal` (succeeded,
+    failed or cancelled; see `outcome`), `agent`, `action`, `check`, `backlog` (reopened).
+    The default wakes only when a person is needed or a story has finished; [] means every transition."""
+    wait = max(0.0, min(timeout_seconds, 300))
+    params: dict[str, Any] = {"wait": wait, "items": item_ids, "kinds": kinds}
+    if after is not None:
+        params["after"] = after
+    return await _call("GET", f"/projects/{project}/events", params=params, timeout=wait + 30)
+
+
+@mcp.tool(annotations=READ)
+async def forecast_cost(project: str, stories: int = 0) -> dict:
+    """What `stories` new stories will likely cost before you plan them, judged by what the project's
+    succeeded stories cost (all projects' while it has fewer than three): median and p80 per story,
+    what the open stories will likely still spend, the project budget left after them
+    (`free_after_open_usd`) and how many more stories fit. `warning` appears when the new stories
+    likely won't fit. `per_run_cap_usd` caps one agent step, not a story (a story runs several)."""
+    return await _call("GET", f"/projects/{project}/forecast", params={"stories": stories})
 
 
 @mcp.tool(annotations=READ)

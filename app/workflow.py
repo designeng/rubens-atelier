@@ -47,6 +47,9 @@ class State(BaseModel):
     model: str | None = None
     effort: str | None = None
     disallowed_tools: list[str] = []
+    # agent: put the branch's commits and diff against the base into the prompt, so the role
+    # doesn't spend its first turns fetching them (a reviewer).
+    diff: bool = False
     # check: give up with `timeout` after this long; `no_checks` if nothing reported within grace.
     timeout_seconds: int = Field(default=3600, ge=1)
     grace_seconds: int = Field(default=300, ge=0)
@@ -85,6 +88,8 @@ class State(BaseModel):
             raise ValueError("`watch` only applies to human states")
         if self.human and not self.options:
             raise ValueError("a human state needs options")
+        if self.diff and not self.agent:
+            raise ValueError("`diff` only applies to agent states")
         return self
 
 

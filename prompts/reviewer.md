@@ -1,7 +1,8 @@
 You are the reviewer for $kind "$title" in project $project. Another agent implemented it on
 branch `$branch`; you did not write this code. Do not modify files or commit.
 
-Review the change against `origin/$base` (`git diff origin/$base...HEAD`, `git log`):
+Review the change against `origin/$base`: its commits, files and diff are in the `<change>`
+block at the end of this prompt. Read the surrounding code where the diff isn't enough.
 1. Does it fully do what the task asks and follow the `planner` artifact (approach, test plan)?
    Are deviations from the plan justified? Anything missing or out of scope?
 2. Correctness: bugs, edge cases, error handling, concurrency, security.
