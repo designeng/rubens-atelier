@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>By the numbers · rubens-atelier</title>
+<meta name="description" content="How rubens-atelier keeps state, survives crashing workers and keeps parallel work apart, with real cost and quality figures from two weeks of runs.">
+<meta property="og:title" content="35 merged PRs, $0.66 each: rubens-atelier by the numbers">
+<meta property="og:image" content="https://designeng.github.io/rubens-atelier/assets/board.png">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="../"><img src="../assets/favicon.svg" alt="">rubens-atelier</a>
+  <div class="links"><a href="./">Notes</a><a href="https://github.com/designeng/rubens-atelier">GitHub</a></div>
+</div></nav>
+
+<main><div class="wrap">
+  <div class="eyebrow">Workshop notes · 2</div>
+  <h1>35 merged PRs, $0.66 each: rubens-atelier by the numbers</h1>
+  <div class="meta">Denis Savenok · November 2026</div>
+
+  <p class="lead">In <a href="building-the-atelier.html">the first note</a> I wrote about what it took to make coding agents dependable. People asked the follow-up questions: how does it actually work, and what does it cost? Here are the answers, with real numbers.</p>
+
+  <p>Over two weeks (Oct 29 to Nov 13) the factory ran 159 agent steps and got 35 stories merged. <strong>28 of those 35 were features of rubens-atelier itself</strong>: the dependency system between tasks, budgets, the sandbox health check, the prompt-injection guard. The factory was building itself.</p>
+
+  <div class="stats">
+    <div class="stat"><b>$0.66</b><span>median cost of a merged story</span></div>
+    <div class="stat"><b>~28 min</b><span>median time from start to a PR ready for review</span></div>
+    <div class="stat"><b>77%</b><span>approved by the AI reviewer on the first pass</span></div>
+    <div class="stat"><b>$53</b><span>total spend for all 159 agent runs</span></div>
+    <div class="stat"><b>9 of 35</b><span>hit a merge conflict and the agent fixed it</span></div>
+    <div class="stat"><b>3 of 35</b><span>needed a human before the final merge</span></div>
+  </div>
+
+  <h2>Where the money goes</h2>
+  <p>The implementer costs about 70% of the total ($36.76). The planner costs $10.24 and the reviewer $6.01, about 12 cents per review. Costs vary a lot: the cheapest story cost $0.22 and the most expensive $10.05, so the average ($1.30) is twice the median. A handful of large tasks drive the bill, which is why each story and project can have a hard budget.</p>
+  <p>About 89% of the input tokens are cache reads. Every request re-reads the whole session, so prompt caching is the difference between "cheap" and "unaffordable". It is also why a long session gets replaced by a fresh one that starts from short summaries.</p>
+
+  <h2>The state lives in a database, not in the model</h2>
+  <p>Each workflow is a small state machine written in YAML. Stories, transitions, runs and the hand-offs between agents are stored in Postgres. Queues, live event streams and short-lived locks are kept in Redis. The agent never picks the next state. It returns a verdict from a fixed list, and the workflow maps that verdict to the next step.</p>
+
+  <h2>Workers crash. The factory notices.</h2>
+  <p>A worker that takes a task holds a lease that expires after 30 seconds and renews it every 10. If the worker dies, the lease runs out, a reaper marks the run as lost, and the step is sent again. The agent then resumes its own session instead of starting over.</p>
+
+  <h2>Doing the same thing twice is harmless</h2>
+  <p>Every story has a version number that goes up on each transition. A step carries the version it was created for, so a duplicated or late message can't move the story. On top of that, the database allows only one run per story version.</p>
+
+  <h2>Agents pass notes, not transcripts</h2>
+  <p>Each step leaves an artifact: the plan, the implementer's summary, the review, the CI log, a human's comment. The next agent gets the latest version of each. A resumed session receives only what is new since its last visit.</p>
+
+  <h2>Parallel work, on two levels</h2>
+  <p>In Git, every branch merges the latest main before review, and conflicts go back to the implementer. That happened in 9 of the 35 stories. At the planning level, a story can be blocked by other stories (cycles are rejected). It starts by itself once they are merged.</p>
+
+  <h2>How quality is measured, honestly</h2>
+  <p>There is no benchmark suite yet. The signals I track are the reviewer's verdicts (40 approvals, 12 requests for changes), how often a story is sent back, how often it needs a human, and failed tool calls per run. Every PR was still reviewed and merged by me. The 77% figure tells you how often the AI reviewer is satisfied, not how often the code is perfect.</p>
+
+  <p class="note">Caveats: a small sample, picked by me, on my own repositories, mostly on Claude Sonnet. Most of these repos had no CI configured yet, so CI rarely had anything to check. Token-level figures cover the 32 most recent runs, recorded after token tracking was added.</p>
+
+  <h2>What's next</h2>
+  <p>A proper evaluation set of issues with known-good outcomes, so changes to prompts and models can be compared on something better than a feeling.</p>
+
+  <div class="next">The code is open source: <a href="https://github.com/designeng/rubens-atelier">github.com/designeng/rubens-atelier</a></div>
+</div></main>
+
+<footer><div class="wrap">rubens-atelier · © 2026 Denis Savenok · <a href="https://github.com/designeng/rubens-atelier">GitHub</a></div></footer>
+</body>
+</html>
