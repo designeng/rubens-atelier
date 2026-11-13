@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building the atelier · rubens-atelier</title>
+<meta name="description" content="Three weeks building a workshop where AI agents write the code: what was hard and how it was solved.">
+<meta property="og:title" content="Three weeks building a workshop where AI agents write the code">
+<meta property="og:image" content="https://designeng.github.io/rubens-atelier/assets/board.png">
+<link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="../"><img src="../assets/favicon.svg" alt="">rubens-atelier</a>
+  <div class="links"><a href="./">Notes</a><a href="https://github.com/designeng/rubens-atelier">GitHub</a></div>
+</div></nav>
+
+<main><div class="wrap">
+  <div class="eyebrow">Workshop notes · 1</div>
+  <h1>Three weeks building a workshop where AI agents write the code</h1>
+  <div class="meta">Denis Savenok · November 2026</div>
+
+  <p class="lead">Rubens didn't paint every canvas himself. His apprentices did most of the work, and the master walked the studio, corrected, and signed.</p>
+
+  <p>That's the idea behind <strong>rubens-atelier</strong>, an open-source "software factory." You hand it a GitHub issue. AI agents plan the change, write the code, review each other's work, pass CI and open a pull request. My job is the last step: look it over and merge.</p>
+
+  <p>Getting an agent to write code is the easy part now. Getting it to work reliably, safely and without burning money took most of the ~200 commits. Here's what I learned along the way.</p>
+
+  <h2>Don't let the AI run the process</h2>
+  <p>Left to decide its own next step, an agent wanders. So the process is fixed: plan, build, review, ship. The agent only reports how its step went, and the workflow decides what comes next. When an agent and a reviewer kept bouncing work back and forth forever, a simple visit limit fixed it: after a few rounds, a human steps in.</p>
+
+  <h2>Parallel work collides</h2>
+  <p>Five agents working at once means five pull requests stepping on each other. Before review, every branch now pulls in the latest main. If there's a conflict, the agent resolves it and the change goes back through review.</p>
+
+  <h2>Cost creeps up quietly</h2>
+  <p>Long AI sessions get expensive fast, because every request re-reads everything that came before. The fix was to hand agents short summaries of earlier steps instead of their whole history, and to give each one only the tools it actually needs. Every run now records what it cost, so nothing is a surprise.</p>
+
+  <h2>Trust nothing by default</h2>
+  <p>Agents run in a sandbox with no access to secrets. If the sandbox fails to start, the run stops instead of carrying on unprotected. Issues written by strangers can hide malicious instructions, so they wait for a human to approve them before any agent touches them.</p>
+
+  <h2>Separate the roles for real</h2>
+  <p>The planner can only read. The reviewer can't edit code at all. Otherwise "review" turns into "I wrote it, so I approve it."</p>
+
+  <h2>Expect things to break</h2>
+  <p>Workers crash and messages get lost. The system notices, picks up where it left off, and the agent continues its session instead of starting over.</p>
+
+  <h2>The takeaway</h2>
+  <p>The model is the simplest part. The real work is everything around it: a predictable process, isolation, visibility into cost, and clear points where a human makes the call.</p>
+
+  <div class="next">Next: <a href="by-the-numbers.html">how it works under the hood, and what a single task actually costs →</a></div>
+</div></main>
+
+<footer><div class="wrap">rubens-atelier · © 2026 Denis Savenok · <a href="https://github.com/designeng/rubens-atelier">GitHub</a></div></footer>
+</body>
+</html>
