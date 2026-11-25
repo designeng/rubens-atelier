@@ -22,6 +22,8 @@ class ActionContext:
     cwd: Path
     artifacts: dict[str, str]  # latest content per artifact name
     report: str = ""  # becomes an artifact named after the action
+    arrived_by: str | None = None  # the verdict that led to this step
+    reviewed_sha: str | None = None  # publish exactly this commit
     models: dict[str, str] = field(default_factory=dict)  # model of the latest run per agent role
 
 
@@ -30,6 +32,7 @@ Action = Callable[[ActionContext], Awaitable[str]]
 CONFLICT = "conflict"
 MERGED = "merged"
 MANUAL = "manual"
+NO_CHECKS = "no_checks"
 # GitHub won't merge: branch protection, conflicts, the head moved on, or no permission.
 MERGE_REFUSED = {403, 405, 409, 422}
 # Repository setting that allows each merge method, in order of preference.
@@ -76,7 +79,11 @@ def _conflict_report(base: str, files: list[str], still: bool = False) -> str:
 async def open_pr(ctx: ActionContext) -> str:
     """Push the item's branch and open its PR (or reuse the open one; pushing updates it)."""
     item, repo = ctx.item, ctx.project.repo
-    await gitops.commit_all_if_dirty(ctx.cwd, f"{item.title} (uncommitted agent changes)")
+    if ctx.reviewed_sha:
+        if not await gitops.is_at(ctx.cwd, item.branch, ctx.reviewed_sha):
+            raise RuntimeError(f"the workspace is no longer at the reviewed commit {ctx.reviewed_sha[:12]}")
+    else:
+        await gitops.commit_all_if_dirty(ctx.cwd, f"{item.title} (uncommitted agent changes)")
     if await gitops.commits_ahead(ctx.cwd, item.base_branch) == 0:
         raise RuntimeError("nothing to publish: the branch has no commits")
     await gitops.push(ctx.cwd, item.branch, token=await ctx.gh.git_token())
@@ -102,9 +109,13 @@ async def open_pr(ctx: ActionContext) -> str:
 
 async def merge_pr(ctx: ActionContext) -> str:
     """Merge the item's PR if the project has automerge on: by now it was reviewed and CI
-    passed. Otherwise, or when GitHub refuses, the PR waits for a human (`manual`); GitHub's
-    reason goes into the `merge` artifact. Merges only the head CI checked."""
+    passed (or reported nothing, with `merge_without_ci`). Otherwise, or when GitHub refuses, the
+    PR waits for a human (`manual`); the reason goes into the `merge` artifact. Merges only the
+    head CI checked."""
     if not ctx.project.auto_merge:
+        return MANUAL
+    if ctx.arrived_by == NO_CHECKS and not ctx.project.merge_without_ci:
+        ctx.report = "Automerge: no CI check reported on the PR, and the project has merge_without_ci off."
         return MANUAL
     match = re.search(r"/pull/(\d+)", ctx.item.pr_url or "")
     if not match:

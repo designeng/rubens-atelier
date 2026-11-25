@@ -288,6 +288,9 @@ def test_update_project_settings(client):
     r = client.patch("/projects/app", json={"auto_merge": True})
     assert r.json()["auto_merge"] is True and r.json()["verify_command"] == "uv run pytest -q"
     assert client.patch("/projects/app", json={"base_branch": "develop"}).json()["auto_merge"] is True
+    assert project["merge_without_ci"] is False and project["scope_check"] is True
+    r = client.patch("/projects/app", json={"merge_without_ci": True, "scope_check": False}).json()
+    assert r["merge_without_ci"] is True and r["scope_check"] is False and r["auto_merge"] is True
 
 
 def test_update_project_validation(client):
@@ -304,6 +307,8 @@ def test_update_project_validation(client):
         {"verify_command": ""},
         {"verify_command": "   "},
         {"auto_merge": None},
+        {"merge_without_ci": None},
+        {"scope_check": None},
     ):
         assert client.patch("/projects/app", json=body).status_code == 422, body
     assert client.get("/projects").json() == [before]

@@ -10,6 +10,8 @@ export interface ProjectIn {
   verify_command?: string | null;
   installation_id?: number | null;
   auto_merge?: boolean;
+  merge_without_ci?: boolean;
+  scope_check?: boolean;
   budget_usd?: number | null;
 }
 
@@ -18,6 +20,8 @@ export interface ProjectPatch {
   base_branch?: string | null;
   verify_command?: string | null;
   auto_merge?: boolean;
+  merge_without_ci?: boolean;
+  scope_check?: boolean;
   budget_usd?: number | null;
 }
 
@@ -29,6 +33,8 @@ export interface ProjectOut {
   verify_command: string | null;
   installation_id: number | null;
   auto_merge: boolean;
+  merge_without_ci: boolean;
+  scope_check: boolean;
   budget_usd: number | null;
   spent_usd: number; // what all the project's runs have cost
 }

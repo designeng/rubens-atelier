@@ -11,6 +11,7 @@ states:
     # Read, Grep and Glob are enough to plan; Bash's definition alone is ~4k tokens per request.
     disallowed_tools: [Write, Edit, Bash]
     verdicts: [ready, needs_clarification, too_big]
+    scope: true  # names the files it touches; the reviewer is told where the change deviates
     resume: true
     max_visits: 3
     on_exhausted: needs_human
@@ -57,6 +58,7 @@ states:
     agent: reviewer
     effort: medium
     disallowed_tools: [Write, Edit]
+    read_only: true  # Bash could still write: changes are undone, the reviewed commit is what's published
     diff: true  # the change comes in the prompt; Bash stays for running tests
     verdicts: [approved, changes_requested, needs_human]
     next: {approved: publish, changes_requested: implement, needs_human: needs_human, error: needs_human}
@@ -65,6 +67,7 @@ states:
     action: open_pr
     next: {done: ci, error: needs_human}
 
+  # No CI reported: `merge` leaves the PR to a human unless the project has merge_without_ci on.
   ci:
     check: ci
     timeout_seconds: 3600

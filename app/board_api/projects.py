@@ -102,10 +102,11 @@ async def list_projects(db: Db) -> list[ProjectOut]:
 
 @router.patch("/projects/{slug}")
 async def update_project(slug: str, body: ProjectPatch, db: Db) -> ProjectOut:
-    """Change base_branch / verify_command / auto_merge / budget_usd. slug, repo and installation_id are immutable.
+    """Change project settings. slug, repo and installation_id are immutable.
 
     verify_command applies from the next agent step of every story, running ones included.
-    auto_merge applies to every story that reaches its merge step from now on.
+    auto_merge and merge_without_ci apply to every story that reaches its merge step from now on.
+    scope_check applies from the next planner or reviewer run.
     base_branch only affects stories that have no workspace yet: started ones keep their base.
     budget_usd is checked before each new agent run (see budget.py); null removes the limit.
     """

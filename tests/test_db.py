@@ -56,6 +56,10 @@ def _create_pre_alembic(conn, *, drop: str | None = None) -> None:
                    "failed_tools"):
         legacy.tables["runs"]._columns.remove(legacy.tables["runs"].c[column])  # migration 0007
     legacy.tables["work_items"]._columns.remove(legacy.tables["work_items"].c.auto_start)  # migration 0008
+    for column in ("scope_check", "merge_without_ci"):  # migration 0010
+        legacy.tables["projects"]._columns.remove(legacy.tables["projects"].c[column])
+    for column in ("planned_files", "review_sha", "review_version"):  # migration 0010
+        legacy.tables["work_items"]._columns.remove(legacy.tables["work_items"].c[column])
     legacy.tables["work_items"]._columns.remove(legacy.tables["work_items"].c.pr_conflicts)  # migration 0009
     legacy.create_all(conn)
     if drop:

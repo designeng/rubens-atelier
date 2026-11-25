@@ -27,6 +27,8 @@ class ProjectIn(BaseModel):
     verify_command: str | None = None
     installation_id: int | None = Field(default=None, description="GitHub App installation granting access to repo")
     auto_merge: bool = False
+    merge_without_ci: bool = Field(default=False, description="Automerge also when no CI check reported")
+    scope_check: bool = Field(default=True, description="Show the reviewer where the change leaves the plan")
     budget_usd: float | None = Field(default=None, gt=0, description="Most the project's agent runs may cost")
 
 
@@ -40,6 +42,8 @@ class ProjectPatch(BaseModel):
     # Blank is rejected rather than stored: send null to clear.
     verify_command: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] | None = None
     auto_merge: bool = False  # left out = unchanged; null is rejected
+    merge_without_ci: bool = False  # likewise
+    scope_check: bool = True  # likewise
     budget_usd: float | None = Field(default=None, gt=0)  # null removes the limit
 
 
@@ -51,6 +55,8 @@ class ProjectOut(Orm):
     verify_command: str | None
     installation_id: int | None
     auto_merge: bool
+    merge_without_ci: bool
+    scope_check: bool
     budget_usd: float | None
     spent_usd: float = 0.0
 

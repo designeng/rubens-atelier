@@ -65,7 +65,7 @@ R — только чтение, W — меняет состояние, D — н
 | Инструмент | | Эндпоинт | Что делает |
 |---|---|---|---|
 | `list_projects` | R | `GET /projects` | Проекты с репозиторием, verify-командой, auto-merge, бюджетом и тратами |
-| `create_project` | W | `POST /projects` | `slug`, `repo` (`owner/name`), опционально `base_branch`, `verify_command`, `auto_merge`, `budget_usd`, `installation_id` |
+| `create_project` | W | `POST /projects` | `slug`, `repo` (`owner/name`), опционально `base_branch`, `verify_command`, `auto_merge`, `merge_without_ci`, `scope_check`, `budget_usd`, `installation_id` |
 | `update_project` | W | `PATCH /projects/{slug}` | Переданные поля меняются, остальные остаются; `clear` (`base_branch`, `verify_command`, `budget_usd`) сбрасывает значения |
 | `import_issues` | W | `POST /projects/{slug}/import-issues` | Открытые issues репозитория — в backlog историями; ничего не запускается |
 

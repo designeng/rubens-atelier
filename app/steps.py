@@ -28,7 +28,7 @@ from string import Template
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
-from . import gitops, memory
+from . import gitops, memory, scope
 from .actions import ACTIONS, ActionContext
 from .archive import archive_task
 from .budget import remaining
@@ -110,7 +110,12 @@ async def run_step(
             )
             await s.commit()
         if st.agent:
+            if st.read_only:
+                await _pin(engine, item, cwd)
             verdict = await _agent(item, project, st, engine, store, worker_id, runner)
+            # A run that will be resumed keeps its workspace; the pin holds for the whole version.
+            if st.read_only and verdict not in (None, RATE_LIMITED, RESTART):
+                await _unpin(engine, item, st, cwd)
         else:
             verdict = await _action(item, project, st, cwd, engine, gh)
     except Exception as e:
@@ -130,6 +135,48 @@ async def run_step(
         await engine.advance(item_id, version, verdict, actor=f"worker:{worker_id}")
         if st.agent and scheduler:
             await scheduler.release(item_id, version)
+
+
+async def _pin(engine: Engine, item: WorkItem, cwd: Path) -> None:
+    """Remember the commit a read-only role is about to look at, once per item version: a step
+    re-run after a crash must not take what the crashed run changed for the original."""
+    if item.review_version == item.version:
+        return
+    if gitops.merge_in_progress(cwd):
+        raise RuntimeError("a merge is in progress: there is no finished change to review")
+    await gitops.commit_all_if_dirty(cwd, f"{item.title} (uncommitted agent changes)")
+    item.review_sha, item.review_version = await gitops.head_sha(cwd), item.version
+    async with engine.db.session() as s:
+        await s.execute(
+            update(WorkItem)
+            .where(WorkItem.id == item.id, WorkItem.version == item.version)
+            .values(review_sha=item.review_sha, review_version=item.review_version)
+        )
+        await s.commit()
+
+
+async def _unpin(engine: Engine, item: WorkItem, st: State, cwd: Path) -> None:
+    """Put the workspace back to the pinned commit if the read-only role changed it."""
+    async with engine.db.session() as s:
+        if await s.scalar(select(WorkItem.version).where(WorkItem.id == item.id)) != item.version:
+            return  # a person moved the item on meanwhile: the workspace is another step's now
+    if not await gitops.is_at(cwd, item.branch, item.review_sha):
+        log.warning("item %s: %s changed code in a read-only state, restoring %s", item.id, st.agent, item.review_sha)
+        await gitops.restore(cwd, item.branch, item.review_sha)
+
+
+async def _last_event(engine: Engine, item_id: str) -> ItemEvent | None:
+    async with engine.db.session() as s:
+        return await s.scalar(
+            select(ItemEvent).where(ItemEvent.item_id == item_id).order_by(ItemEvent.id.desc()).limit(1)
+        )
+
+
+def _reviewed_sha(engine: Engine, item: WorkItem, event: ItemEvent | None) -> str | None:
+    """The commit a read-only role just passed on to this step; None if the step was reached
+    another way (e.g. by hand)."""
+    st = engine.workflow(item.workflow).states.get(event.from_state) if event and event.from_state else None
+    return item.review_sha if event and st and st.read_only and event.verdict in st.verdicts else None
 
 
 def small_session(previous: Run | None) -> bool:
@@ -217,12 +264,17 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
                 prompt = FOLLOW_UP + "".join(f"\n<comment>\n{c.content}\n</comment>\n" for c in comments)
             else:
                 prompt = await build_prompt(engine, item, project, st, since=previous if session else None)
+            wants_files = st.scope and project.scope_check
             spec = TaskCreate(
                 prompt=prompt,
                 workspace_key=item.id,
                 resume_session=interrupted or session,
                 verify_command=project.verify_command if st.verify else None,
-                output_schema=verdict_schema(st.verdicts, memory.NOTES_SCHEMA) if st.verdicts else None,
+                output_schema=(
+                    verdict_schema(st.verdicts, memory.NOTES_SCHEMA, scope.FILES_SCHEMA if wants_files else None)
+                    if st.verdicts
+                    else None
+                ),
                 model=model,
                 effort=st.effort,
                 lean_context=lean,
@@ -323,6 +375,9 @@ async def _agent(item, project, st: State, engine, store, worker_id, runner) -> 
         s.add(Artifact(item_id=item.id, run_id=run.id, name="error" if failed else st.agent, content=content))
         if info.status == TaskStatus.succeeded:
             await memory.propose(s, project.id, item.id, st.agent, out.get("notes"))
+            if st.scope:
+                planned = scope.clean(out.get("files"))
+                await s.execute(update(WorkItem).where(WorkItem.id == item.id).values(planned_files=planned))
         if info.session_id:
             sessions = {**item.sessions, st.agent: info.session_id}
             await s.execute(update(WorkItem).where(WorkItem.id == item.id).values(sessions=sessions))
@@ -344,6 +399,7 @@ async def _action(item, project, st: State, cwd, engine, gh) -> str:
     action = ACTIONS.get(st.action)
     if action is None:
         raise RuntimeError(f"unknown action {st.action!r}")
+    event = await _last_event(engine, item.id)
     ctx = ActionContext(
         gh=gh,
         project=project,
@@ -351,6 +407,8 @@ async def _action(item, project, st: State, cwd, engine, gh) -> str:
         cwd=cwd,
         artifacts=await latest_artifacts(engine, item.id),
         models=await latest_models(engine, item.id),
+        arrived_by=event.verdict if event else None,
+        reviewed_sha=_reviewed_sha(engine, item, event),
     )
     verdict = await action(ctx)
     async with engine.db.session() as s:
@@ -395,6 +453,10 @@ async def build_prompt(engine: Engine, item: WorkItem, project: Project, st: Sta
         prompt += f'\n<artifact name="{a.name}">\n{a.content[-ARTIFACT_LIMIT:]}\n</artifact>\n'
     if st.diff and item.base_branch:
         change = await gitops.change_summary(item_workspace(item.id), item.base_branch, DIFF_LIMIT)
+        if project.scope_check:
+            changed = await gitops.changed_files(item_workspace(item.id), item.base_branch)
+            if deviations := scope.note(item.planned_files, changed):
+                change = f"{deviations}\n\n{change}"
         prompt += f'\n<change base="origin/{item.base_branch}">\n{change}\n</change>\n'
     return prompt
 

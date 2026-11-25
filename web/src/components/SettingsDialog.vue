@@ -9,6 +9,8 @@ const dlg = ref<InstanceType<typeof AppDialog>>();
 const base = ref("");
 const verify = ref("");
 const autoMerge = ref(false);
+const mergeWithoutCi = ref(false);
+const scopeCheck = ref(true);
 const budget = ref("");
 const err = ref("");
 const busy = ref(false);
@@ -24,6 +26,8 @@ function open() {
   base.value = p.base_branch || "";
   verify.value = p.verify_command || "";
   autoMerge.value = p.auto_merge;
+  mergeWithoutCi.value = p.merge_without_ci;
+  scopeCheck.value = p.scope_check;
   budget.value = p.budget_usd == null ? "" : String(p.budget_usd);
   err.value = "";
   dlg.value?.showModal();
@@ -37,6 +41,8 @@ async function save() {
       base_branch: base.value.trim() || null,
       verify_command: verify.value.trim() || null,
       auto_merge: autoMerge.value,
+      merge_without_ci: mergeWithoutCi.value,
+      scope_check: scopeCheck.value,
       budget_usd: budget.value.trim() === "" ? null : Number(budget.value),
     });
     dlg.value?.close();
@@ -77,6 +83,29 @@ defineExpose({ open });
             <span id="sMerge-hint" class="hint">
               Merge a story's PR once the reviewer approved it and CI passed. When it's off, or GitHub refuses the merge, the PR
               waits for you in Needs you.
+            </span>
+          </span>
+        </label>
+      </div>
+      <div class="field">
+        <label class="check">
+          <input v-model="mergeWithoutCi" type="checkbox" :disabled="!autoMerge" aria-describedby="sNoCi-hint" />
+          <span>
+            <span class="field-label">Automerge without CI</span>
+            <span id="sNoCi-hint" class="hint">
+              Also merge a PR on which no CI check reported. When it's off, such a PR waits for you in Needs you.
+            </span>
+          </span>
+        </label>
+      </div>
+      <div class="field">
+        <label class="check">
+          <input v-model="scopeCheck" type="checkbox" aria-describedby="sScope-hint" />
+          <span>
+            <span class="field-label">Compare the change with the plan</span>
+            <span id="sScope-hint" class="hint">
+              The planner lists the files it means to touch, and the reviewer sees where the change differs. Costs a few hundred
+              tokens per story.
             </span>
           </span>
         </label>
