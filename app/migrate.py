@@ -8,7 +8,7 @@ import asyncio
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect
+from sqlalchemy import inspect, make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from .config import ROOT, settings
@@ -74,9 +74,22 @@ def _missing(schema: dict[str, set[str]]) -> list[str]:
     ]
 
 
+def _unreachable(exc: OSError) -> str:
+    url = make_url(settings.database_url)
+    # Host and port only: the URL carries the password.
+    return (
+        f"cannot connect to the database at {url.host}:{url.port or 5432}: {exc}\n"
+        "Is Postgres running? Start the local container with `make infra` "
+        "(or check HARNESS_DATABASE_URL), then retry."
+    )
+
+
 def migrate() -> None:
     config = alembic_config()
-    schema = asyncio.run(_schema())
+    try:
+        schema = asyncio.run(_schema())
+    except OSError as exc:  # refused, timed out or unknown host; asyncpg does not wrap these
+        raise SystemExit(_unreachable(exc)) from None
     if "projects" in schema and "alembic_version" not in schema:
         if missing := _missing(schema):
             lacks = ", ".join(missing)
