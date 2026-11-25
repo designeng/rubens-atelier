@@ -60,6 +60,10 @@ class Project(Base):
     installation_id: Mapped[int | None] = mapped_column(BigInteger)
     # Merge a story's PR once it is reviewed and CI passed, instead of waiting for a human.
     auto_merge: Mapped[bool] = mapped_column(default=False)
+    # Let automerge also merge a PR on which no CI check reported.
+    merge_without_ci: Mapped[bool] = mapped_column(default=False)
+    # Compare the files a plan names with the files the change touches (see scope.py).
+    scope_check: Mapped[bool] = mapped_column(default=True)
     # Most the project's agent runs may cost in total; None = unlimited (see budget.py).
     budget_usd: Mapped[float | None]
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
@@ -84,6 +88,11 @@ class WorkItem(Base):
     base_branch: Mapped[str | None] = mapped_column(String(200))
     pr_url: Mapped[str | None] = mapped_column(String(500))
     head_sha: Mapped[str | None] = mapped_column(String(40))  # last pushed commit, for CI checks
+    # Paths the latest plan names (see scope.py); None = it named none.
+    planned_files: Mapped[list[str] | None]
+    # The commit under review and the item version that pinned it (see steps._pin).
+    review_sha: Mapped[str | None] = mapped_column(String(40))
+    review_version: Mapped[int | None]
     # Whether GitHub says the PR conflicts with its base, as of the last poll; None = unknown or no PR.
     pr_conflicts: Mapped[bool | None]
     priority: Mapped[int] = mapped_column(default=0)  # higher runs first

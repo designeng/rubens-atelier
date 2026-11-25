@@ -50,6 +50,11 @@ class State(BaseModel):
     # agent: put the branch's commits and diff against the base into the prompt, so the role
     # doesn't spend its first turns fetching them (a reviewer).
     diff: bool = False
+    # agent: the role may not change the code. Whatever it changes is put back when it ends, and
+    # an action it leads to publishes exactly the commit it saw.
+    read_only: bool = False
+    # agent: the answer also lists the files the plan touches, compared with the diff for `diff` states.
+    scope: bool = False
     # check: give up with `timeout` after this long; `no_checks` if nothing reported within grace.
     timeout_seconds: int = Field(default=3600, ge=1)
     grace_seconds: int = Field(default=300, ge=0)
@@ -90,6 +95,10 @@ class State(BaseModel):
             raise ValueError("a human state needs options")
         if self.diff and not self.agent:
             raise ValueError("`diff` only applies to agent states")
+        if self.read_only and not self.agent:
+            raise ValueError("`read_only` only applies to agent states")
+        if self.scope and not (self.agent and self.verdicts):
+            raise ValueError("`scope` only applies to agent states with verdicts")
         return self
 
 
@@ -131,16 +140,20 @@ class Workflow(BaseModel):
         return next(n for n, s in self.states.items() if s.terminal == "cancelled")
 
 
-def verdict_schema(verdicts: list[str], notes: dict[str, Any] | None = None) -> dict[str, Any]:
-    """`notes`: the JSON schema of an optional field for proposing project memory (memory.NOTES_SCHEMA)."""
+def verdict_schema(
+    verdicts: list[str], notes: dict[str, Any] | None = None, files: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """`notes`: the JSON schema of an optional field for proposing project memory (memory.NOTES_SCHEMA).
+    `files`: the schema of a required field for the plan's files (scope.FILES_SCHEMA)."""
     return {
         "type": "object",
         "properties": {
             "verdict": {"type": "string", "enum": verdicts},
             "summary": {"type": "string", "description": "Markdown: what you found or did and why."},
+            **({"files": files} if files else {}),
             **({"notes": notes} if notes else {}),
         },
-        "required": ["verdict", "summary"],
+        "required": ["verdict", "summary", *(["files"] if files else [])],
         "additionalProperties": False,
     }
 

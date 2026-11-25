@@ -66,3 +66,16 @@ def test_verdict_schema():
     schema = verdict_schema(["approved", "changes_requested"])
     assert schema["properties"]["verdict"]["enum"] == ["approved", "changes_requested"]
     assert schema["required"] == ["verdict", "summary"]
+
+
+def test_verdict_schema_requires_files_only_when_asked():
+    schema = verdict_schema(["ready"], files={"type": "array"})
+    assert schema["required"] == ["verdict", "summary", "files"]
+
+
+@pytest.mark.parametrize("state", [
+    {"action": "open_pr", "read_only": True}, {"action": "open_pr", "scope": True}, {"agent": "x", "scope": True},
+])
+def test_drift_guards_need_an_agent(state):
+    with pytest.raises(ValidationError, match="only applies to agent states"):
+        wf(a=state)

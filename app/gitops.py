@@ -185,6 +185,30 @@ async def change_summary(cwd: Path, base: str, limit: int) -> str:
     return f"Commits:\n{commits or '(none)'}\n\nFiles:\n{stat or '(no changes)'}\n\n{diff}"
 
 
+async def changed_files(cwd: Path, base: str) -> list[str]:
+    """Paths the branch changes against `origin/<base>`; a rename counts as both its paths."""
+    _, out = await run(
+        "git", "--no-optional-locks", "diff", "--name-only", "--no-renames", "-z", f"origin/{base}...HEAD",
+        cwd=cwd, timeout=60,
+    )
+    return [p for p in out.split("\0") if p]
+
+
+async def is_at(cwd: Path, branch: str, sha: str) -> bool:
+    """Whether `branch` is checked out at `sha` with nothing uncommitted (ignored files aside)."""
+    _, head = await run("git", "rev-parse", "HEAD", cwd=cwd)
+    _, name = await run("git", "rev-parse", "--abbrev-ref", "HEAD", cwd=cwd)
+    _, status = await run("git", "status", "--porcelain", cwd=cwd)
+    return (head.strip(), name.strip(), status.strip()) == (sha, branch, "")
+
+
+async def restore(cwd: Path, branch: str, sha: str) -> None:
+    """Check out `branch` at `sha`, dropping later commits and uncommitted changes. Ignored files stay."""
+    await run("git", "reset", "--hard", cwd=cwd)  # also ends a merge in progress
+    await run("git", "checkout", "-f", "-B", branch, sha, cwd=cwd)
+    await run("git", "clean", "-ffd", cwd=cwd)
+
+
 async def snapshot(cwd: Path, base: str | None, diff: bool = False, limit: int = 60_000) -> dict[str, str | bool]:
     """Read-only picture of a workspace for the board: branch, uncommitted changes, commits and
     changes against the base branch, optionally the full diff. Takes no locks, writes nothing."""

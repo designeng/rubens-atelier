@@ -128,14 +128,18 @@ async def create_project(
     base_branch: str | None = None,
     verify_command: str | None = None,
     auto_merge: bool = False,
+    merge_without_ci: bool = False,
+    scope_check: bool = True,
     budget_usd: float | None = None,
     installation_id: int | None = None,
 ) -> dict:
     """Create a project. `slug` is lowercase letters, digits and dashes; `repo` is "owner/name".
-    `verify_command` (e.g. "make test") is run after each implementer step."""
+    `verify_command` (e.g. "make test") is run after each implementer step. `merge_without_ci` lets auto_merge
+    merge a PR no CI check reported on; `scope_check` shows the reviewer where a change leaves its plan."""
     body = {
         "slug": slug, "repo": repo, "base_branch": base_branch, "verify_command": verify_command,
-        "auto_merge": auto_merge, "budget_usd": budget_usd, "installation_id": installation_id,
+        "auto_merge": auto_merge, "merge_without_ci": merge_without_ci, "scope_check": scope_check,
+        "budget_usd": budget_usd, "installation_id": installation_id,
     }
     return await _call("POST", "/projects", json=body)
 
@@ -146,6 +150,8 @@ async def update_project(
     base_branch: str | None = None,
     verify_command: str | None = None,
     auto_merge: bool | None = None,
+    merge_without_ci: bool | None = None,
+    scope_check: bool | None = None,
     budget_usd: float | None = None,
     clear: list[Literal["base_branch", "verify_command", "budget_usd"]] = [],
 ) -> dict:
@@ -153,7 +159,7 @@ async def update_project(
     verify_command applies from the next agent step of every story; base_branch only to stories
     that have not created their workspace yet."""
     fields = {"base_branch": base_branch, "verify_command": verify_command, "auto_merge": auto_merge,
-              "budget_usd": budget_usd}
+              "merge_without_ci": merge_without_ci, "scope_check": scope_check, "budget_usd": budget_usd}
     return await _call("PATCH", f"/projects/{slug}", json=_patch(fields, clear))
 
 

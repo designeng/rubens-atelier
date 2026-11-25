@@ -108,6 +108,11 @@ class Factory:
             rows = await s.scalars(select(ItemEvent).where(ItemEvent.item_id == item_id).order_by(ItemEvent.id))
             return [e.to_state for e in rows]
 
+    async def set_project(self, **kw):
+        async with self.db.session() as s:
+            await s.execute(update(Project).where(Project.slug == "app").values(**kw))
+            await s.commit()
+
     async def new_item(self, auto_merge=False, **kw) -> str:
         async with self.db.session() as s:
             project = await s.scalar(select(Project).where(Project.slug == "app"))
@@ -1335,3 +1340,116 @@ async def test_pr_conflict_is_noted_while_awaiting_merge(make_factory, origin):
 
     assert await poll_checks(f.engine, github_factory=lambda _project: f.gh) == []
     assert (await f.item(item_id)).pr_conflicts is True
+
+
+class MeddlingReviewer(ScriptedRunner):
+    """Changes the code in every way Bash allows while reviewing it."""
+
+    async def __call__(self, spec, *, cwd, resume, emit):
+        out = await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+        if spec.metadata["state"] == "review":
+            (cwd / "hello.txt").write_text("reviewer's version\n")
+            git(cwd, "commit", "-am", "sneaky")
+            git(cwd, "checkout", "-q", "-b", "elsewhere")
+            (cwd / "hello.txt").write_text("dirty\n")
+            (cwd / "stray.txt").write_text("stray\n")
+        return out
+
+
+async def test_what_the_reviewer_changed_is_not_published(make_factory, origin, caplog):
+    f = make_factory(MeddlingReviewer())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.path(item_id) == HAPPY_PATH
+    item = await f.item(item_id)
+    assert item.head_sha == item.review_sha == git(origin, "rev-parse", item.branch).strip()
+    assert git(origin, "show", f"{item.branch}:hello.txt") == "hi 0\n"
+    assert "stray.txt" not in git(origin, "ls-tree", "--name-only", item.branch)
+    assert "changed code in a read-only state" in caplog.text
+
+
+async def test_a_crashed_review_does_not_move_the_pin(make_factory):
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+    item = await f.item(item_id)
+    cwd = item_workspace(item_id)
+    item.review_version = item.version
+    (cwd / "hello.txt").write_text("left by the crashed run\n")
+
+    await steps._pin(f.engine, item, cwd)
+
+    assert item.review_sha == item.head_sha
+
+
+async def test_publish_refuses_a_change_made_after_the_review(make_factory, monkeypatch):
+    unpin = steps._unpin
+
+    async def then_change(engine, item, st, cwd):
+        await unpin(engine, item, st, cwd)
+        (cwd / "late.txt").write_text("unreviewed\n")
+
+    monkeypatch.setattr(steps, "_unpin", then_change)
+    f = make_factory(ScriptedRunner())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == "needs_human"
+    assert f.gh.prs == []
+
+
+class PlansFiles(ScriptedRunner):
+    async def __call__(self, spec, *, cwd, resume, emit):
+        out = await super().__call__(spec, cwd=cwd, resume=resume, emit=emit)
+        if spec.metadata["state"] == "plan":
+            out.structured_output["files"] = ["greeting.txt"]
+        return out
+
+
+async def test_reviewer_is_told_where_the_change_leaves_the_plan(make_factory):
+    f = make_factory(PlansFiles())
+    item_id = await f.new_item()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.path(item_id) == HAPPY_PATH  # a deviation is for the reviewer to judge
+    assert "files" in f.runner.of("plan")[0]["spec"].output_schema["required"]
+    assert "files" not in f.runner.of("review")[0]["spec"].output_schema["properties"]
+    prompt = f.runner.of("review")[0]["prompt"]
+    assert "Changed but not in the plan:\n- hello.txt\nIn the plan but not changed:\n- greeting.txt" in prompt
+
+
+async def test_scope_check_can_be_off_for_a_project(make_factory):
+    f = make_factory(PlansFiles())
+    item_id = await f.new_item()
+    await f.set_project(scope_check=False)
+    async with f.db.session() as s:  # named by a plan made while it was on
+        await s.execute(update(WorkItem).where(WorkItem.id == item_id).values(planned_files=["old.txt"]))
+        await s.commit()
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert await f.path(item_id) == HAPPY_PATH
+    assert "files" not in f.runner.of("plan")[0]["spec"].output_schema["properties"]
+    assert "in the plan" not in f.runner.of("review")[0]["prompt"].lower().split("<change", 2)[-1]
+
+
+@pytest.mark.parametrize(("allowed", "state"), [(False, "awaiting_merge"), (True, "done")])
+async def test_automerge_without_ci_is_a_project_setting(make_factory, monkeypatch, allowed, state):
+    f = make_factory(ScriptedRunner())
+    f.gh.checks = []
+    monkeypatch.setattr(f.engine.workflows["story"].states["ci"], "grace_seconds", 0)
+    item_id = await f.new_item(auto_merge=True)
+    await f.set_project(merge_without_ci=allowed)
+    await f.engine.start(item_id)
+    await f.drain()
+
+    assert (await f.item(item_id)).state == state
+    assert len(f.gh.merges) == allowed
+    async with f.db.session() as s:
+        report = await s.scalar(select(Artifact.content).where(Artifact.name == "merge"))
+    assert ("no CI check reported" in report) is not allowed
