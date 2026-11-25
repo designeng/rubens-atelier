@@ -133,3 +133,13 @@ def test_pre_alembic_check_ignores_columns_added_after_0001():
 
     schema["work_items"].remove("model")
     assert _missing(schema) == ["work_items.model"]
+
+
+def test_unreachable_database_is_reported_without_a_traceback(monkeypatch):
+    monkeypatch.setattr(settings, "database_url", "postgresql+asyncpg://u:s3cret@127.0.0.1:1/harness")
+
+    with pytest.raises(SystemExit, match="make infra") as exc:
+        migrate()
+
+    assert "127.0.0.1:1" in str(exc.value)
+    assert "s3cret" not in str(exc.value)
